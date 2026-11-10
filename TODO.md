@@ -1,5 +1,11 @@
 # Implemented functions
 
+The functions of `egui::Ui`, crossed out when pyegui has them. Some have a Python name ending with
+`_clicked` when they return the click, like `radio_clicked` or `selectable_label_clicked`.
+
+The rest is mostly not planned: allocating space and rects, painters, ids, memory, raw input and
+output, clip rects and cursors are for writing new widgets in Rust, not for Python apps.
+
 * add?
 * ~~add_enabled~~
 * ~~add_enabled_ui~~
@@ -17,11 +23,11 @@
 * allocate_ui?
 * allocate_ui_with_layout?
 * auto_id_with
-* available_height
+* ~~available_height~~
 * available_rect_before_wrap
 * available_size
 * available_size_before_wrap
-* available_width
+* ~~available_width~~
 * ~~button~~
 * ~~centered_and_justified~~
 * ~~checkbox~~
@@ -70,10 +76,10 @@
 * input?
 * input_mut?
 * interact?
-* is_enabled
+* ~~is_enabled~~
 * is_rect_visible
 * is_sizing_pass
-* is_visible
+* ~~is_visible~~
 * ~~label~~
 * layer_id
 * layout
@@ -83,8 +89,8 @@
 * memory?
 * memory_mut?
 * ~~menu_button~~
-* menu_image_button
-* menu_image_text_button
+* ~~menu_image_button~~
+* ~~menu_image_text_button~~
 * min_rect
 * min_size
 * ~~monospace~~
@@ -98,16 +104,16 @@
 * output_mut?
 * painter
 * painter_at
-* pixels_per_point
+* ~~pixels_per_point~~
 * push_id?
 * put?
-* radio
+* ~~radio~~
 * ~~radio_value~~
 * rect_contains_pointer
 * reset_style
 * response?
 * ~~scope~~
-* scroll_to_cursor
+* ~~scroll_to_cursor~~
 * scroll_to_cursor_animation
 * scroll_to_rect
 * scroll_to_rect_animation
@@ -117,19 +123,19 @@
 * ~~selectable_value~~
 * ~~separator~~
 * set_clip_rect
-* set_height
+* ~~set_height~~
 * set_height_range
 * ~~set_invisible~~
-* set_max_height
+* ~~set_max_height~~
 * set_max_size
-* set_max_width
-* set_min_height
+* ~~set_max_width~~
+* ~~set_min_height~~
 * set_min_size
-* set_min_width
+* ~~set_min_width~~
 * ~~set_opacity~~
 * set_row_height
 * set_style
-* set_width
+* ~~set_width~~
 * set_width_range
 * shrink_clip_rect
 * shrink_height_to_current
@@ -149,7 +155,7 @@
 * text_style_height
 * text_valign
 * ~~toggle_value~~
-* ui_contains_pointer
+* ~~ui_contains_pointer~~
 * unique_id
 * ~~vertical~~
 * ~~vertical_centered~~

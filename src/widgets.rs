@@ -67,6 +67,8 @@ unsafe fn columns(count: usize, update_fun: Bound<'_, PyAny>) -> PyResult<()> {
 ///
 ///     color = RGBA(0.2, 0.5, 1.0, 0.5)
 ///     color_edit_button_rgba(color)
+// named like RGB, the Python class of the colors without transparency
+#[allow(clippy::upper_case_acronyms)]
 #[pyclass]
 pub(crate) struct RGBA {
     #[pyo3(get, set)]
@@ -192,6 +194,199 @@ unsafe fn dnd_drop_zone(py: Python<'_>, update_fun: Bound<'_, PyAny>) -> PyResul
     Ok(payload.map(|payload| payload.0.clone_ref(py)))
 }
 
+/// Shows a radio button that looks checked when selected is True. Returns True when it is clicked.
+///
+/// Example::
+///
+///     dark = Bool(False)
+///     # inside update_func
+///     if radio_clicked(not dark.value, "Light"):
+///         dark.value = False
+///     if radio_clicked(dark.value, "Dark"):
+///         dark.value = True
+#[pyfunction]
+unsafe fn radio_clicked(selected: bool, text: &str) -> PyResult<bool> {
+    Ok(current_ui(&UI)?.radio(selected, text).clicked())
+}
+
+/// Width left for the next widgets, in points.
+///
+/// Example::
+///
+///     if available_width() < 400:
+///         label("narrow layout")
+#[pyfunction]
+unsafe fn available_width() -> PyResult<f32> {
+    Ok(current_ui(&UI)?.available_width())
+}
+
+/// Height left for the next widgets, in points.
+#[pyfunction]
+unsafe fn available_height() -> PyResult<f32> {
+    Ok(current_ui(&UI)?.available_height())
+}
+
+/// Sets the width of the current ui: the widgets after it wrap and justify to this width.
+///
+/// Example::
+///
+///     def sidebar():
+///         set_width(200)
+///         label("200 points wide")
+///     vertical(sidebar)
+#[pyfunction]
+unsafe fn set_width(width: f32) -> PyResult<()> {
+    current_ui(&UI)?.set_width(width);
+    Ok(())
+}
+
+/// Sets the minimum width of the current ui
+#[pyfunction]
+unsafe fn set_min_width(width: f32) -> PyResult<()> {
+    current_ui(&UI)?.set_min_width(width);
+    Ok(())
+}
+
+/// Sets the maximum width of the current ui
+#[pyfunction]
+unsafe fn set_max_width(width: f32) -> PyResult<()> {
+    current_ui(&UI)?.set_max_width(width);
+    Ok(())
+}
+
+/// Sets the height of the current ui
+#[pyfunction]
+unsafe fn set_height(height: f32) -> PyResult<()> {
+    current_ui(&UI)?.set_height(height);
+    Ok(())
+}
+
+/// Sets the minimum height of the current ui
+#[pyfunction]
+unsafe fn set_min_height(height: f32) -> PyResult<()> {
+    current_ui(&UI)?.set_min_height(height);
+    Ok(())
+}
+
+/// Sets the maximum height of the current ui
+#[pyfunction]
+unsafe fn set_max_height(height: f32) -> PyResult<()> {
+    current_ui(&UI)?.set_max_height(height);
+    Ok(())
+}
+
+/// Scrolls the scroll area the current ui is in, so the next widget is visible.
+///
+/// Args:
+///     align (str): where the next widget goes: "top", "center" or "bottom". Default is the
+///         least scrolling that shows it
+///
+/// Example::
+///
+///     def log_ui():
+///         for line in lines:
+///             label(line)
+///         if new_line_added:
+///             scroll_to_cursor("bottom")
+///
+///     scroll_area_vertical(log_ui)
+#[pyfunction]
+#[pyo3(signature = (align=None))]
+unsafe fn scroll_to_cursor(align: Option<&str>) -> PyResult<()> {
+    let align = match align {
+        None => None,
+        Some("top") => Some(egui::Align::TOP),
+        Some("center") => Some(egui::Align::Center),
+        Some("bottom") => Some(egui::Align::BOTTOM),
+        Some(other) => {
+            return Err(PyValueError::new_err(format!(
+                "Unknown align '{}', expected top, center or bottom",
+                other
+            )))
+        }
+    };
+    current_ui(&UI)?.scroll_to_cursor(align);
+    Ok(())
+}
+
+/// True if the widgets of the current ui can be interacted with, see disable() and add_enabled()
+#[pyfunction]
+unsafe fn is_enabled() -> PyResult<bool> {
+    Ok(current_ui(&UI)?.is_enabled())
+}
+
+/// True if the widgets of the current ui are shown, see set_invisible()
+#[pyfunction]
+unsafe fn is_visible() -> PyResult<bool> {
+    Ok(current_ui(&UI)?.is_visible())
+}
+
+/// True if the mouse is over the current ui, e.g. to show buttons on hover.
+///
+/// Example::
+///
+///     def row():
+///         label(name)
+///         if ui_contains_pointer():
+///             small_button_clicked("✕")
+///     horizontal(row)
+#[pyfunction]
+unsafe fn ui_contains_pointer() -> PyResult<bool> {
+    Ok(current_ui(&UI)?.ui_contains_pointer())
+}
+
+/// Number of physical pixels for each point of the ui. 2.0 on most retina screens
+#[pyfunction]
+unsafe fn pixels_per_point() -> PyResult<f32> {
+    Ok(current_ui(&UI)?.pixels_per_point())
+}
+
+fn menu_image(source: &str, size: f32) -> egui::Image<'_> {
+    egui::Image::new(source).fit_to_exact_size(egui::vec2(size, size))
+}
+
+/// A button with an image, showing a menu when clicked. See menu_button.
+///
+/// Args:
+///     source (str): uri of the image, like for image()
+///
+///     update_func (Callable[[], None]): draws the menu
+///
+///     size (float): size of the image. Default is 16
+///
+/// Example::
+///
+///     menu_image_button("file://assets/settings.png", settings_menu)
+#[pyfunction]
+#[pyo3(signature = (source, update_fun, size=16.0))]
+unsafe fn menu_image_button(source: &str, update_fun: Bound<'_, PyAny>, size: f32) -> PyResult<()> {
+    current_ui(&UI)?
+        .menu_image_button(menu_image(source, size), |ui| run_nested_update_func(ui, update_fun))
+        .inner
+        .unwrap_or(Ok(()))
+}
+
+/// A button with an image and a text, showing a menu when clicked. See menu_button.
+///
+/// Example::
+///
+///     menu_image_text_button("file://assets/settings.png", "Settings", settings_menu)
+#[pyfunction]
+#[pyo3(signature = (source, text, update_fun, size=16.0))]
+unsafe fn menu_image_text_button(
+    source: &str,
+    text: &str,
+    update_fun: Bound<'_, PyAny>,
+    size: f32,
+) -> PyResult<()> {
+    current_ui(&UI)?
+        .menu_image_text_button(menu_image(source, size), text, |ui| {
+            run_nested_update_func(ui, update_fun)
+        })
+        .inner
+        .unwrap_or(Ok(()))
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RGBA>()?;
     m.add_function(wrap_pyfunction!(colored_label, m)?)?;
@@ -201,5 +396,21 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(drag_angle, m)?)?;
     m.add_function(wrap_pyfunction!(dnd_drag_source, m)?)?;
     m.add_function(wrap_pyfunction!(dnd_drop_zone, m)?)?;
+    m.add_function(wrap_pyfunction!(radio_clicked, m)?)?;
+    m.add_function(wrap_pyfunction!(available_width, m)?)?;
+    m.add_function(wrap_pyfunction!(available_height, m)?)?;
+    m.add_function(wrap_pyfunction!(set_width, m)?)?;
+    m.add_function(wrap_pyfunction!(set_min_width, m)?)?;
+    m.add_function(wrap_pyfunction!(set_max_width, m)?)?;
+    m.add_function(wrap_pyfunction!(set_height, m)?)?;
+    m.add_function(wrap_pyfunction!(set_min_height, m)?)?;
+    m.add_function(wrap_pyfunction!(set_max_height, m)?)?;
+    m.add_function(wrap_pyfunction!(scroll_to_cursor, m)?)?;
+    m.add_function(wrap_pyfunction!(is_enabled, m)?)?;
+    m.add_function(wrap_pyfunction!(is_visible, m)?)?;
+    m.add_function(wrap_pyfunction!(ui_contains_pointer, m)?)?;
+    m.add_function(wrap_pyfunction!(pixels_per_point, m)?)?;
+    m.add_function(wrap_pyfunction!(menu_image_button, m)?)?;
+    m.add_function(wrap_pyfunction!(menu_image_text_button, m)?)?;
     Ok(())
 }
