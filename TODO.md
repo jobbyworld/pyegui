@@ -186,3 +186,6 @@ Next: the presets of 3.
 ## Markdown
 
 * ~~the copy button of code blocks shows a missing glyph: add an icon font~~
+* ~~mermaid diagrams in ```mermaid code blocks~~ (mermaid-svg, chosen over mermaid-rs-renderer,
+  ferrigura and merman: complete diagrams, correct ER notation, dark theme, only thiserror as
+  dependency; ferrigura and merman output css or html labels that resvg does not draw)
