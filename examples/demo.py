@@ -51,6 +51,15 @@ tree.set_open(0, True)
 def note_pane(text):
   return lambda: label(text)
 
+new_pane_count = Int(0)
+
+def new_tab_button(tab_bar):
+  # drawn after the last tab of every tab bar, the new pane goes to this tab bar
+  if button_clicked("+"):
+    new_pane_count.value += 1
+    title = f"New {new_pane_count.value}"
+    tab_bar.add_pane(DockPane(title, note_pane(f"{title} was added with the + of a tab bar"), closable=True))
+
 dock = Dock(DockContainer("horizontal", [
   DockPane("Left", note_pane("Drag the tabs to rearrange the panes")),
   DockContainer("vertical", [
@@ -60,8 +69,7 @@ dock = Dock(DockContainer("horizontal", [
       DockPane("Tab B", note_pane("This one can be closed"), closable=True),
     ]),
   ]),
-]))
-new_pane_count = Int(0)
+]), tab_bar_trailing=new_tab_button)
 
 # plots
 

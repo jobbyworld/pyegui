@@ -7,8 +7,10 @@ use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
 
+use std::sync::{Arc, Mutex};
+
 use crate::style::{kwarg_color, kwarg_stroke};
-use crate::{current_ui, kwarg, run_nested_update_func, UI};
+use crate::{current_ui, kwarg, run_nested_call, run_nested_update_func, UI};
 
 /// A pane of a Dock, shown as a tab.
 ///
@@ -115,6 +117,95 @@ fn insert_tile(tiles: &mut Tiles<Pane>, node: &Bound<'_, PyAny>) -> PyResult<Til
     }
 }
 
+/// Panes added from the tab bar callbacks, with the tabs container they go to
+type AddedPanes = Arc<Mutex<Vec<(TileId, Pane)>>>;
+
+/// A tab bar of a Dock, given to the tab_bar_left, tab_bar_trailing and tab_bar_right callbacks.
+///
+/// Usage::
+///
+///     def new_tab_button(tab_bar):
+///         if button_clicked("+"):
+///             tab_bar.add_pane(DockPane(f"Untitled {len(tab_bar.titles) + 1}", editor_ui, closable=True))
+///
+///     dock = Dock(root, tab_bar_trailing=new_tab_button)
+#[pyclass]
+pub(crate) struct DockTabBar {
+    tile_id: TileId,
+    titles: Vec<String>,
+    active_title: Option<String>,
+    added: AddedPanes,
+}
+
+#[pymethods]
+impl DockTabBar {
+    /// Adds a pane to these tabs and makes it the active tab. The pane shows up on the next frame
+    fn add_pane(&self, py: Python<'_>, pane: PyRef<'_, DockPane>) -> PyResult<()> {
+        self.added
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("dock lock is poisoned"))?
+            .push((self.tile_id, Pane::from_py(&pane, py)));
+        Ok(())
+    }
+
+    /// Titles of the tabs, in display order
+    #[getter]
+    fn titles(&self) -> Vec<String> {
+        self.titles.clone()
+    }
+
+    /// Title of the active tab, or None
+    #[getter]
+    fn active_title(&self) -> Option<String> {
+        self.active_title.clone()
+    }
+}
+
+/// The Python callbacks drawing in the tab bars
+#[derive(Default)]
+struct TabBarCallbacks {
+    left: Option<Py<PyAny>>,
+    trailing: Option<Py<PyAny>>,
+    right: Option<Py<PyAny>>,
+}
+
+const CALLBACK_KEYS: [&str; 3] = ["tab_bar_left", "tab_bar_trailing", "tab_bar_right"];
+
+impl TabBarCallbacks {
+    /// Takes the callbacks out of kwargs, so the rest are style options
+    fn take<'py>(kwargs: Option<&Bound<'py, PyDict>>) -> PyResult<(Self, Option<Bound<'py, PyDict>>)> {
+        let Some(kwargs) = kwargs else {
+            return Ok((Self::default(), None));
+        };
+        let rest = kwargs.copy()?;
+        let take = |key: &str| -> PyResult<Option<Py<PyAny>>> {
+            let value = rest.get_item(key)?.filter(|value| !value.is_none());
+            rest.del_item(key).ok();
+            match value {
+                Some(value) if !value.is_callable() => Err(PyTypeError::new_err(format!(
+                    "{} must be a function taking a DockTabBar",
+                    key
+                ))),
+                value => Ok(value.map(Bound::unbind)),
+            }
+        };
+        let callbacks = TabBarCallbacks {
+            left: take(CALLBACK_KEYS[0])?,
+            trailing: take(CALLBACK_KEYS[1])?,
+            right: take(CALLBACK_KEYS[2])?,
+        };
+        Ok((callbacks, Some(rest)))
+    }
+
+    fn clone_ref(&self, py: Python<'_>) -> Self {
+        TabBarCallbacks {
+            left: self.left.as_ref().map(|f| f.clone_ref(py)),
+            trailing: self.trailing.as_ref().map(|f| f.clone_ref(py)),
+            right: self.right.as_ref().map(|f| f.clone_ref(py)),
+        }
+    }
+}
+
 /// Look of the tab bar and of the gaps of a Dock. Unset options keep the egui_tiles defaults
 #[derive(Clone, Default)]
 struct DockStyle {
@@ -180,9 +271,10 @@ impl DockStyle {
                 let key = key.extract::<String>()?;
                 if !STYLE_KEYS.contains(&key.as_str()) {
                     return Err(PyTypeError::new_err(format!(
-                        "Unknown dock style option '{}', expected one of {}",
+                        "Unknown dock option '{}', expected one of {}, {}",
                         key,
-                        STYLE_KEYS.join(", ")
+                        STYLE_KEYS.join(", "),
+                        CALLBACK_KEYS.join(", ")
                     )));
                 }
             }
@@ -271,6 +363,15 @@ impl DockStyle {
 ///
 /// Colors are (r, g, b), (r, g, b, a) or "#rrggbb[aa]".
 ///
+/// The tab bars can hold widgets, drawn by functions taking a DockTabBar. They are called for every
+/// tab bar of the dock:
+///
+///     tab_bar_left (Callable[[DockTabBar], None]): widgets on the left of the tabs, e.g. a menu
+///
+///     tab_bar_trailing (Callable[[DockTabBar], None]): widgets right after the last tab, e.g. a "+" button
+///
+///     tab_bar_right (Callable[[DockTabBar], None]): widgets on the right of the tab bar, added right to left
+///
 /// Usage::
 ///
 ///     dock = Dock(DockContainer("horizontal", [
@@ -281,6 +382,13 @@ impl DockStyle {
 ///     def update_func(ctx):
 ///         dock_area(dock)
 ///
+///     # a "+" button opening a tab in the tab bar it belongs to
+///     def new_tab_button(tab_bar):
+///         if button_clicked("+"):
+///             tab_bar.add_pane(DockPane("New", new_ui, closable=True))
+///
+///     dock = Dock(root, tab_bar_trailing=new_tab_button)
+///
 ///     # glass sizes, with pink inactive tabs
 ///     dock = Dock(root, glass=True, inactive_tab_fill="#ec489933", tab_bar_height=30)
 #[pyclass]
@@ -289,6 +397,7 @@ pub(crate) struct Dock {
     tree: Option<egui_tiles::Tree<Pane>>,
     pending: Vec<Pane>,
     style: DockStyle,
+    callbacks: TabBarCallbacks,
 }
 
 fn add_pane_to_tree(tree: &mut egui_tiles::Tree<Pane>, pane: Pane) {
@@ -320,6 +429,18 @@ fn add_pane_to_tree(tree: &mut egui_tiles::Tree<Pane>, pane: Pane) {
     }
 }
 
+/// Adds a pane to the given tabs and makes it active, or to the dock if the tabs are gone
+fn add_pane_to_tabs(tree: &mut egui_tiles::Tree<Pane>, tabs_id: TileId, pane: Pane) {
+    if !matches!(tree.tiles.get(tabs_id), Some(Tile::Container(Container::Tabs(_)))) {
+        return add_pane_to_tree(tree, pane);
+    }
+    let pane_id = tree.tiles.insert_pane(pane);
+    if let Some(Tile::Container(Container::Tabs(tabs))) = tree.tiles.get_mut(tabs_id) {
+        tabs.add_child(pane_id);
+        tabs.set_active(pane_id);
+    }
+}
+
 /// Finds the first tabs container, depth first
 fn find_tabs(tiles: &Tiles<Pane>, tile_id: TileId) -> Option<TileId> {
     match tiles.get(tile_id) {
@@ -338,13 +459,15 @@ impl Dock {
     fn new(root: &Bound<'_, PyAny>, id: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         let mut tiles = Tiles::default();
         let root = insert_tile(&mut tiles, root)?;
+        let (callbacks, kwargs) = TabBarCallbacks::take(kwargs)?;
         let mut style = DockStyle::default();
-        style.update(kwargs)?;
+        style.update(kwargs.as_ref())?;
 
         Ok(Dock {
             tree: Some(egui_tiles::Tree::new(egui::Id::unique(id), root, tiles)),
             pending: vec![],
             style,
+            callbacks,
         })
     }
 
@@ -362,6 +485,41 @@ impl Dock {
     /// Goes back to the default look of the dock
     fn reset_style(&mut self) {
         self.style = DockStyle::default();
+    }
+
+    /// Changes the functions drawing in the tab bars, see Dock. None removes a function, the
+    /// functions that are not given are kept.
+    ///
+    /// Usage::
+    ///
+    ///     dock.set_tab_bar(trailing=new_tab_button, right=None)
+    #[pyo3(signature = (**kwargs))]
+    fn set_tab_bar(&mut self, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+        let Some(kwargs) = kwargs else {
+            return Ok(());
+        };
+        for (key, value) in kwargs.iter() {
+            let key = key.extract::<String>()?;
+            let slot = match key.as_str() {
+                "left" => &mut self.callbacks.left,
+                "trailing" => &mut self.callbacks.trailing,
+                "right" => &mut self.callbacks.right,
+                _ => {
+                    return Err(PyTypeError::new_err(format!(
+                        "Unknown tab bar slot '{}', expected left, trailing or right",
+                        key
+                    )))
+                }
+            };
+            if !value.is_none() && !value.is_callable() {
+                return Err(PyTypeError::new_err(format!(
+                    "{} must be a function taking a DockTabBar",
+                    key
+                )));
+            }
+            *slot = (!value.is_none()).then(|| value.unbind());
+        }
+        Ok(())
     }
 
     /// Adds a pane to the first tabs of the dock, or to the root container, and makes it the active tab
@@ -406,6 +564,40 @@ struct Behavior<'py> {
     py: Python<'py>,
     result: PyResult<()>,
     style: DockStyle,
+    callbacks: TabBarCallbacks,
+    added: AddedPanes,
+}
+
+impl Behavior<'_> {
+    /// Calls a tab bar callback with the DockTabBar of these tabs
+    fn tab_bar_ui(
+        &mut self,
+        callback: Option<&Py<PyAny>>,
+        tiles: &Tiles<Pane>,
+        ui: &mut Ui,
+        tile_id: TileId,
+        tabs: &egui_tiles::Tabs,
+    ) {
+        let Some(callback) = callback else {
+            return;
+        };
+        let title = |id: &TileId| match tiles.get(*id) {
+            Some(Tile::Pane(pane)) => Some(pane.title.clone()),
+            _ => None,
+        };
+        let tab_bar = DockTabBar {
+            tile_id,
+            titles: tabs.children.iter().filter_map(title).collect(),
+            active_title: tabs.active.as_ref().and_then(title),
+            added: self.added.clone(),
+        };
+        let result = Bound::new(self.py, tab_bar).and_then(|tab_bar| unsafe {
+            run_nested_call(ui, callback.bind(self.py), (tab_bar,))
+        });
+        if let Err(err) = result {
+            self.result = Err(err);
+        }
+    }
 }
 
 impl egui_tiles::Behavior<Pane> for Behavior<'_> {
@@ -544,6 +736,40 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         self.on_tab_button(tiles, tile_id, tab_response)
     }
 
+    fn tab_bar_left_ui(
+        &mut self,
+        tiles: &Tiles<Pane>,
+        ui: &mut Ui,
+        tile_id: TileId,
+        tabs: &egui_tiles::Tabs,
+    ) {
+        let callback = self.callbacks.left.as_ref().map(|f| f.clone_ref(self.py));
+        self.tab_bar_ui(callback.as_ref(), tiles, ui, tile_id, tabs);
+    }
+
+    fn tab_bar_trailing_ui(
+        &mut self,
+        tiles: &Tiles<Pane>,
+        ui: &mut Ui,
+        tile_id: TileId,
+        tabs: &egui_tiles::Tabs,
+    ) {
+        let callback = self.callbacks.trailing.as_ref().map(|f| f.clone_ref(self.py));
+        self.tab_bar_ui(callback.as_ref(), tiles, ui, tile_id, tabs);
+    }
+
+    fn top_bar_right_ui(
+        &mut self,
+        tiles: &Tiles<Pane>,
+        ui: &mut Ui,
+        tile_id: TileId,
+        tabs: &egui_tiles::Tabs,
+        _scroll_offset: &mut f32,
+    ) {
+        let callback = self.callbacks.right.as_ref().map(|f| f.clone_ref(self.py));
+        self.tab_bar_ui(callback.as_ref(), tiles, ui, tile_id, tabs);
+    }
+
     fn tab_bar_height(&self, _style: &egui::Style) -> f32 {
         self.style.tab_bar_height.unwrap_or(if self.style.glass { 28.0 } else { 24.0 })
     }
@@ -657,20 +883,28 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
 #[pyfunction]
 unsafe fn dock_area(py: Python<'_>, dock: Py<Dock>) -> PyResult<()> {
     let ui = current_ui(&UI)?;
-    let (mut tree, style) = {
+    let (mut tree, style, callbacks) = {
         let mut dock = dock.borrow_mut(py);
         let tree = dock.tree.take().ok_or(PyRuntimeError::new_err(
             "dock_area cannot be called inside a pane of the same dock",
         ))?;
-        (tree, dock.style.clone())
+        (tree, dock.style.clone(), dock.callbacks.clone_ref(py))
     };
 
+    let added = AddedPanes::default();
     let mut behavior = Behavior {
         py,
         result: Ok(()),
         style,
+        callbacks,
+        added: added.clone(),
     };
     tree.ui(&mut behavior, ui);
+
+    let added = std::mem::take(&mut *added.lock().unwrap_or_else(|e| e.into_inner()));
+    for (tabs_id, pane) in added {
+        add_pane_to_tabs(&mut tree, tabs_id, pane);
+    }
 
     let mut dock = dock.borrow_mut(py);
     for pane in std::mem::take(&mut dock.pending) {
@@ -684,6 +918,7 @@ unsafe fn dock_area(py: Python<'_>, dock: Py<Dock>) -> PyResult<()> {
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DockPane>()?;
     m.add_class::<DockContainer>()?;
+    m.add_class::<DockTabBar>()?;
     m.add_class::<Dock>()?;
     m.add_function(wrap_pyfunction!(dock_area, m)?)?;
     Ok(())

@@ -172,15 +172,15 @@ egui_tiles exposes the tab bar through the `Behavior` trait, already implemented
    drag preview color, hiding the tab bar with a single pane. Glass style defaults (`glass=True`).~~
    Done, except the hovered tab fill: egui_tiles does not give the hover state to the color hooks,
    so it moves to 3.
-2. Contents in the tab bar (medium, ~1 day): Python callbacks for `top_bar_right_ui` and `tab_bar_left_ui`,
-   e.g. a "+" button to open a tab.
+2. ~~Contents in the tab bar: Python callbacks `tab_bar_left`, `tab_bar_trailing` and `tab_bar_right`
+   (also `Dock.set_tab_bar`), taking a `DockTabBar` that adds panes to its own tabs, e.g. a "+" button.~~
 3. Tab shapes: a custom `tab_ui` keeping click, drag, close button and middle click.
    ~~Top corners rounded with the radius of the theme (`ctx.set_style(rounding=...)`), active tab with
    the background of its pane, tinted inactive tabs, space between tabs (`tab_spacing`), hovered tab fill
    (`hovered_tab_fill`).~~ Still to do: presets `tab_style="pill" | "underline" | "classic"`
    (pill tabs rounded on every corner, underlined active tab) and icons in the tabs.
 
-Next: the presets of 3, then 2.
+Next: the presets of 3.
 
 ## Markdown
 
