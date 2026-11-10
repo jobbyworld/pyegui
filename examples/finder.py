@@ -390,12 +390,14 @@ def tree_node(item):
         tree_ids[path] = len(tree_ids)
         tree_paths[tree_ids[path]] = path
     node_id = tree_ids[path]
-    text = f"{item['emoji']}  {item['name']}"
+    # the icon of the Finder, or an emoji where the platform gives none
+    icon_uri = file_icon(str(path), 16)
+    text = item["name"] if icon_uri else f"{item['emoji']}  {item['name']}"
     if not item["is_dir"]:
-        return TreeNode(node_id, text)
+        return TreeNode(node_id, text, icon=icon_uri)
     # the children of a folder are read only once it is opened
     children = [tree_node(child) for child in listing(path)] if tree.is_open(node_id) else []
-    return TreeNode(node_id, text, children)
+    return TreeNode(node_id, text, children, icon=icon_uri)
 
 
 def tree_view_ui():
