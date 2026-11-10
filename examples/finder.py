@@ -4,7 +4,7 @@ Sidebar with favorites, toolbar with back / forward, list, icon and tree views, 
 panel and a path bar. The icons are the ones of the Finder on macOS.
 
 Mouse: click to select, double click to open (folders here, files with their app). In the tree
-view, a double click or Enter opens and closes the folders.
+view, the arrow of a folder shows its contents in the tree.
 Keyboard: arrows to select, Enter or Cmd+Down to open, Cmd+Up for the parent folder,
 Cmd+[ and Cmd+] to go back and forward, Escape to clear the search and the selection.
 
@@ -180,7 +180,7 @@ def keyboard():
         search.value = ""
         selected.value = ""
     if view.value == TREE:
-        return  # the tree view has its own keyboard navigation, Enter opens the folders in the tree
+        return  # the tree view has its own keyboard navigation, its Enter opens like the Open button
     item = selected_entry()
     if item and (key_pressed("Enter") or key_pressed("Cmd+ArrowDown")):
         open_item(item)
@@ -407,11 +407,10 @@ def tree_view_ui():
         if tree.selected:
             selected.value = str(tree_paths[tree.selected[0]])
         for node_id in tree.activated:
+            # a double click or Enter opens like the Open button: into a folder, a file with its app.
+            # The arrow of a folder opens it in the tree
             item = entry(tree_paths[node_id])
-            if item and item["is_dir"]:
-                # a double click or Enter opens the folder in the tree, or closes it
-                tree.set_open(node_id, not tree.is_open(node_id))
-            elif item:
+            if item:
                 open_item(item)
 
     scroll_area_vertical(nodes)
