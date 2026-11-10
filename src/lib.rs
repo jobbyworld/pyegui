@@ -21,6 +21,7 @@ mod plot;
 mod style;
 mod table;
 mod tree;
+mod widgets;
 
 // state
 
@@ -331,9 +332,9 @@ impl Int {
 ///             # what can go wrong?
 ///             data.value += 0.1
 #[pyclass]
-struct Float {
+pub(crate) struct Float {
     #[pyo3(get, set)]
-    value: f32,
+    pub(crate) value: f32,
 }
 
 #[pymethods]
@@ -2138,6 +2139,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     containers::register(m)?;
     table::register(m)?;
     tree::register(m)?;
+    widgets::register(m)?;
     dock::register(m)?;
     plot::register(m)?;
     markdown::register(m)?;

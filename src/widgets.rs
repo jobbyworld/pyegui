@@ -1,0 +1,416 @@
+use eframe::egui;
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+use pyo3::types::PyAny;
+
+use crate::style::extract_color;
+use crate::{current_ui, run_nested_call, run_nested_update_func, Float, UI};
+
+/// Shows a text in the given color.
+///
+/// Args:
+///     color (color): (r, g, b), (r, g, b, a) or "#rrggbb[aa]"
+///
+///     text (str): the text
+///
+/// Example::
+///
+///     colored_label((220, 50, 50), "Error")
+///     colored_label("#22c55e", "Saved")
+#[pyfunction]
+unsafe fn colored_label(color: &Bound<'_, PyAny>, text: &str) -> PyResult<()> {
+    let color = extract_color(color)?;
+    current_ui(&UI)?.colored_label(color, text);
+    Ok(())
+}
+
+/// Shows a text that looks selected when selected is True, like a tab or an item of a list.
+/// Returns True when it is clicked.
+///
+/// Example::
+///
+///     selected = Bool(False)
+///     # inside update_func
+///     if selectable_label_clicked(selected.value, "Bold"):
+///         selected.value = not selected.value
+#[pyfunction]
+unsafe fn selectable_label_clicked(selected: bool, text: &str) -> PyResult<bool> {
+    Ok(current_ui(&UI)?.selectable_label(selected, text).clicked())
+}
+
+/// Splits the available width in columns of the same width.
+/// update_func is called once for each column, with the index of the column.
+///
+/// Example::
+///
+///     def column(i):
+///         heading(f"Column {i}")
+///         label("Some text")
+///
+///     columns(3, column)
+#[pyfunction]
+unsafe fn columns(count: usize, update_fun: Bound<'_, PyAny>) -> PyResult<()> {
+    if count == 0 {
+        return Err(PyValueError::new_err("columns needs at least one column"));
+    }
+    current_ui(&UI)?.columns(count, |columns| {
+        columns
+            .iter_mut()
+            .enumerate()
+            .try_for_each(|(i, ui)| run_nested_call(ui, &update_fun, (i,)))
+    })
+}
+
+/// A color with transparency, each channel between 0 and 1
+///
+/// Usage::
+///
+///     color = RGBA(0.2, 0.5, 1.0, 0.5)
+///     color_edit_button_rgba(color)
+// named like RGB, the Python class of the colors without transparency
+#[allow(clippy::upper_case_acronyms)]
+#[pyclass]
+pub(crate) struct RGBA {
+    #[pyo3(get, set)]
+    r: f32,
+    #[pyo3(get, set)]
+    g: f32,
+    #[pyo3(get, set)]
+    b: f32,
+    #[pyo3(get, set)]
+    a: f32,
+}
+
+#[pymethods]
+impl RGBA {
+    #[new]
+    #[pyo3(signature = (r, g, b, a=1.0))]
+    fn new(r: f32, g: f32, b: f32, a: f32) -> Self {
+        RGBA { r, g, b, a }
+    }
+
+    /// The color as (r, g, b, a) with channels between 0 and 255, as taken by the style functions
+    fn to_tuple(&self) -> (u8, u8, u8, u8) {
+        let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+        (channel(self.r), channel(self.g), channel(self.b), channel(self.a))
+    }
+
+    fn __repr__(&self) -> String {
+        // rounded: the f32 channels show noise like 0.23000003
+        let channel = |value: f32| {
+            let text = format!("{:.3}", value);
+            text.trim_end_matches('0').trim_end_matches('.').to_string()
+        };
+        format!(
+            "RGBA({}, {}, {}, {})",
+            channel(self.r),
+            channel(self.g),
+            channel(self.b),
+            channel(self.a)
+        )
+    }
+}
+
+/// Shows a button with the given color. If the user clicks the button, a full color picker
+/// with an opacity slider is shown.
+///
+/// Example::
+///
+///     color = RGBA(0.2, 0.5, 1.0, 0.5)
+///     # inside update_func
+///     color_edit_button_rgba(color)
+///     colored_label(color.to_tuple(), "This text uses the color")
+#[pyfunction]
+unsafe fn color_edit_button_rgba(rgba: &mut RGBA) -> PyResult<()> {
+    let mut tmp = [rgba.r, rgba.g, rgba.b, rgba.a];
+    current_ui(&UI)?.color_edit_button_rgba_unmultiplied(&mut tmp);
+    [rgba.r, rgba.g, rgba.b, rgba.a] = tmp;
+    Ok(())
+}
+
+/// Edits an angle by dragging. The value is in radians, it is shown in degrees.
+///
+/// Example::
+///
+///     angle = Float(0.0)
+///     # inside update_func
+///     drag_angle(angle)
+///     label(f"{math.degrees(angle.value):.0f}°")
+#[pyfunction]
+unsafe fn drag_angle(value: &mut Float) -> PyResult<()> {
+    current_ui(&UI)?.drag_angle(&mut value.value);
+    Ok(())
+}
+
+/// The Python object carried by a drag and drop
+struct DndPayload(Py<PyAny>);
+
+/// Makes the widgets drawn by update_func draggable. When they are dropped on a dnd_drop_zone,
+/// the zone returns payload.
+///
+/// Args:
+///     id (str): unique id of the drag source
+///
+///     payload (Any): any Python object, returned by the drop zone
+///
+///     update_func (Callable[[], None]): draws the dragged widgets
+///
+/// Example::
+///
+///     for i, fruit in enumerate(fruits):
+///         dnd_drag_source(f"fruit {i}", fruit, lambda: label(fruit))
+#[pyfunction]
+unsafe fn dnd_drag_source(
+    id: &str,
+    payload: Py<PyAny>,
+    update_fun: Bound<'_, PyAny>,
+) -> PyResult<()> {
+    current_ui(&UI)?
+        .dnd_drag_source(egui::Id::unique(("pyegui dnd", id)), DndPayload(payload), |ui| {
+            run_nested_update_func(ui, update_fun)
+        })
+        .inner
+}
+
+/// Draws update_func in a frame that lights up when something is dragged over it.
+/// Returns the payload of the dnd_drag_source dropped on it this frame, or None.
+///
+/// Example::
+///
+///     basket = []
+///
+///     def update_func(ctx):
+///         dnd_drag_source("apple", "apple", lambda: label("🍎 apple"))
+///         dropped = dnd_drop_zone(lambda: label(f"Basket: {basket}"))
+///         if dropped is not None:
+///             basket.append(dropped)
+#[pyfunction]
+unsafe fn dnd_drop_zone(py: Python<'_>, update_fun: Bound<'_, PyAny>) -> PyResult<Option<Py<PyAny>>> {
+    let ui = current_ui(&UI)?;
+    let frame = egui::Frame::group(ui.style());
+    let (response, payload) =
+        ui.dnd_drop_zone::<DndPayload, _>(frame, |ui| run_nested_update_func(ui, update_fun));
+    response.inner?;
+    Ok(payload.map(|payload| payload.0.clone_ref(py)))
+}
+
+/// Shows a radio button that looks checked when selected is True. Returns True when it is clicked.
+///
+/// Example::
+///
+///     dark = Bool(False)
+///     # inside update_func
+///     if radio_clicked(not dark.value, "Light"):
+///         dark.value = False
+///     if radio_clicked(dark.value, "Dark"):
+///         dark.value = True
+#[pyfunction]
+unsafe fn radio_clicked(selected: bool, text: &str) -> PyResult<bool> {
+    Ok(current_ui(&UI)?.radio(selected, text).clicked())
+}
+
+/// Width left for the next widgets, in points.
+///
+/// Example::
+///
+///     if available_width() < 400:
+///         label("narrow layout")
+#[pyfunction]
+unsafe fn available_width() -> PyResult<f32> {
+    Ok(current_ui(&UI)?.available_width())
+}
+
+/// Height left for the next widgets, in points.
+#[pyfunction]
+unsafe fn available_height() -> PyResult<f32> {
+    Ok(current_ui(&UI)?.available_height())
+}
+
+/// Sets the width of the current ui: the widgets after it wrap and justify to this width.
+///
+/// Example::
+///
+///     def sidebar():
+///         set_width(200)
+///         label("200 points wide")
+///     vertical(sidebar)
+#[pyfunction]
+unsafe fn set_width(width: f32) -> PyResult<()> {
+    current_ui(&UI)?.set_width(width);
+    Ok(())
+}
+
+/// Sets the minimum width of the current ui
+#[pyfunction]
+unsafe fn set_min_width(width: f32) -> PyResult<()> {
+    current_ui(&UI)?.set_min_width(width);
+    Ok(())
+}
+
+/// Sets the maximum width of the current ui
+#[pyfunction]
+unsafe fn set_max_width(width: f32) -> PyResult<()> {
+    current_ui(&UI)?.set_max_width(width);
+    Ok(())
+}
+
+/// Sets the height of the current ui
+#[pyfunction]
+unsafe fn set_height(height: f32) -> PyResult<()> {
+    current_ui(&UI)?.set_height(height);
+    Ok(())
+}
+
+/// Sets the minimum height of the current ui
+#[pyfunction]
+unsafe fn set_min_height(height: f32) -> PyResult<()> {
+    current_ui(&UI)?.set_min_height(height);
+    Ok(())
+}
+
+/// Sets the maximum height of the current ui
+#[pyfunction]
+unsafe fn set_max_height(height: f32) -> PyResult<()> {
+    current_ui(&UI)?.set_max_height(height);
+    Ok(())
+}
+
+/// Scrolls the scroll area the current ui is in, so the next widget is visible.
+///
+/// Args:
+///     align (str): where the next widget goes: "top", "center" or "bottom". Default is the
+///         least scrolling that shows it
+///
+/// Example::
+///
+///     def log_ui():
+///         for line in lines:
+///             label(line)
+///         if new_line_added:
+///             scroll_to_cursor("bottom")
+///
+///     scroll_area_vertical(log_ui)
+#[pyfunction]
+#[pyo3(signature = (align=None))]
+unsafe fn scroll_to_cursor(align: Option<&str>) -> PyResult<()> {
+    let align = match align {
+        None => None,
+        Some("top") => Some(egui::Align::TOP),
+        Some("center") => Some(egui::Align::Center),
+        Some("bottom") => Some(egui::Align::BOTTOM),
+        Some(other) => {
+            return Err(PyValueError::new_err(format!(
+                "Unknown align '{}', expected top, center or bottom",
+                other
+            )))
+        }
+    };
+    current_ui(&UI)?.scroll_to_cursor(align);
+    Ok(())
+}
+
+/// True if the widgets of the current ui can be interacted with, see disable() and add_enabled()
+#[pyfunction]
+unsafe fn is_enabled() -> PyResult<bool> {
+    Ok(current_ui(&UI)?.is_enabled())
+}
+
+/// True if the widgets of the current ui are shown, see set_invisible()
+#[pyfunction]
+unsafe fn is_visible() -> PyResult<bool> {
+    Ok(current_ui(&UI)?.is_visible())
+}
+
+/// True if the mouse is over the current ui, e.g. to show buttons on hover.
+///
+/// Example::
+///
+///     def row():
+///         label(name)
+///         if ui_contains_pointer():
+///             small_button_clicked("✕")
+///     horizontal(row)
+#[pyfunction]
+unsafe fn ui_contains_pointer() -> PyResult<bool> {
+    Ok(current_ui(&UI)?.ui_contains_pointer())
+}
+
+/// Number of physical pixels for each point of the ui. 2.0 on most retina screens
+#[pyfunction]
+unsafe fn pixels_per_point() -> PyResult<f32> {
+    Ok(current_ui(&UI)?.pixels_per_point())
+}
+
+fn menu_image(source: &str, size: f32) -> egui::Image<'_> {
+    egui::Image::new(source).fit_to_exact_size(egui::vec2(size, size))
+}
+
+/// A button with an image, showing a menu when clicked. See menu_button.
+///
+/// Args:
+///     source (str): uri of the image, like for image()
+///
+///     update_func (Callable[[], None]): draws the menu
+///
+///     size (float): size of the image. Default is 16
+///
+/// Example::
+///
+///     menu_image_button("file://assets/settings.png", settings_menu)
+#[pyfunction]
+#[pyo3(signature = (source, update_fun, size=16.0))]
+unsafe fn menu_image_button(source: &str, update_fun: Bound<'_, PyAny>, size: f32) -> PyResult<()> {
+    current_ui(&UI)?
+        .menu_image_button(menu_image(source, size), |ui| run_nested_update_func(ui, update_fun))
+        .inner
+        .unwrap_or(Ok(()))
+}
+
+/// A button with an image and a text, showing a menu when clicked. See menu_button.
+///
+/// Example::
+///
+///     menu_image_text_button("file://assets/settings.png", "Settings", settings_menu)
+#[pyfunction]
+#[pyo3(signature = (source, text, update_fun, size=16.0))]
+unsafe fn menu_image_text_button(
+    source: &str,
+    text: &str,
+    update_fun: Bound<'_, PyAny>,
+    size: f32,
+) -> PyResult<()> {
+    current_ui(&UI)?
+        .menu_image_text_button(menu_image(source, size), text, |ui| {
+            run_nested_update_func(ui, update_fun)
+        })
+        .inner
+        .unwrap_or(Ok(()))
+}
+
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<RGBA>()?;
+    m.add_function(wrap_pyfunction!(colored_label, m)?)?;
+    m.add_function(wrap_pyfunction!(selectable_label_clicked, m)?)?;
+    m.add_function(wrap_pyfunction!(columns, m)?)?;
+    m.add_function(wrap_pyfunction!(color_edit_button_rgba, m)?)?;
+    m.add_function(wrap_pyfunction!(drag_angle, m)?)?;
+    m.add_function(wrap_pyfunction!(dnd_drag_source, m)?)?;
+    m.add_function(wrap_pyfunction!(dnd_drop_zone, m)?)?;
+    m.add_function(wrap_pyfunction!(radio_clicked, m)?)?;
+    m.add_function(wrap_pyfunction!(available_width, m)?)?;
+    m.add_function(wrap_pyfunction!(available_height, m)?)?;
+    m.add_function(wrap_pyfunction!(set_width, m)?)?;
+    m.add_function(wrap_pyfunction!(set_min_width, m)?)?;
+    m.add_function(wrap_pyfunction!(set_max_width, m)?)?;
+    m.add_function(wrap_pyfunction!(set_height, m)?)?;
+    m.add_function(wrap_pyfunction!(set_min_height, m)?)?;
+    m.add_function(wrap_pyfunction!(set_max_height, m)?)?;
+    m.add_function(wrap_pyfunction!(scroll_to_cursor, m)?)?;
+    m.add_function(wrap_pyfunction!(is_enabled, m)?)?;
+    m.add_function(wrap_pyfunction!(is_visible, m)?)?;
+    m.add_function(wrap_pyfunction!(ui_contains_pointer, m)?)?;
+    m.add_function(wrap_pyfunction!(pixels_per_point, m)?)?;
+    m.add_function(wrap_pyfunction!(menu_image_button, m)?)?;
+    m.add_function(wrap_pyfunction!(menu_image_text_button, m)?)?;
+    Ok(())
+}
