@@ -16,6 +16,7 @@ use std::{fs, ptr};
 
 mod containers;
 mod dock;
+mod markdown;
 mod plot;
 mod style;
 mod table;
@@ -2007,6 +2008,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     tree::register(m)?;
     dock::register(m)?;
     plot::register(m)?;
+    markdown::register(m)?;
     style::register(m)?;
     Ok(())
 }

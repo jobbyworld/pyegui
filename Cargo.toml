@@ -18,6 +18,7 @@ jiff = "0.2.42"
 egui_ltreeview = "0.10.0"
 egui_tiles = "0.18.0"
 egui_plot = "0.38.0"
+egui_commonmark = "0.26.0"
 window-vibrancy = "0.8.1"
 raw-window-handle = "0.6.2"
 

@@ -160,3 +160,24 @@
 * with_layout
 * with_visual_transform
 * wrap_mode
+
+# Planned
+
+## Dock tab bar styling
+
+egui_tiles exposes the tab bar through the `Behavior` trait, already implemented in `src/dock.rs`.
+
+1. Colors and sizes (easy, ~1/2 day): options on `Dock` or `dock_area` for the tab bar height and color,
+   active/inactive/hovered tab fill, tab text and outline colors, title spacing, gap width, resize stroke,
+   drag preview color, hiding the tab bar with a single pane. Glass style defaults.
+2. Contents in the tab bar (medium, ~1 day): Python callbacks for `top_bar_right_ui` and `tab_bar_left_ui`,
+   e.g. a "+" button to open a tab.
+3. Tab shapes (harder, 1-2 days): the default `tab_ui` hardcodes square corners, so rounded, pill or
+   underlined tabs and icons need a custom `tab_ui` keeping click, drag, close button and middle click.
+   Provide presets in Rust: `tab_style="pill" | "underline" | "classic"`.
+
+Recommended first: 1 and the "pill" preset of 3.
+
+## Markdown
+
+* the copy button of code blocks shows a missing glyph: add an icon font

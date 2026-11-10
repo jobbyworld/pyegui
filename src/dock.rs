@@ -137,13 +137,17 @@ pub(crate) struct Dock {
 fn add_pane_to_tree(tree: &mut egui_tiles::Tree<Pane>, pane: Pane) {
     let pane_id = tree.tiles.insert_pane(pane);
 
-    let root = tree
+    // prefer the first tabs, so new panes open as tabs instead of splitting the layout
+    let target = tree
         .root
-        .filter(|root| matches!(tree.tiles.get(*root), Some(Tile::Container(_))));
+        .and_then(|root| find_tabs(&tree.tiles, root))
+        .or(tree
+            .root
+            .filter(|root| matches!(tree.tiles.get(*root), Some(Tile::Container(_)))));
 
-    match root {
-        Some(root) => {
-            if let Some(Tile::Container(container)) = tree.tiles.get_mut(root) {
+    match target {
+        Some(target) => {
+            if let Some(Tile::Container(container)) = tree.tiles.get_mut(target) {
                 container.add_child(pane_id);
 
                 if let Container::Tabs(tabs) = container {
@@ -156,6 +160,17 @@ fn add_pane_to_tree(tree: &mut egui_tiles::Tree<Pane>, pane: Pane) {
             let children = tree.root.into_iter().chain([pane_id]).collect();
             tree.root = Some(tree.tiles.insert_tab_tile(children));
         }
+    }
+}
+
+/// Finds the first tabs container, depth first
+fn find_tabs(tiles: &Tiles<Pane>, tile_id: TileId) -> Option<TileId> {
+    match tiles.get(tile_id) {
+        Some(Tile::Container(Container::Tabs(_))) => Some(tile_id),
+        Some(Tile::Container(container)) => container
+            .children()
+            .find_map(|child| find_tabs(tiles, *child)),
+        _ => None,
     }
 }
 
@@ -173,7 +188,7 @@ impl Dock {
         })
     }
 
-    /// Adds a pane to the root container and makes it the active tab
+    /// Adds a pane to the first tabs of the dock, or to the root container, and makes it the active tab
     fn add_pane(&mut self, py: Python<'_>, pane: PyRef<'_, DockPane>) {
         let pane = Pane::from_py(&pane, py);
 

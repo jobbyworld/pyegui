@@ -45,7 +45,7 @@ where possible to accomplish more smooth expirience in Python.
 - RBG color picker
 - Text fields, radio buttons, buttons, code, progress bar etc.
 - Side, top and bottom panels, windows, modals, menus, tooltips and grids
-- Tables, tree views, plots and docking tabs
+- Tables, tree views, plots, docking tabs and markdown
 - Custom styles: colors, rounding, shadows, styled buttons and frames
 - Glass style with native backdrop effects (Mica and Acrylic on Windows, Liquid Glass on macOS)
 - No dependencies which destroy you project when you distribute it. Just
