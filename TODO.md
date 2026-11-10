@@ -185,4 +185,4 @@ Next: the presets of 3.
 
 ## Markdown
 
-* the copy button of code blocks shows a missing glyph: add an icon font
+* ~~the copy button of code blocks shows a missing glyph: add an icon font~~

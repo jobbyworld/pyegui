@@ -103,7 +103,7 @@ impl Context {
             e
         })?;
 
-        let mut fonts = FontDefinitions::default();
+        let mut fonts = default_fonts();
         fonts.font_data.insert(
             source.clone(),
             Arc::new(
@@ -660,6 +660,32 @@ impl Group {
     }
 }
 
+/// The fonts of egui, plus the icon of the copy button of the markdown code blocks.
+///
+/// egui_commonmark draws it with 🗐, which was in the emoji font of egui before 0.37 and is in
+/// no font of the systems. The glyph is cut from emoji-icon-font, see src/fonts.
+fn default_fonts() -> FontDefinitions {
+    const COPY_ICON: &str = "copy-icon";
+
+    let mut fonts = FontDefinitions::default();
+    fonts.font_data.insert(
+        COPY_ICON.to_owned(),
+        Arc::new(
+            FontData::from_static(include_bytes!("fonts/copy-icon.ttf")).tweak(
+                egui::FontTweak {
+                    scale: 0.9,
+                    ..Default::default()
+                },
+            ),
+        ),
+    );
+    // last, it holds a single glyph
+    for family in fonts.families.values_mut() {
+        family.push(COPY_ICON.to_owned());
+    }
+    fonts
+}
+
 // Start function
 
 struct PyeguiApp<'py> {
@@ -877,6 +903,7 @@ unsafe fn run_native(
         Box::new(|cc| {
             // This gives us image support:
             egui_extras::install_image_loaders(&cc.egui_ctx);
+            cc.egui_ctx.set_fonts(default_fonts());
 
             if let Some(backdrop) = &backdrop {
                 if let Err(err) = apply_backdrop(cc, backdrop) {
