@@ -1,3 +1,4 @@
+use eframe::egui;
 use egui_ltreeview::{Action, DirPosition, NodeBuilder, TreeViewBuilder, TreeViewState};
 use pyo3::prelude::*;
 
@@ -7,11 +8,20 @@ use crate::{current_ui, UI};
 ///
 /// Ids must be unique in the tree.
 ///
+/// Args:
+///     id (int): unique id of the node
+///
+///     label (str): the text of the node
+///
+///     children (list[TreeNode]): the nodes of a directory, None for a leaf
+///
+///     icon (str): uri of an image shown before the label, like for image(), e.g. from file_icon
+///
 /// Usage::
 ///
 ///     nodes = [
 ///         TreeNode(0, "src", [TreeNode(1, "main.py"), TreeNode(2, "utils.py")]),
-///         TreeNode(3, "README.md"),
+///         TreeNode(3, "README.md", icon=file_icon("README.md", 16)),
 ///     ]
 #[pyclass]
 pub(crate) struct TreeNode {
@@ -21,17 +31,20 @@ pub(crate) struct TreeNode {
     label: String,
     #[pyo3(get, set)]
     children: Option<Vec<Py<TreeNode>>>,
+    #[pyo3(get, set)]
+    icon: Option<String>,
 }
 
 #[pymethods]
 impl TreeNode {
     #[new]
-    #[pyo3(signature = (id, label, children=None))]
-    fn new(id: i64, label: String, children: Option<Vec<Py<TreeNode>>>) -> Self {
+    #[pyo3(signature = (id, label, children=None, icon=None))]
+    fn new(id: i64, label: String, children: Option<Vec<Py<TreeNode>>>, icon: Option<String>) -> Self {
         TreeNode {
             id,
             label,
             children,
+            icon,
         }
     }
 }
@@ -123,6 +136,18 @@ impl TreeView {
     }
 }
 
+/// Shows the image at icon before the label of the node
+fn with_icon<'a>(config: NodeBuilder<'a, i64>, icon: Option<String>) -> NodeBuilder<'a, i64> {
+    match icon {
+        Some(uri) => config.icon(move |ui| {
+            let side = ui.text_style_height(&egui::TextStyle::Body);
+            ui.add(egui::Image::new(uri.as_str()).fit_to_exact_size(egui::vec2(side, side)));
+            ui.add_space(4.0);
+        }),
+        None => config,
+    }
+}
+
 fn add_nodes(
     py: Python<'_>,
     builder: &mut TreeViewBuilder<'_, i64>,
@@ -134,15 +159,21 @@ fn add_nodes(
 
         match &node.children {
             Some(children) => {
-                builder.node(
+                builder.node(with_icon(
                     NodeBuilder::dir(node.id)
                         .default_open(default_open)
                         .label(node.label.as_str()),
-                );
+                    node.icon.clone(),
+                ));
                 add_nodes(py, builder, children, default_open);
                 builder.close_dir();
             }
-            None => builder.leaf(node.id, node.label.as_str()),
+            None => {
+                builder.node(with_icon(
+                    NodeBuilder::leaf(node.id).label(node.label.as_str()),
+                    node.icon.clone(),
+                ));
+            }
         }
     }
 }
