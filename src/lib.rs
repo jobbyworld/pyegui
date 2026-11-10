@@ -1980,9 +1980,42 @@ unsafe fn add_space(amount: f32) -> PyResult<()> {
     Ok(())
 }
 
+/// Forwards the Rust logs to Python logging, only from the thread running Python.
+///
+/// Logging to Python takes the GIL. A background thread logging while the Python thread holds
+/// the GIL and waits for it deadlocks: the system font loader of egui does that when a label
+/// shows a character missing from the default fonts, like an emoji or a symbol.
+struct PythonThreadLogger {
+    inner: pyo3_log::Logger,
+    python_thread: std::thread::ThreadId,
+}
+
+impl log::Log for PythonThreadLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        self.inner.enabled(metadata)
+    }
+
+    fn log(&self, record: &log::Record) {
+        if std::thread::current().id() == self.python_thread {
+            self.inner.log(record);
+        } else if record.level() <= log::Level::Warn {
+            eprintln!("{} {}: {}", record.level(), record.target(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
 #[pymodule]
 fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    pyo3_log::init();
+    let logger = PythonThreadLogger {
+        inner: pyo3_log::Logger::new(m.py(), pyo3_log::Caching::LoggersAndLevels)?,
+        python_thread: std::thread::current().id(),
+    };
+    // fails only if the module is imported a second time, the first logger stays
+    if log::set_boxed_logger(Box::new(logger)).is_ok() {
+        log::set_max_level(log::LevelFilter::Debug);
+    }
     // classes
     m.add_class::<Str>()?;
     m.add_class::<Bool>()?;
