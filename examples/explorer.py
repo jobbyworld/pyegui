@@ -1,17 +1,39 @@
-"""File explorer with a glass style: acrylic backdrop, sidebar with a tree view and a dock of tabs.
+"""File explorer with a glass style: native backdrop (acrylic on Windows, liquid glass on macOS), sidebar with a tree view and a dock of tabs.
 
 Double click a file in the tree to open it in a new tab.
 """
 
+import sys
 from datetime import datetime
 from pathlib import Path
 
 from pyegui import *
 
 ROOT = Path(__file__).resolve().parent.parent
-SKIPPED_DIRS = {".git", ".venv", "venv", "target", "__pycache__", "_build", "node_modules"}
-BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".pyd", ".so", ".dll", ".whl"}
+SKIPPED_DIRS = {
+    ".git",
+    ".venv",
+    "venv",
+    "target",
+    "__pycache__",
+    "_build",
+    "node_modules",
+}
+BINARY_SUFFIXES = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".ico",
+    ".pyd",
+    ".so",
+    ".dll",
+    ".whl",
+}
 MAX_FILE_SIZE = 200_000
+
+# acrylic on Windows, liquid glass on macOS, no backdrop elsewhere
+BACKDROP = {"win32": "acrylic", "darwin": "liquid_glass"}.get(sys.platform)
 
 LIGHT, DARK, SYSTEM = 0, 1, 2
 
@@ -28,12 +50,15 @@ contents = {}  # path -> Str shown in its tab
 
 # tree
 
+
 def build_nodes(directory):
     nodes = []
     entries = sorted(directory.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
 
     for entry in entries:
-        if entry.is_dir() and (entry.name in SKIPPED_DIRS or entry.name.startswith(".")):
+        if entry.is_dir() and (
+            entry.name in SKIPPED_DIRS or entry.name.startswith(".")
+        ):
             continue
 
         node_id = len(paths)
@@ -56,9 +81,10 @@ for node_id, path in enumerate(paths):
 
 # dock
 
+
 def welcome_ui():
     heading("Explorer")
-    label("A pyegui demo with a glass style and an acrylic backdrop.")
+    label("A pyegui demo with a glass style and a native backdrop.")
     add_space(8)
 
     def help_card():
@@ -169,6 +195,7 @@ def open_file(path):
 
 # theme
 
+
 def apply_theme(ctx):
     if theme.value == LIGHT:
         ctx.set_light_theme()
@@ -177,8 +204,12 @@ def apply_theme(ctx):
     else:
         ctx.set_system_theme()
 
-    # the tint of the acrylic follows the theme of Windows, so it is forced here
-    ctx.set_backdrop("acrylic" + {LIGHT: "_light", DARK: "_dark", SYSTEM: ""}[theme.value])
+    # the tint of the acrylic follows the theme of Windows, so it is forced here.
+    # Liquid glass follows the theme of the app on its own
+    if BACKDROP == "acrylic":
+        ctx.set_backdrop(
+            "acrylic" + {LIGHT: "_light", DARK: "_dark", SYSTEM: ""}[theme.value]
+        )
 
 
 def setup(ctx):
@@ -188,6 +219,7 @@ def setup(ctx):
 
 
 # app
+
 
 def top_bar(ctx):
     def bar():
@@ -224,7 +256,9 @@ def update_func(ctx):
         started.value = True
 
     top_panel("top", lambda: top_bar(ctx), inner_margin=8, show_separator_line=False)
-    bottom_panel("status", lambda: small(status.value), inner_margin=6, show_separator_line=False)
+    bottom_panel(
+        "status", lambda: small(status.value), inner_margin=6, show_separator_line=False
+    )
     left_panel(
         "sidebar",
         sidebar,
@@ -239,4 +273,10 @@ def update_func(ctx):
 
 
 if __name__ == "__main__":
-    run_native("Explorer", update_func, inner_width=1200, inner_height=760, backdrop="acrylic_light")
+    run_native(
+        "Explorer",
+        update_func,
+        inner_width=1200,
+        inner_height=760,
+        backdrop=BACKDROP,
+    )
