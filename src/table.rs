@@ -1,9 +1,44 @@
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
 
 use crate::{current_ui, kwarg, run_nested_call, Int, UI};
+
+/// The columns of a table: auto sized and the last one taking the rest of the width, or as
+/// given by the column_widths keyword arg
+fn columns(num_columns: usize, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<Column>> {
+    let Some(widths) = kwarg::<Vec<Bound<'_, PyAny>>>(kwargs, "column_widths")? else {
+        let mut columns = vec![Column::auto(); num_columns.saturating_sub(1)];
+        columns.push(Column::remainder());
+        return Ok(columns);
+    };
+    if widths.len() != num_columns {
+        return Err(PyValueError::new_err(format!(
+            "column_widths has {} values for {} columns",
+            widths.len(),
+            num_columns
+        )));
+    }
+    widths
+        .iter()
+        .map(|width| {
+            if width.is_none() {
+                Ok(Column::auto())
+            } else if let Ok(width) = width.extract::<f32>() {
+                // a starting width, still resizable, never too narrow to read
+                Ok(Column::initial(width).at_least(width.min(40.0)).clip(true))
+            } else if width.extract::<String>().is_ok_and(|w| w == "remainder") {
+                Ok(Column::remainder())
+            } else {
+                Err(PyTypeError::new_err(
+                    "column_widths values must be a width, None for auto or \"remainder\"",
+                ))
+            }
+        })
+        .collect()
+}
 
 /// Creates a table builder with the options shared by table and table_ui
 fn table_builder<'a>(
@@ -11,11 +46,13 @@ fn table_builder<'a>(
     num_columns: usize,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<TableBuilder<'a>> {
+    let columns = columns(num_columns, kwargs)?;
     let mut t = TableBuilder::new(ui)
         .striped(kwarg::<bool>(kwargs, "striped")?.unwrap_or(true))
-        .resizable(kwarg::<bool>(kwargs, "resizable")?.unwrap_or(true))
-        .columns(Column::auto(), num_columns - 1)
-        .column(Column::remainder());
+        .resizable(kwarg::<bool>(kwargs, "resizable")?.unwrap_or(true));
+    for column in columns {
+        t = t.column(column);
+    }
 
     if let Some(id) = kwarg::<String>(kwargs, "id")? {
         t = t.id_salt(id);
@@ -44,6 +81,10 @@ fn table_builder<'a>(
 ///     resizable (bool): columns can be resized. Default is True
 ///
 ///     max_height (float): max height of the table before scrolling
+///
+///     column_widths (list[float | None | str]): width of each column: a starting width, None to fit
+///     the contents or "remainder" for the rest of the width. Default fits the contents, the last
+///     column takes the rest
 ///
 /// Example::
 ///

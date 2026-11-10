@@ -743,6 +743,38 @@ impl Dock {
         }
     }
 
+    /// Makes the first pane with this title the active tab. Returns False if there is no such pane
+    ///
+    /// Usage::
+    ///
+    ///     if selectable_label_clicked(dock.active_title == "Tasks", "Tasks"):
+    ///         dock.set_active("Tasks")
+    fn set_active(&mut self, title: &str) -> PyResult<bool> {
+        let tree = self
+            .tree
+            .as_mut()
+            .ok_or(PyRuntimeError::new_err("set_active cannot be called inside a pane of the same dock"))?;
+        let mut found = false;
+        tree.make_active(|_, tile| {
+            let matches = !found && matches!(tile, Tile::Pane(pane) if pane.title == title);
+            found |= matches;
+            matches
+        });
+        Ok(found)
+    }
+
+    /// Title of the active pane: the visible pane of the first tabs, or None
+    #[getter]
+    fn active_title(&self) -> Option<String> {
+        let tree = self.tree.as_ref()?;
+        tree.active_tiles()
+            .into_iter()
+            .find_map(|id| match tree.tiles.get(id) {
+                Some(Tile::Pane(pane)) => Some(pane.title.clone()),
+                _ => None,
+            })
+    }
+
     /// Titles of the panes currently in the dock, in display order
     #[getter]
     fn titles(&self) -> Vec<String> {
