@@ -4,7 +4,7 @@
 * ~~add_enabled~~
 * ~~add_enabled_ui~~
 * add_sized?
-* add_space?
+* ~~add_space~~
 * add_visible?
 * advance_cursor_after_rect
 * allocate_at_least?
@@ -87,7 +87,7 @@
 * menu_image_text_button
 * min_rect
 * min_size
-* monospace
+* ~~monospace~~
 * multiply_opacity
 * new?
 * new_child?
@@ -167,16 +167,20 @@
 
 egui_tiles exposes the tab bar through the `Behavior` trait, already implemented in `src/dock.rs`.
 
-1. Colors and sizes (easy, ~1/2 day): options on `Dock` or `dock_area` for the tab bar height and color,
-   active/inactive/hovered tab fill, tab text and outline colors, title spacing, gap width, resize stroke,
-   drag preview color, hiding the tab bar with a single pane. Glass style defaults.
+1. ~~Colors and sizes: options on `Dock` (and `Dock.set_style`) for the tab bar height and color,
+   active/inactive tab fill, tab text and outline colors, title spacing, gap width, resize stroke,
+   drag preview color, hiding the tab bar with a single pane. Glass style defaults (`glass=True`).~~
+   Done, except the hovered tab fill: egui_tiles does not give the hover state to the color hooks,
+   so it moves to 3.
 2. Contents in the tab bar (medium, ~1 day): Python callbacks for `top_bar_right_ui` and `tab_bar_left_ui`,
    e.g. a "+" button to open a tab.
-3. Tab shapes (harder, 1-2 days): the default `tab_ui` hardcodes square corners, so rounded, pill or
-   underlined tabs and icons need a custom `tab_ui` keeping click, drag, close button and middle click.
-   Provide presets in Rust: `tab_style="pill" | "underline" | "classic"`.
+3. Tab shapes: a custom `tab_ui` keeping click, drag, close button and middle click.
+   ~~Top corners rounded with the radius of the theme (`ctx.set_style(rounding=...)`), active tab with
+   the background of its pane, tinted inactive tabs, space between tabs (`tab_spacing`), hovered tab fill
+   (`hovered_tab_fill`).~~ Still to do: presets `tab_style="pill" | "underline" | "classic"`
+   (pill tabs rounded on every corner, underlined active tab) and icons in the tabs.
 
-Recommended first: 1 and the "pill" preset of 3.
+Next: the presets of 3, then 2.
 
 ## Markdown
 

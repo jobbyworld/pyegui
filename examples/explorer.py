@@ -144,7 +144,8 @@ dock = Dock(
             DockContainer("tabs", [DockPane("Welcome", welcome_ui)]),
             DockPane("Details", info_ui),
         ],
-    )
+    ),
+    glass=True,
 )
 
 

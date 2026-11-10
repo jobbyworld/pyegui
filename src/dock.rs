@@ -1,10 +1,14 @@
 use eframe::egui;
-use egui_tiles::{Container, SimplificationOptions, Tile, TileId, Tiles, UiResponse};
+use egui::{Color32, CornerRadius, Id, Response, Role, Sense, Stroke, TextStyle, Ui, Vec2, Visuals, WidgetInfo};
+use egui_tiles::{
+    Container, ResizeState, SimplificationOptions, TabState, Tile, TileId, Tiles, UiResponse,
+};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyAny;
+use pyo3::types::{PyAny, PyDict};
 
-use crate::{current_ui, run_nested_update_func, UI};
+use crate::style::{kwarg_color, kwarg_stroke};
+use crate::{current_ui, kwarg, run_nested_update_func, UI};
 
 /// A pane of a Dock, shown as a tab.
 ///
@@ -111,12 +115,161 @@ fn insert_tile(tiles: &mut Tiles<Pane>, node: &Bound<'_, PyAny>) -> PyResult<Til
     }
 }
 
+/// Look of the tab bar and of the gaps of a Dock. Unset options keep the egui_tiles defaults
+#[derive(Clone, Default)]
+struct DockStyle {
+    glass: bool,
+    tab_bar_height: Option<f32>,
+    tab_bar_color: Option<Color32>,
+    hide_single_tab_bar: bool,
+    active_tab_fill: Option<Color32>,
+    inactive_tab_fill: Option<Color32>,
+    hovered_tab_fill: Option<Color32>,
+    tab_spacing: Option<f32>,
+    active_tab_text_color: Option<Color32>,
+    inactive_tab_text_color: Option<Color32>,
+    active_tab_stroke: Option<Stroke>,
+    inactive_tab_stroke: Option<Stroke>,
+    tab_title_spacing: Option<f32>,
+    gap_width: Option<f32>,
+    resize_stroke: Option<Stroke>,
+    drag_preview_color: Option<Color32>,
+    drag_preview_stroke: Option<Stroke>,
+}
+
+const STYLE_KEYS: [&str; 17] = [
+    "glass",
+    "tab_bar_height",
+    "tab_bar_color",
+    "hide_single_tab_bar",
+    "active_tab_fill",
+    "inactive_tab_fill",
+    "hovered_tab_fill",
+    "tab_spacing",
+    "active_tab_text_color",
+    "inactive_tab_text_color",
+    "active_tab_stroke",
+    "inactive_tab_stroke",
+    "tab_title_spacing",
+    "gap_width",
+    "resize_stroke",
+    "drag_preview_color",
+    "drag_preview_stroke",
+];
+
+impl DockStyle {
+    fn tab_spacing(&self) -> f32 {
+        self.tab_spacing.unwrap_or(if self.glass { 4.0 } else { 2.0 })
+    }
+
+    /// The tint of the inactive tabs, which sets them apart from the active one
+    fn inactive_tint(visuals: &Visuals, hovered: bool) -> Color32 {
+        let alpha = match (visuals.dark_mode, hovered) {
+            (true, false) => 70,
+            (true, true) => 35,
+            (false, false) => 20,
+            (false, true) => 10,
+        };
+        Color32::from_black_alpha(alpha)
+    }
+
+    /// Updates the options given in kwargs, the others are kept
+    fn update(&mut self, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+        if let Some(kwargs) = kwargs {
+            for key in kwargs.keys() {
+                let key = key.extract::<String>()?;
+                if !STYLE_KEYS.contains(&key.as_str()) {
+                    return Err(PyTypeError::new_err(format!(
+                        "Unknown dock style option '{}', expected one of {}",
+                        key,
+                        STYLE_KEYS.join(", ")
+                    )));
+                }
+            }
+        }
+
+        macro_rules! set {
+            ($field:ident, $value:expr) => {
+                if let Some(value) = $value {
+                    self.$field = value;
+                }
+            };
+            (opt $field:ident, $value:expr) => {
+                if let Some(value) = $value {
+                    self.$field = Some(value);
+                }
+            };
+        }
+
+        set!(glass, kwarg::<bool>(kwargs, "glass")?);
+        set!(opt tab_bar_height, kwarg::<f32>(kwargs, "tab_bar_height")?);
+        set!(opt tab_bar_color, kwarg_color(kwargs, "tab_bar_color")?);
+        set!(hide_single_tab_bar, kwarg::<bool>(kwargs, "hide_single_tab_bar")?);
+        set!(opt active_tab_fill, kwarg_color(kwargs, "active_tab_fill")?);
+        set!(opt inactive_tab_fill, kwarg_color(kwargs, "inactive_tab_fill")?);
+        set!(opt hovered_tab_fill, kwarg_color(kwargs, "hovered_tab_fill")?);
+        set!(opt tab_spacing, kwarg::<f32>(kwargs, "tab_spacing")?);
+        set!(opt active_tab_text_color, kwarg_color(kwargs, "active_tab_text_color")?);
+        set!(opt inactive_tab_text_color, kwarg_color(kwargs, "inactive_tab_text_color")?);
+        set!(opt active_tab_stroke, kwarg_stroke(kwargs, "active_tab_stroke")?);
+        set!(opt inactive_tab_stroke, kwarg_stroke(kwargs, "inactive_tab_stroke")?);
+        set!(opt tab_title_spacing, kwarg::<f32>(kwargs, "tab_title_spacing")?);
+        set!(opt gap_width, kwarg::<f32>(kwargs, "gap_width")?);
+        set!(opt resize_stroke, kwarg_stroke(kwargs, "resize_stroke")?);
+        set!(opt drag_preview_color, kwarg_color(kwargs, "drag_preview_color")?);
+        set!(opt drag_preview_stroke, kwarg_stroke(kwargs, "drag_preview_stroke")?);
+        Ok(())
+    }
+}
+
 /// Dock stores a layout of panes that the user can resize, rearrange by dragging tabs, and close.
 ///
 /// Args:
 ///     root (DockPane | DockContainer): initial layout
 ///
 ///     id (str): unique id of the dock. Default is "dock"
+///
+/// Keyword Args:
+///     glass (bool): sizes matching ctx.set_glass_style(): taller tab bar, more space between the tabs,
+///         wider see-through gaps between the panes. The other options override it
+///
+///     tab_bar_height (float): height of the tab bar. Default is 24
+///
+///     tab_bar_color (color): background of the tab bar. Default is transparent
+///
+///     hide_single_tab_bar (bool): hide the tab bar of tabs holding a single pane. Default is False
+///
+///     active_tab_fill (color): background of the active tab. Default is transparent, so the active tab
+///         has the same background as its pane
+///
+///     inactive_tab_fill (color): background of the other tabs. Default is a dark tint setting them apart
+///
+///     hovered_tab_fill (color): background of an inactive tab under the mouse. Default is a lighter tint
+///
+///     tab_spacing (float): space between two tabs. Default is 2, 4 with glass
+///
+/// The top corners of the tabs are rounded like the widgets of the theme, see the rounding and
+/// widget_rounding options of ctx.set_style().
+///
+///     active_tab_text_color (color): title color of the active tab
+///
+///     inactive_tab_text_color (color): title color of the other tabs. Default is dimmed
+///
+///     active_tab_stroke (tuple[float, color]): outline of the active tab. Default is none
+///
+///     inactive_tab_stroke (tuple[float, color]): outline of the other tabs. Default is none
+///
+///     tab_title_spacing (float): space on the left and right of the tab titles. Default is 8
+///
+///     gap_width (float): gap between the panes of horizontal, vertical and grid containers. Default is 1
+///
+///     resize_stroke (tuple[float, color]): line drawn in the gaps between panes
+///
+///     drag_preview_color (color): fill of the area where a dragged tab will be dropped
+///
+///     drag_preview_stroke (tuple[float, color]): outline of the area where a dragged tab will be dropped
+///
+/// Colors are (r, g, b), (r, g, b, a) or "#rrggbb[aa]".
 ///
 /// Usage::
 ///
@@ -127,11 +280,15 @@ fn insert_tile(tiles: &mut Tiles<Pane>, node: &Bound<'_, PyAny>) -> PyResult<Til
 ///
 ///     def update_func(ctx):
 ///         dock_area(dock)
+///
+///     # glass sizes, with pink inactive tabs
+///     dock = Dock(root, glass=True, inactive_tab_fill="#ec489933", tab_bar_height=30)
 #[pyclass]
 pub(crate) struct Dock {
     // taken out while the dock is shown, so panes can call add_pane
     tree: Option<egui_tiles::Tree<Pane>>,
     pending: Vec<Pane>,
+    style: DockStyle,
 }
 
 fn add_pane_to_tree(tree: &mut egui_tiles::Tree<Pane>, pane: Pane) {
@@ -177,15 +334,34 @@ fn find_tabs(tiles: &Tiles<Pane>, tile_id: TileId) -> Option<TileId> {
 #[pymethods]
 impl Dock {
     #[new]
-    #[pyo3(signature = (root, id="dock"))]
-    fn new(root: &Bound<'_, PyAny>, id: &str) -> PyResult<Self> {
+    #[pyo3(signature = (root, id="dock", **kwargs))]
+    fn new(root: &Bound<'_, PyAny>, id: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         let mut tiles = Tiles::default();
         let root = insert_tile(&mut tiles, root)?;
+        let mut style = DockStyle::default();
+        style.update(kwargs)?;
 
         Ok(Dock {
             tree: Some(egui_tiles::Tree::new(egui::Id::unique(id), root, tiles)),
             pending: vec![],
+            style,
         })
+    }
+
+    /// Changes the look of the dock. Takes the same keyword arguments as Dock, the options
+    /// that are not given are kept. Call reset_style() to go back to the defaults.
+    ///
+    /// Usage::
+    ///
+    ///     dock.set_style(tab_bar_height=30, active_tab_fill=(59, 130, 246, 120))
+    #[pyo3(signature = (**kwargs))]
+    fn set_style(&mut self, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+        self.style.update(kwargs)
+    }
+
+    /// Goes back to the default look of the dock
+    fn reset_style(&mut self) {
+        self.style = DockStyle::default();
     }
 
     /// Adds a pane to the first tabs of the dock, or to the root container, and makes it the active tab
@@ -229,6 +405,7 @@ fn collect_titles(tiles: &Tiles<Pane>, tile_id: TileId, titles: &mut Vec<String>
 struct Behavior<'py> {
     py: Python<'py>,
     result: PyResult<()>,
+    style: DockStyle,
 }
 
 impl egui_tiles::Behavior<Pane> for Behavior<'_> {
@@ -247,6 +424,217 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
 
     fn is_tab_closable(&self, tiles: &Tiles<Pane>, tile_id: TileId) -> bool {
         matches!(tiles.get(tile_id), Some(Tile::Pane(pane)) if pane.closable)
+    }
+
+    /// Same as the default tab_ui of egui_tiles, with rounded top corners, a hovered fill and
+    /// spacing between the tabs
+    fn tab_ui(
+        &mut self,
+        tiles: &mut Tiles<Pane>,
+        ui: &mut Ui,
+        id: Id,
+        tile_id: TileId,
+        state: &TabState,
+    ) -> Response {
+        let text = self.tab_title_for_tile(tiles, tile_id);
+        let close_btn_size = Vec2::splat(self.close_button_outer_size());
+        let close_btn_left_padding = 4.0;
+        let font_id = TextStyle::Button.resolve(ui.style());
+        let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, font_id);
+
+        let x_margin = self.tab_title_spacing(ui.visuals());
+        let spacing = self.style.tab_spacing();
+
+        let button_width = galley.size().x
+            + 2.0 * x_margin
+            + f32::from(state.closable) * (close_btn_left_padding + close_btn_size.x);
+        let (_, outer_rect) = ui.allocate_space(egui::vec2(button_width + spacing, ui.available_height()));
+        // the spacing is on the right, so the first tab stays aligned with the panes
+        let tab_rect = egui::Rect::from_min_size(
+            outer_rect.min,
+            egui::vec2(button_width, outer_rect.height()),
+        );
+
+        let draggable = self.is_tile_draggable(tiles, tile_id);
+        let sense = if draggable {
+            Sense::click_and_drag()
+        } else {
+            Sense::click()
+        };
+        let tab_response = ui.interact(tab_rect, id, sense);
+        let tab_response = if draggable {
+            tab_response.on_hover_cursor(self.tab_hover_cursor_icon())
+        } else {
+            tab_response
+        };
+        tab_response.widget_info(|| {
+            WidgetInfo::selected(Role::Button, ui.is_enabled(), state.active, galley.text())
+        });
+
+        // show a gap when dragged
+        if ui.is_rect_visible(tab_rect) && !state.is_being_dragged {
+            let mut bg_color = self.tab_bg_color(ui.visuals(), tiles, tile_id, state);
+            if !state.active && tab_response.hovered() {
+                bg_color = self
+                    .style
+                    .hovered_tab_fill
+                    .unwrap_or(DockStyle::inactive_tint(ui.visuals(), true));
+            }
+            let stroke = self.tab_outline_stroke(ui.visuals(), tiles, tile_id, state);
+            // the radius of the theme, set with ctx.set_style(rounding=...)
+            let radius = ui.visuals().widgets.inactive.corner_radius.nw;
+            let corners = CornerRadius {
+                nw: radius,
+                ne: radius,
+                sw: 0,
+                se: 0,
+            };
+            ui.painter().rect(
+                tab_rect.shrink(0.5),
+                corners,
+                bg_color,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+
+            if state.active && stroke.width > 0.0 {
+                // open the outline at the bottom, so the tab connects with its pane
+                ui.painter().hline(
+                    tab_rect.shrink2(egui::vec2(stroke.width, 0.0)).x_range(),
+                    tab_rect.bottom() - stroke.width / 2.0,
+                    Stroke::new(stroke.width + 1.0, ui.visuals().panel_fill),
+                );
+            }
+
+            let text_color = self.tab_text_color(ui.visuals(), tiles, tile_id, state);
+            let text_position = egui::Align2::LEFT_CENTER
+                .align_size_within_rect(galley.size(), tab_rect.shrink(x_margin))
+                .min;
+            ui.painter().galley(text_position, galley, text_color);
+
+            if state.closable {
+                let close_btn_rect = egui::Align2::RIGHT_CENTER
+                    .align_size_within_rect(close_btn_size, tab_rect.shrink(x_margin));
+                let close_btn_id = ui.auto_id_with("tab_close_btn");
+                let close_btn_response = ui
+                    .interact(close_btn_rect, close_btn_id, Sense::click_and_drag())
+                    .on_hover_cursor(egui::CursorIcon::Default);
+                close_btn_response
+                    .widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), "Close"));
+
+                let visuals = ui.style().interact(&close_btn_response);
+                let rect = close_btn_rect
+                    .shrink(self.close_button_inner_margin())
+                    .expand(visuals.expansion);
+                let stroke = visuals.fg_stroke;
+                ui.painter()
+                    .line_segment([rect.left_top(), rect.right_bottom()], stroke);
+                ui.painter()
+                    .line_segment([rect.right_top(), rect.left_bottom()], stroke);
+
+                if (close_btn_response.clicked()
+                    || tab_response.clicked_by(egui::PointerButton::Middle))
+                    && self.on_tab_close(tiles, tile_id)
+                {
+                    tiles.remove(tile_id);
+                }
+            }
+        }
+
+        self.on_tab_button(tiles, tile_id, tab_response)
+    }
+
+    fn tab_bar_height(&self, _style: &egui::Style) -> f32 {
+        self.style.tab_bar_height.unwrap_or(if self.style.glass { 28.0 } else { 24.0 })
+    }
+
+    fn is_tab_bar_visible(&self, _tile_id: TileId, tabs: &egui_tiles::Tabs) -> bool {
+        !self.style.hide_single_tab_bar || tabs.children.len() > 1
+    }
+
+    fn gap_width(&self, _style: &egui::Style) -> f32 {
+        self.style.gap_width.unwrap_or(if self.style.glass { 6.0 } else { 1.0 })
+    }
+
+    fn resize_stroke(&self, style: &egui::Style, resize_state: ResizeState) -> Stroke {
+        match (resize_state, self.style.resize_stroke) {
+            (ResizeState::Idle, Some(stroke)) => stroke,
+            // the gap stays see-through, the line only shows when hovered or dragged
+            (ResizeState::Idle, None) if self.style.glass => Stroke::NONE,
+            (ResizeState::Idle, None) => Stroke::new(
+                self.gap_width(style),
+                style.visuals.widgets.noninteractive.bg_stroke.color,
+            ),
+            (ResizeState::Hovering, _) => style.visuals.widgets.hovered.fg_stroke,
+            (ResizeState::Dragging, _) => style.visuals.widgets.active.fg_stroke,
+        }
+    }
+
+    fn tab_title_spacing(&self, _visuals: &Visuals) -> f32 {
+        self.style.tab_title_spacing.unwrap_or(if self.style.glass { 12.0 } else { 8.0 })
+    }
+
+    fn tab_bar_color(&self, _visuals: &Visuals) -> Color32 {
+        // transparent, so the active tab shows the same background as its pane
+        self.style.tab_bar_color.unwrap_or(Color32::TRANSPARENT)
+    }
+
+    fn tab_bg_color(
+        &self,
+        visuals: &Visuals,
+        _tiles: &Tiles<Pane>,
+        _tile_id: TileId,
+        state: &TabState,
+    ) -> Color32 {
+        if state.active {
+            self.style.active_tab_fill.unwrap_or(Color32::TRANSPARENT)
+        } else {
+            self.style
+                .inactive_tab_fill
+                .unwrap_or(DockStyle::inactive_tint(visuals, false))
+        }
+    }
+
+    fn tab_outline_stroke(
+        &self,
+        _visuals: &Visuals,
+        _tiles: &Tiles<Pane>,
+        _tile_id: TileId,
+        state: &TabState,
+    ) -> Stroke {
+        if state.active {
+            self.style.active_tab_stroke.unwrap_or(Stroke::NONE)
+        } else {
+            self.style.inactive_tab_stroke.unwrap_or(Stroke::NONE)
+        }
+    }
+
+    fn tab_text_color(
+        &self,
+        visuals: &Visuals,
+        _tiles: &Tiles<Pane>,
+        _tile_id: TileId,
+        state: &TabState,
+    ) -> Color32 {
+        if state.active {
+            self.style
+                .active_tab_text_color
+                .unwrap_or(visuals.widgets.active.text_color())
+        } else {
+            self.style
+                .inactive_tab_text_color
+                .unwrap_or(visuals.widgets.noninteractive.text_color().gamma_multiply(0.75))
+        }
+    }
+
+    fn drag_preview_stroke(&self, visuals: &Visuals) -> Stroke {
+        self.style.drag_preview_stroke.unwrap_or(visuals.selection.stroke)
+    }
+
+    fn drag_preview_color(&self, visuals: &Visuals) -> Color32 {
+        self.style
+            .drag_preview_color
+            .unwrap_or(visuals.selection.stroke.color.gamma_multiply(0.5))
     }
 
     fn simplification_options(&self) -> SimplificationOptions {
@@ -269,13 +657,19 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
 #[pyfunction]
 unsafe fn dock_area(py: Python<'_>, dock: Py<Dock>) -> PyResult<()> {
     let ui = current_ui(&UI)?;
-    let mut tree = dock
-        .borrow_mut(py)
-        .tree
-        .take()
-        .ok_or(PyRuntimeError::new_err("dock_area cannot be called inside a pane of the same dock"))?;
+    let (mut tree, style) = {
+        let mut dock = dock.borrow_mut(py);
+        let tree = dock.tree.take().ok_or(PyRuntimeError::new_err(
+            "dock_area cannot be called inside a pane of the same dock",
+        ))?;
+        (tree, dock.style.clone())
+    };
 
-    let mut behavior = Behavior { py, result: Ok(()) };
+    let mut behavior = Behavior {
+        py,
+        result: Ok(()),
+        style,
+    };
     tree.ui(&mut behavior, ui);
 
     let mut dock = dock.borrow_mut(py);
