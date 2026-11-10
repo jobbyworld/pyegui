@@ -251,29 +251,27 @@ def sidebar():
     if MACOS:
         add_space(26)  # the window buttons are over the sidebar
 
-    def place(name, path):
+    accent = ACCENTS[accent_name.value]
+
+    def place(icon_name, name, path):
+        # SVG icons in the accent color, like the sidebar of the Finder; white when selected
         path = Path(path)
         if not path.is_dir():
             return
-
-        def row():
-            uri = file_icon(str(path), 16)
-            if uri:
-                image(uri, max_width=16, max_height=16)
-            if selectable_label_clicked(current() == path, name):
-                go(path)
-
-        horizontal(row)
+        on = current() == path
+        if image_button_clicked(svg(icon_name), name, size=16, tint=(255, 255, 255) if on else accent,
+                                selected=on, frame=False):
+            go(path)
 
     weak("Favorites")
-    place(HOME.name, HOME)
-    place("Desktop", HOME / "Desktop")
-    place("Documents", HOME / "Documents")
-    place("Downloads", HOME / "Downloads")
-    place("pyegui", Path(__file__).resolve().parent.parent)
+    place("home", HOME.name, HOME)
+    place("desktop", "Desktop", HOME / "Desktop")
+    place("document", "Documents", HOME / "Documents")
+    place("download", "Downloads", HOME / "Downloads")
+    place("folder", "pyegui", Path(__file__).resolve().parent.parent)
     add_space(12)
     weak("Locations")
-    place("Macintosh HD" if MACOS else "Root", Path(current().anchor))
+    place("drive", "Macintosh HD" if MACOS else "Root", Path(current().anchor))
     add_space(12)
     weak("Tags")
     for name, color in TAGS:
@@ -294,6 +292,25 @@ def icon_tint():
     return (225, 227, 233) if context[0].is_dark_theme else (70, 73, 82)
 
 
+def place_name(path):
+    return path.name or ("Macintosh HD" if MACOS else str(path))
+
+
+def ancestors_menu():
+    """the current folder then its parents, like the title menu of the Finder"""
+    for path in [current(), *current().parents]:
+        def row(path=path):
+            # the check mark of the current folder, an invisible one keeps the others aligned
+            colored_label((127, 127, 127, 255) if path == current() else (0, 0, 0, 0), "✓")
+            uri = file_icon(str(path), 16)
+            clicked = image_button_clicked(uri, place_name(path)) if uri else button_clicked(place_name(path))
+            if clicked:
+                go(path)
+                close_menu()
+
+        horizontal(row)
+
+
 def toolbar():
     tint = icon_tint()
 
@@ -305,7 +322,7 @@ def toolbar():
         if image_button_clicked(svg("chevron-right"), size=16, tint=tint):
             forward()
         add_space(6)
-        strong(current().name or str(current()))
+        menu_button(f"{place_name(current())}  ▾", ancestors_menu, size=14)
         add_space(max(available_width() - 640, 8))
         for mode, name, text in [(LIST, "list", "List"), (ICONS, "grid", "Icons"), (TREE, "tree", "Tree")]:
             on = view.value == mode
