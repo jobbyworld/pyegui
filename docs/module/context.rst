@@ -13,6 +13,7 @@ Context
 .. automethod:: pyegui.Context.set_style
 .. automethod:: pyegui.Context.reset_style
 .. automethod:: pyegui.Context.set_glass_style
+.. automethod:: pyegui.Context.set_accent
 .. automethod:: pyegui.Context.set_backdrop
 
 
