@@ -84,3 +84,15 @@ Custom styles: glass style with a native backdrop effect, styled buttons, frames
 
 .. image:: _static/glass.png
    :alt: glass screenshot
+
+markdown
+-------------
+
+A markdown editor with a live preview in a glass dock. Code blocks marked ``mermaid`` are drawn as diagrams.
+
+.. literalinclude:: ../examples/markdown.py
+   :language: python
+   :linenos:
+
+.. image:: _static/markdown.png
+   :alt: markdown screenshot
