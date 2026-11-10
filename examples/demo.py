@@ -239,14 +239,19 @@ def tables_page():
   separator()
   label("table_ui() draws each cell with a function.")
 
+  done = []
+
   def cell(row, col):
     if col == 0:
       label(tasks[row])
     elif button_clicked("Done"):
-      tasks.pop(row)
-      status.value = "Task done"
+      # removed after the table is drawn, so the next rows still exist while it is drawn
+      done.append(row)
 
   table_ui(["Task", ""], len(tasks), cell, id="tasks")
+  for row in sorted(done, reverse=True):
+    tasks.pop(row)
+    status.value = "Task done"
   if not tasks and button_clicked("Reset tasks"):
     tasks.extend(["Write docs", "Fix bugs", "Release 0.6"])
 
