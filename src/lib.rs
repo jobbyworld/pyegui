@@ -202,7 +202,7 @@ impl Context {
 
     /// Applies a translucent style looking like frosted glass, for both themes.
     ///
-    /// Works best with a backdrop effect: run_native(..., backdrop="mica").
+    /// Works best with a backdrop effect: run_native(..., backdrop=Backdrop.MICA).
     /// It can be customized afterwards with set_style.
     ///
     /// Args:
@@ -214,7 +214,7 @@ impl Context {
     ///         ctx.set_glass_style()
     ///         heading("Glass")
     ///
-    ///     run_native("Glass", update_func, backdrop="acrylic")
+    ///     run_native("Glass", update_func, backdrop=Backdrop.ACRYLIC)
     #[pyo3(signature = (tint=None))]
     fn set_glass_style(&self, tint: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
         let tint = tint.map(style::extract_color).transpose()?;
@@ -225,7 +225,7 @@ impl Context {
 
     /// Changes the backdrop effect behind the window, for example to follow the theme.
     ///
-    /// The window must have been created with a backdrop: run_native(..., backdrop="mica").
+    /// The window must have been created with a backdrop: run_native(..., backdrop=Backdrop.MICA).
     ///
     /// Args:
     ///     backdrop (str): same values as the backdrop argument of run_native
@@ -233,7 +233,7 @@ impl Context {
     /// Example::
     ///
     ///     ctx.set_dark_theme()
-    ///     ctx.set_backdrop("mica_dark")
+    ///     ctx.set_backdrop(Backdrop.MICA_DARK)
     fn set_backdrop(&self, backdrop: String) -> PyResult<()> {
         check_backdrop(&backdrop)?;
 
@@ -787,6 +787,7 @@ impl eframe::App for PyeguiApp<'_> {
 ///     "mica", "tabbed" (Windows 11), "acrylic", "blur" (Windows 10 and 11). Add "_light" or "_dark" to mica, tabbed
 ///     and acrylic to force their tint, otherwise it follows the theme of the system,
 ///     "vibrancy" (macOS), "liquid_glass" and the more see-through "liquid_glass_clear" (macOS 26).
+///     The Backdrop class has a constant for each of them, like Backdrop.MICA.
 ///     Ignored with a warning on other platforms
 ///
 /// Examples::
@@ -927,6 +928,53 @@ unsafe fn run_native(
             err.to_string()
         ))),
     }
+}
+
+/// Names of the backdrop effects, for run_native(backdrop=...) and ctx.set_backdrop().
+/// They are plain strings, so "mica" works as well as Backdrop.MICA.
+///
+/// - MICA, TABBED: Windows 11
+/// - ACRYLIC, BLUR: Windows 10 and 11
+/// - the _LIGHT and _DARK variants of MICA, TABBED and ACRYLIC force the tint instead of following
+///   the theme of Windows
+/// - VIBRANCY: macOS
+/// - LIQUID_GLASS, LIQUID_GLASS_CLEAR (barely blurred): macOS 26
+///
+/// Usage::
+///
+///     run_native("Glass", update_func, backdrop=Backdrop.LIQUID_GLASS)
+///     ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
+#[pyclass(frozen)]
+struct Backdrop;
+
+#[pymethods]
+impl Backdrop {
+    #[classattr]
+    const MICA: &'static str = "mica";
+    #[classattr]
+    const MICA_LIGHT: &'static str = "mica_light";
+    #[classattr]
+    const MICA_DARK: &'static str = "mica_dark";
+    #[classattr]
+    const TABBED: &'static str = "tabbed";
+    #[classattr]
+    const TABBED_LIGHT: &'static str = "tabbed_light";
+    #[classattr]
+    const TABBED_DARK: &'static str = "tabbed_dark";
+    #[classattr]
+    const ACRYLIC: &'static str = "acrylic";
+    #[classattr]
+    const ACRYLIC_LIGHT: &'static str = "acrylic_light";
+    #[classattr]
+    const ACRYLIC_DARK: &'static str = "acrylic_dark";
+    #[classattr]
+    const BLUR: &'static str = "blur";
+    #[classattr]
+    const VIBRANCY: &'static str = "vibrancy";
+    #[classattr]
+    const LIQUID_GLASS: &'static str = "liquid_glass";
+    #[classattr]
+    const LIQUID_GLASS_CLEAR: &'static str = "liquid_glass_clear";
 }
 
 static BACKDROPS: [&str; 13] = [
@@ -2074,6 +2122,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     }
     // classes
     m.add_class::<Str>()?;
+    m.add_class::<Backdrop>()?;
     m.add_class::<Bool>()?;
     m.add_class::<Int>()?;
     m.add_class::<Float>()?;
