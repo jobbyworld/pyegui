@@ -502,6 +502,146 @@ unsafe fn badge(text: &str, color: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
     Ok(())
 }
 
+/// What the user did with a widget during the frame, returned by label_response and
+/// selectable_label_response
+#[pyclass(frozen, get_all)]
+pub(crate) struct Response {
+    /// clicked with the primary button
+    clicked: bool,
+    /// double clicked with the primary button
+    double_clicked: bool,
+    /// clicked with the secondary button, usually the right one
+    secondary_clicked: bool,
+    /// the mouse is over the widget
+    hovered: bool,
+}
+
+#[pymethods]
+impl Response {
+    fn __repr__(&self) -> String {
+        format!(
+            "Response(clicked={}, double_clicked={}, secondary_clicked={}, hovered={})",
+            self.clicked, self.double_clicked, self.secondary_clicked, self.hovered
+        )
+    }
+}
+
+impl From<egui::Response> for Response {
+    fn from(response: egui::Response) -> Self {
+        Response {
+            clicked: response.clicked(),
+            double_clicked: response.double_clicked(),
+            secondary_clicked: response.secondary_clicked(),
+            hovered: response.hovered(),
+        }
+    }
+}
+
+fn sized_text(text: &str, size: Option<f32>) -> egui::RichText {
+    let text = egui::RichText::new(text);
+    match size {
+        Some(size) => text.size(size),
+        None => text,
+    }
+}
+
+/// Shows a text that can be clicked and returns a Response: clicked, double_clicked,
+/// secondary_clicked and hovered.
+///
+/// Args:
+///     text (str): the text
+///
+///     size (float): font size of the text. Default is the size of the body text
+///
+/// Example::
+///
+///     response = label_response("📁", size=48)
+///     if response.double_clicked:
+///         open_folder()
+#[pyfunction]
+#[pyo3(signature = (text, size=None))]
+unsafe fn label_response(text: &str, size: Option<f32>) -> PyResult<Response> {
+    let ui = current_ui(&UI)?;
+    let response = ui.add(egui::Label::new(sized_text(text, size)).sense(egui::Sense::click()));
+    Ok(response.into())
+}
+
+/// Shows a text that looks selected when selected is True, and returns a Response: clicked,
+/// double_clicked, secondary_clicked and hovered. A double click is also a click.
+///
+/// Args:
+///     selected (bool): show the text as selected
+///
+///     text (str): the text
+///
+///     size (float): font size of the text. Default is the size of the body text
+///
+/// Example::
+///
+///     response = selectable_label_response(name == selected.value, name)
+///     if response.clicked:
+///         selected.value = name
+///     if response.double_clicked:
+///         open_file(name)
+#[pyfunction]
+#[pyo3(signature = (selected, text, size=None))]
+unsafe fn selectable_label_response(selected: bool, text: &str, size: Option<f32>) -> PyResult<Response> {
+    let ui = current_ui(&UI)?;
+    Ok(ui.selectable_label(selected, sized_text(text, size)).into())
+}
+
+/// Parses "Cmd+Shift+ArrowUp" into the modifiers and the key
+fn parse_shortcut(shortcut: &str) -> PyResult<(egui::Modifiers, egui::Key)> {
+    let mut modifiers = egui::Modifiers::NONE;
+    let mut key = None;
+    for part in shortcut.split('+').map(str::trim) {
+        match part.to_lowercase().as_str() {
+            // the command key on macOS, ctrl elsewhere
+            "cmd" | "command" => modifiers = modifiers | egui::Modifiers::COMMAND,
+            "ctrl" | "control" => modifiers = modifiers | egui::Modifiers::CTRL,
+            "shift" => modifiers = modifiers | egui::Modifiers::SHIFT,
+            "alt" | "option" => modifiers = modifiers | egui::Modifiers::ALT,
+            _ => {
+                key = Some(egui::Key::from_name(part).ok_or_else(|| {
+                    PyValueError::new_err(format!(
+                        "Unknown key '{}' in '{}'. Keys are named like A, 1, Enter, Escape, Space, Tab, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, F1",
+                        part, shortcut
+                    ))
+                })?)
+            }
+        }
+    }
+    let key = key.ok_or_else(|| PyValueError::new_err(format!("No key in '{}'", shortcut)))?;
+    Ok((modifiers, key))
+}
+
+/// True if the key was pressed during the frame with these modifiers. Cmd and Ctrl must match,
+/// Shift and Alt pressed in addition are ignored, so "Enter" is also Shift+Enter.
+///
+/// Args:
+///     shortcut (str): a key with optional modifiers: "Enter", "ArrowDown", "Cmd+ArrowUp",
+///         "Shift+Tab". Cmd is the command key on macOS and ctrl elsewhere
+///
+///     when_typing (bool): also when a text field has the focus. Default is False, so the arrows
+///         move the cursor of the text field instead of triggering the shortcut
+///
+/// Example::
+///
+///     if key_pressed("Enter"):
+///         open_selection()
+///     if key_pressed("Cmd+ArrowUp"):
+///         go_to_parent()
+#[pyfunction]
+#[pyo3(signature = (shortcut, when_typing=false))]
+unsafe fn key_pressed(shortcut: &str, when_typing: bool) -> PyResult<bool> {
+    let (modifiers, key) = parse_shortcut(shortcut)?;
+    let ctx = current_ui(&UI)?.ctx().clone();
+    if !when_typing && ctx.egui_wants_keyboard_input() {
+        return Ok(false);
+    }
+    Ok(ctx.input(|i| i.key_pressed(key) && i.modifiers.matches_logically(modifiers)))
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RGBA>()?;
     m.add_function(wrap_pyfunction!(colored_label, m)?)?;
@@ -529,5 +669,9 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(menu_image_text_button, m)?)?;
     m.add_function(wrap_pyfunction!(switch, m)?)?;
     m.add_function(wrap_pyfunction!(badge, m)?)?;
+    m.add_class::<Response>()?;
+    m.add_function(wrap_pyfunction!(label_response, m)?)?;
+    m.add_function(wrap_pyfunction!(selectable_label_response, m)?)?;
+    m.add_function(wrap_pyfunction!(key_pressed, m)?)?;
     Ok(())
 }

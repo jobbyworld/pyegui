@@ -31,4 +31,6 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graph
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSResponder", "NSView", "NSWorkspace", "NSAccessibility"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSResponder", "NSView", "NSWorkspace", "NSAccessibility", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphicsContext", "objc2-core-graphics"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSDictionary", "NSData", "NSGeometry"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGImage"] }

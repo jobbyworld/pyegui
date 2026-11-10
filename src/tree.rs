@@ -1,4 +1,4 @@
-use egui_ltreeview::{Action, DirPosition, TreeViewBuilder, TreeViewState};
+use egui_ltreeview::{Action, DirPosition, NodeBuilder, TreeViewBuilder, TreeViewState};
 use pyo3::prelude::*;
 
 use crate::{current_ui, UI};
@@ -45,6 +45,9 @@ impl TreeNode {
 ///
 ///     drag_and_drop (bool): allow moving nodes by dragging them. Default is False
 ///
+///     default_open (bool): directories are open the first time they are shown. Default is True.
+///         Use False to load the children of a directory only when the user opens it, see is_open
+///
 /// Usage::
 ///
 ///     tree = TreeView("files")
@@ -59,6 +62,7 @@ pub(crate) struct TreeView {
     id: String,
     multi_select: bool,
     drag_and_drop: bool,
+    default_open: bool,
     state: TreeViewState<i64>,
     activated: Vec<i64>,
     moved: Option<(Vec<i64>, i64, &'static str, Option<i64>)>,
@@ -67,12 +71,13 @@ pub(crate) struct TreeView {
 #[pymethods]
 impl TreeView {
     #[new]
-    #[pyo3(signature = (id, multi_select=false, drag_and_drop=false))]
-    fn new(id: String, multi_select: bool, drag_and_drop: bool) -> Self {
+    #[pyo3(signature = (id, multi_select=false, drag_and_drop=false, default_open=true))]
+    fn new(id: String, multi_select: bool, drag_and_drop: bool, default_open: bool) -> Self {
         TreeView {
             id,
             multi_select,
             drag_and_drop,
+            default_open,
             state: TreeViewState::default(),
             activated: vec![],
             moved: None,
@@ -110,16 +115,31 @@ impl TreeView {
     fn set_open(&mut self, id: i64, open: bool) {
         self.state.set_openness(id, open);
     }
+
+    /// True if the directory is open. Useful to load the children of a directory only when it is
+    /// opened: give it an empty list of children until then
+    fn is_open(&self, id: i64) -> bool {
+        self.state.is_open(&id).unwrap_or(false)
+    }
 }
 
-fn add_nodes(py: Python<'_>, builder: &mut TreeViewBuilder<'_, i64>, nodes: &[Py<TreeNode>]) {
+fn add_nodes(
+    py: Python<'_>,
+    builder: &mut TreeViewBuilder<'_, i64>,
+    nodes: &[Py<TreeNode>],
+    default_open: bool,
+) {
     for node in nodes {
         let node = node.borrow(py);
 
         match &node.children {
             Some(children) => {
-                builder.dir(node.id, node.label.as_str());
-                add_nodes(py, builder, children);
+                builder.node(
+                    NodeBuilder::dir(node.id)
+                        .default_open(default_open)
+                        .label(node.label.as_str()),
+                );
+                add_nodes(py, builder, children, default_open);
                 builder.close_dir();
             }
             None => builder.leaf(node.id, node.label.as_str()),
@@ -147,7 +167,9 @@ unsafe fn tree_view(py: Python<'_>, tree: &mut TreeView, nodes: Vec<Py<TreeNode>
     let (_, actions) = egui_ltreeview::TreeView::new(id)
         .allow_multi_selection(tree.multi_select)
         .allow_drag_and_drop(tree.drag_and_drop)
-        .show_state(ui, &mut tree.state, |builder| add_nodes(py, builder, &nodes));
+        .show_state(ui, &mut tree.state, |builder| {
+            add_nodes(py, builder, &nodes, tree.default_open)
+        });
 
     tree.activated.clear();
     tree.moved = None;

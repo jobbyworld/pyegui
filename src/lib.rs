@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::{fs, ptr};
 
 mod containers;
+mod icons;
 mod dock;
 mod markdown;
 mod plot;
@@ -1421,14 +1422,24 @@ unsafe fn weak(text: &str) -> PyResult<()> {
 
 /// Show some text.
 ///
+/// Args:
+///     text (str): the text
+///
+///     size (float): font size of this text only. Default is the size of the body text
+///
 /// Example::
 ///
 ///     label("some text")
+///     label("📁", size=48)
 #[pyfunction]
-unsafe fn label(text: &str) -> PyResult<()> {
+#[pyo3(signature = (text, size=None))]
+unsafe fn label(text: &str, size: Option<f32>) -> PyResult<()> {
     let ui = current_ui(&UI)?;
 
-    ui.label(text);
+    match size {
+        Some(size) => ui.label(egui::RichText::new(text).size(size)),
+        None => ui.label(text),
+    };
     Ok(())
 }
 
@@ -2302,6 +2313,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     table::register(m)?;
     tree::register(m)?;
     widgets::register(m)?;
+    icons::register(m)?;
     dock::register(m)?;
     plot::register(m)?;
     markdown::register(m)?;
