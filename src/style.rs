@@ -171,6 +171,7 @@ pub(crate) struct StyleOptions {
     item_spacing: Option<egui::Vec2>,
     button_padding: Option<egui::Vec2>,
     window_margin: Option<f32>,
+    menu_margin: Option<egui::Vec2>,
     body_size: Option<f32>,
     heading_size: Option<f32>,
     monospace_size: Option<f32>,
@@ -215,6 +216,7 @@ impl StyleOptions {
             item_spacing: kwarg_vec2(kwargs, "item_spacing")?,
             button_padding: kwarg_vec2(kwargs, "button_padding")?,
             window_margin: kwarg(kwargs, "window_margin")?,
+            menu_margin: kwarg_vec2(kwargs, "menu_margin")?,
             body_size: kwarg(kwargs, "body_size")?,
             heading_size: kwarg(kwargs, "heading_size")?,
             monospace_size: kwarg(kwargs, "monospace_size")?,
@@ -303,6 +305,9 @@ impl StyleOptions {
         }
         if let Some(margin) = self.window_margin {
             style.spacing.window_margin = margin.into();
+        }
+        if let Some(margin) = self.menu_margin {
+            style.spacing.menu_margin = egui::Margin::symmetric(margin.x as i8, margin.y as i8);
         }
 
         for (text_style, size) in [
@@ -534,6 +539,8 @@ pub(crate) fn glass_style(style: &mut Style, tint: Option<Color32>) {
 
     style.spacing.button_padding = egui::vec2(10.0, 4.0);
     style.spacing.window_margin = 12.0.into();
+    // the menus are rounded by 12: their items keep away from the rounded corners
+    style.spacing.menu_margin = egui::Margin::symmetric(10, 8);
 }
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

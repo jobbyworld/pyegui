@@ -174,6 +174,8 @@ impl Context {
     ///
     ///     item_spacing (tuple[float, float]), button_padding (tuple[float, float]), window_margin (float)
     ///
+    ///     menu_margin (tuple[float, float]): horizontal and vertical space inside the menus
+    ///
     ///     body_size (float), heading_size (float), monospace_size (float): font sizes
     ///
     ///     animation_time (float): duration of animations in seconds
