@@ -364,6 +364,8 @@ unsafe fn end_row() -> PyResult<()> {
 #[pyfunction]
 unsafe fn menu_bar(update_fun: Bound<'_, PyAny>) -> PyResult<()> {
     egui::MenuBar::new()
+        .style(crate::style::menu_style())
+        .config(crate::style::menu_config())
         .ui(current_ui(&UI)?, |ui| run_nested_update_func(ui, update_fun))
         .inner
 }
@@ -382,9 +384,19 @@ unsafe fn menu_bar(update_fun: Bound<'_, PyAny>) -> PyResult<()> {
 ///     menu_button("Edit", edit_menu)
 #[pyfunction]
 unsafe fn menu_button(text: &str, update_fun: Bound<'_, PyAny>) -> PyResult<()> {
-    current_ui(&UI)?
-        .menu_button(text, |ui| run_nested_update_func(ui, update_fun))
-        .inner
+    let ui = current_ui(&UI)?;
+    if egui::containers::menu::is_in_menu(ui) {
+        // a sub menu, styled by the menu it is in
+        return ui
+            .menu_button(text, |ui| run_nested_update_func(ui, update_fun))
+            .inner
+            .unwrap_or(Ok(()));
+    }
+    egui::containers::menu::MenuButton::new(text)
+        .config(crate::style::menu_config())
+        .ui(ui, |ui| run_nested_update_func(ui, update_fun))
+        .1
+        .map(|inner| inner.inner)
         .unwrap_or(Ok(()))
 }
 
@@ -420,9 +432,11 @@ unsafe fn context_menu(update_fun: Bound<'_, PyAny>, menu_fun: Bound<'_, PyAny>)
     response.inner?;
 
     let mut result = Ok(());
-    response.response.context_menu(|ui| {
-        result = run_nested_update_func(ui, menu_fun);
-    });
+    egui::Popup::context_menu(&response.response)
+        .style(crate::style::menu_style())
+        .show(|ui| {
+            result = run_nested_update_func(ui, menu_fun);
+        });
     result
 }
 

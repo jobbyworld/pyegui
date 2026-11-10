@@ -360,9 +360,18 @@ fn menu_image(source: &str, size: f32) -> egui::Image<'_> {
 #[pyfunction]
 #[pyo3(signature = (source, update_fun, size=16.0))]
 unsafe fn menu_image_button(source: &str, update_fun: Bound<'_, PyAny>, size: f32) -> PyResult<()> {
-    current_ui(&UI)?
-        .menu_image_button(menu_image(source, size), |ui| run_nested_update_func(ui, update_fun))
-        .inner
+    let ui = current_ui(&UI)?;
+    if egui::containers::menu::is_in_menu(ui) {
+        return ui
+            .menu_image_button(menu_image(source, size), |ui| run_nested_update_func(ui, update_fun))
+            .inner
+            .unwrap_or(Ok(()));
+    }
+    egui::containers::menu::MenuButton::from_button(egui::Button::image(menu_image(source, size)))
+        .config(crate::style::menu_config())
+        .ui(ui, |ui| run_nested_update_func(ui, update_fun))
+        .1
+        .map(|inner| inner.inner)
         .unwrap_or(Ok(()))
 }
 
@@ -379,12 +388,24 @@ unsafe fn menu_image_text_button(
     update_fun: Bound<'_, PyAny>,
     size: f32,
 ) -> PyResult<()> {
-    current_ui(&UI)?
-        .menu_image_text_button(menu_image(source, size), text, |ui| {
-            run_nested_update_func(ui, update_fun)
-        })
-        .inner
-        .unwrap_or(Ok(()))
+    let ui = current_ui(&UI)?;
+    if egui::containers::menu::is_in_menu(ui) {
+        return ui
+            .menu_image_text_button(menu_image(source, size), text, |ui| {
+                run_nested_update_func(ui, update_fun)
+            })
+            .inner
+            .unwrap_or(Ok(()));
+    }
+    egui::containers::menu::MenuButton::from_button(egui::Button::image_and_text(
+        menu_image(source, size),
+        text,
+    ))
+    .config(crate::style::menu_config())
+    .ui(ui, |ui| run_nested_update_func(ui, update_fun))
+    .1
+    .map(|inner| inner.inner)
+    .unwrap_or(Ok(()))
 }
 
 /// An on/off switch, the modern look of a checkbox. The track takes the accent color when on.

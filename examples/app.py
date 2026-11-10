@@ -239,6 +239,8 @@ def toolbar(ctx):
             about_open.value = True
 
     def bar():
+        if MACOS and not show_sidebar.value:
+            add_space(64)  # the window buttons are over the toolbar when the sidebar is hidden
         menu_button("File", file_menu)
         menu_button("View", view_menu)
         menu_button("Help", help_menu)

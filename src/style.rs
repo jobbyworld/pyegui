@@ -430,6 +430,24 @@ pub(crate) fn plot_palette() -> Option<Vec<Color32>> {
     ])
 }
 
+/// The style of the menus: the style of egui menus, which removes the button frames and squeezes
+/// the buttons to 2 points of padding, with room around the texts in the modern theme
+pub(crate) fn menu_style() -> egui::style::StyleModifier {
+    let modern = theme_state().glass.is_some();
+    (move |style: &mut Style| {
+        egui::containers::menu::menu_style(style);
+        if modern {
+            style.spacing.button_padding = egui::vec2(10.0, 4.0);
+        }
+    })
+    .into()
+}
+
+/// The menu config of pyegui, see menu_style
+pub(crate) fn menu_config() -> egui::containers::menu::MenuConfig {
+    egui::containers::menu::MenuConfig::new().style(menu_style())
+}
+
 /// Text sizes of the modern theme: 11.5 / 14 / 20, titles in semibold
 fn modern_text_styles(style: &mut Style) {
     use FontFamily::{Monospace, Proportional};
