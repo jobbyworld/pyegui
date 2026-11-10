@@ -341,8 +341,51 @@ unsafe fn pixels_per_point() -> PyResult<f32> {
     Ok(current_ui(&UI)?.pixels_per_point())
 }
 
-fn menu_image(source: &str, size: f32) -> egui::Image<'_> {
-    egui::Image::new(source).fit_to_exact_size(egui::vec2(size, size))
+fn menu_image(source: &str, size: f32, tint: Option<egui::Color32>) -> egui::Image<'_> {
+    let image = egui::Image::new(source).fit_to_exact_size(egui::vec2(size, size));
+    match tint {
+        Some(tint) => image.tint(tint),
+        None => image,
+    }
+}
+
+fn extract_tint(tint: Option<&Bound<'_, PyAny>>) -> PyResult<Option<egui::Color32>> {
+    tint.map(extract_color).transpose()
+}
+
+/// A button showing an image, and a text if given. Returns True when it is clicked.
+///
+/// Args:
+///     source (str): uri of the image, like for image(). SVG icons stay sharp at any size
+///
+///     text (str): a text on the right of the image
+///
+///     size (float): size of the image. Default is 16
+///
+///     tint (color): multiplies the colors of the image. With a white icon, the icon takes the color
+///
+///     selected (bool): show the button as selected, like a toggle. Default is False
+///
+/// Example::
+///
+///     if image_button_clicked("file://icons/list.svg", "List", selected=view == LIST):
+///         view = LIST
+#[pyfunction]
+#[pyo3(signature = (source, text=None, size=16.0, tint=None, selected=false))]
+unsafe fn image_button_clicked(
+    source: &str,
+    text: Option<&str>,
+    size: f32,
+    tint: Option<&Bound<'_, PyAny>>,
+    selected: bool,
+) -> PyResult<bool> {
+    let ui = current_ui(&UI)?;
+    let image = menu_image(source, size, extract_tint(tint)?);
+    let button = match text {
+        Some(text) => egui::Button::image_and_text(image, text),
+        None => egui::Button::image(image),
+    };
+    Ok(ui.add(button.selected(selected)).clicked())
 }
 
 /// A button with an image, showing a menu when clicked. See menu_button.
@@ -354,20 +397,28 @@ fn menu_image(source: &str, size: f32) -> egui::Image<'_> {
 ///
 ///     size (float): size of the image. Default is 16
 ///
+///     tint (color): multiplies the colors of the image. With a white icon, the icon takes the color
+///
 /// Example::
 ///
 ///     menu_image_button("file://assets/settings.png", settings_menu)
 #[pyfunction]
-#[pyo3(signature = (source, update_fun, size=16.0))]
-unsafe fn menu_image_button(source: &str, update_fun: Bound<'_, PyAny>, size: f32) -> PyResult<()> {
+#[pyo3(signature = (source, update_fun, size=16.0, tint=None))]
+unsafe fn menu_image_button(
+    source: &str,
+    update_fun: Bound<'_, PyAny>,
+    size: f32,
+    tint: Option<&Bound<'_, PyAny>>,
+) -> PyResult<()> {
     let ui = current_ui(&UI)?;
+    let tint = extract_tint(tint)?;
     if egui::containers::menu::is_in_menu(ui) {
         return ui
-            .menu_image_button(menu_image(source, size), |ui| run_nested_update_func(ui, update_fun))
+            .menu_image_button(menu_image(source, size, tint), |ui| run_nested_update_func(ui, update_fun))
             .inner
             .unwrap_or(Ok(()));
     }
-    egui::containers::menu::MenuButton::from_button(egui::Button::image(menu_image(source, size)))
+    egui::containers::menu::MenuButton::from_button(egui::Button::image(menu_image(source, size, tint)))
         .config(crate::style::menu_config())
         .ui(ui, |ui| run_nested_update_func(ui, update_fun))
         .1
@@ -381,24 +432,26 @@ unsafe fn menu_image_button(source: &str, update_fun: Bound<'_, PyAny>, size: f3
 ///
 ///     menu_image_text_button("file://assets/settings.png", "Settings", settings_menu)
 #[pyfunction]
-#[pyo3(signature = (source, text, update_fun, size=16.0))]
+#[pyo3(signature = (source, text, update_fun, size=16.0, tint=None))]
 unsafe fn menu_image_text_button(
     source: &str,
     text: &str,
     update_fun: Bound<'_, PyAny>,
     size: f32,
+    tint: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<()> {
     let ui = current_ui(&UI)?;
+    let tint = extract_tint(tint)?;
     if egui::containers::menu::is_in_menu(ui) {
         return ui
-            .menu_image_text_button(menu_image(source, size), text, |ui| {
+            .menu_image_text_button(menu_image(source, size, tint), text, |ui| {
                 run_nested_update_func(ui, update_fun)
             })
             .inner
             .unwrap_or(Ok(()));
     }
     egui::containers::menu::MenuButton::from_button(egui::Button::image_and_text(
-        menu_image(source, size),
+        menu_image(source, size, tint),
         text,
     ))
     .config(crate::style::menu_config())
@@ -667,6 +720,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pixels_per_point, m)?)?;
     m.add_function(wrap_pyfunction!(menu_image_button, m)?)?;
     m.add_function(wrap_pyfunction!(menu_image_text_button, m)?)?;
+    m.add_function(wrap_pyfunction!(image_button_clicked, m)?)?;
     m.add_function(wrap_pyfunction!(switch, m)?)?;
     m.add_function(wrap_pyfunction!(badge, m)?)?;
     m.add_class::<Response>()?;

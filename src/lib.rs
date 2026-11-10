@@ -2054,10 +2054,17 @@ unsafe fn color_edit_button_rgb(rgb: &mut RGB) -> PyResult<()> {
 
 /// Show an image available at the given uri.
 ///
+/// Keyword args:
+///
+///     max_width (int), max_height (int): the image is scaled down to fit
+///
+///     tint (color): multiplies the colors of the image. With a white icon, the icon takes the color
+///
 /// Example::
 ///
 ///     image("https://picsum.photos/480")
 ///     image("file://assets/ferris.png", max_height = 50, max_width = 50)
+///     image("file://icons/gear.svg", max_width=16, max_height=16, tint=(120, 120, 128))
 #[pyfunction]
 #[pyo3(signature = (source, **kwargs))]
 unsafe fn image(source: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
@@ -2072,6 +2079,9 @@ unsafe fn image(source: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()
         if let Some(width) = kwargs.get_item("max_width")? {
             img = img.max_width(width.cast::<PyInt>()?.extract()?);
         }
+    }
+    if let Some(tint) = style::kwarg_color(kwargs, "tint")? {
+        img = img.tint(tint);
     }
     ui.add(img);
     Ok(())

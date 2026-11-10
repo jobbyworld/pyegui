@@ -382,9 +382,22 @@ unsafe fn menu_bar(update_fun: Bound<'_, PyAny>) -> PyResult<()> {
 ///         menu_button("More", lambda: button_clicked("Paste special"))
 ///
 ///     menu_button("Edit", edit_menu)
+///     menu_button("⚙", settings_menu, size=18)
+///
+/// Args:
+///     text (str): the text of the button
+///
+///     update_func (Callable[[], None]): draws the menu
+///
+///     size (float): font size of the text of the button. Default is the size of the buttons
 #[pyfunction]
-unsafe fn menu_button(text: &str, update_fun: Bound<'_, PyAny>) -> PyResult<()> {
+#[pyo3(signature = (text, update_fun, size=None))]
+unsafe fn menu_button(text: &str, update_fun: Bound<'_, PyAny>, size: Option<f32>) -> PyResult<()> {
     let ui = current_ui(&UI)?;
+    let text = match size {
+        Some(size) => egui::RichText::new(text).size(size),
+        None => egui::RichText::new(text),
+    };
     if egui::containers::menu::is_in_menu(ui) {
         // a sub menu, styled by the menu it is in
         return ui
