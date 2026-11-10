@@ -941,6 +941,12 @@ fn apply_backdrop(
         _ => (backdrop, None),
     };
 
+    // on macOS the effect view must sit behind the view egui renders into, see backdrop_host
+    #[cfg(target_os = "macos")]
+    let host = backdrop_host(window)?;
+    #[cfg(target_os = "macos")]
+    let window = &host;
+
     let result = match name {
         "mica" => apply_mica(window, dark),
         "tabbed" => apply_tabbed(window, dark),
@@ -959,6 +965,44 @@ fn apply_backdrop(
         _ => return Err("not supported on this platform".to_string()),
     };
     result.map_err(|e| e.to_string())
+}
+
+/// The window handle given to window-vibrancy on macOS.
+///
+/// window-vibrancy adds its effect view as a subview of the handle's view. egui draws with
+/// OpenGL directly into the layer of winit's view, and AppKit always draws subviews above their
+/// parent's own content, so the effect would cover the whole UI. Pointing the handle at the
+/// superview (the window frame) puts the effect view behind winit's view instead.
+#[cfg(target_os = "macos")]
+struct BackdropHost(raw_window_handle::AppKitWindowHandle);
+
+#[cfg(target_os = "macos")]
+impl raw_window_handle::HasWindowHandle for BackdropHost {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        // the frame view lives as long as the window that lends us its handle
+        Ok(unsafe {
+            raw_window_handle::WindowHandle::borrow_raw(raw_window_handle::RawWindowHandle::AppKit(
+                self.0,
+            ))
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn backdrop_host(window: &impl raw_window_handle::HasWindowHandle) -> Result<BackdropHost, String> {
+    use objc2_app_kit::NSView;
+
+    let raw_window_handle::RawWindowHandle::AppKit(handle) =
+        window.window_handle().map_err(|e| e.to_string())?.as_raw()
+    else {
+        return Err("not an AppKit window".to_string());
+    };
+    let view = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
+    let superview = unsafe { view.superview() }.ok_or("the window has no frame view")?;
+    let ptr = std::ptr::NonNull::from(&*superview).cast();
+    Ok(BackdropHost(raw_window_handle::AppKitWindowHandle::new(ptr)))
 }
 
 /// Sets the dark mode of the window, which changes the tint of the system backdrops
