@@ -3,7 +3,7 @@ import sys
 from pyegui import *
 
 # the backdrop blurs what is behind the window: "acrylic" on Windows, "liquid_glass" on macOS 26.
-# Pass another one as argument to try it: mica, tabbed, acrylic, blur, vibrancy or liquid_glass
+# Pass another one as argument to try it: mica, tabbed, acrylic, blur, vibrancy, liquid_glass or liquid_glass_clear
 DEFAULT_BACKDROP = {"win32": "acrylic", "darwin": "liquid_glass"}.get(sys.platform)
 BACKDROP = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_BACKDROP
 
@@ -120,7 +120,7 @@ def update_func(ctx):
     )
 
     label(
-        f"Backdrop: {BACKDROP}. Run with mica, tabbed, acrylic, blur, vibrancy or liquid_glass as argument."
+        f"Backdrop: {BACKDROP}. Run with mica, tabbed, acrylic, blur, vibrancy, liquid_glass or liquid_glass_clear as argument."
     )
 
     def toolbar():

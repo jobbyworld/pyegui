@@ -785,7 +785,8 @@ impl eframe::App for PyeguiApp<'_> {
 ///     backdrop (str): blurs what is behind the window, which makes it transparent. Use with ctx.set_glass_style().
 ///     "mica", "tabbed" (Windows 11), "acrylic", "blur" (Windows 10 and 11). Add "_light" or "_dark" to mica, tabbed
 ///     and acrylic to force their tint, otherwise it follows the theme of the system,
-///     "vibrancy" (macOS), "liquid_glass" (macOS 26). Ignored with a warning on other platforms
+///     "vibrancy" (macOS), "liquid_glass" and the more see-through "liquid_glass_clear" (macOS 26).
+///     Ignored with a warning on other platforms
 ///
 /// Examples::
 ///
@@ -927,7 +928,7 @@ unsafe fn run_native(
     }
 }
 
-static BACKDROPS: [&str; 12] = [
+static BACKDROPS: [&str; 13] = [
     "mica",
     "mica_light",
     "mica_dark",
@@ -940,6 +941,7 @@ static BACKDROPS: [&str; 12] = [
     "blur",
     "vibrancy",
     "liquid_glass",
+    "liquid_glass_clear",
 ];
 
 fn check_backdrop(backdrop: &str) -> PyResult<()> {
@@ -989,6 +991,12 @@ fn apply_backdrop(
         }
         #[cfg(target_os = "macos")]
         "liquid_glass" => apply_liquid_glass(window, LiquidGlassOptions::default()),
+        // barely blurred: the windows behind stay readable
+        #[cfg(target_os = "macos")]
+        "liquid_glass_clear" => apply_liquid_glass(
+            window,
+            LiquidGlassOptions::new(NSGlassEffectViewStyle::Clear),
+        ),
         _ => return Err("not supported on this platform".to_string()),
     };
     result.map_err(|e| e.to_string())
