@@ -30,3 +30,7 @@ Documentation = "https://gachilord.github.io/pyegui/"
 Repository = "https://github.com/GachiLord/pyegui"
 Issues = "https://github.com/GachiLord/pyegui/issues"
 
+
+[tool.uv]
+# rebuild the extension when the Rust sources change
+cache-keys = [{ file = "pyproject.toml" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }, { file = "src/**/*.rs" }]

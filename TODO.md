@@ -4,7 +4,7 @@
 * ~~add_enabled~~
 * ~~add_enabled_ui~~
 * add_sized?
-* add_space?
+* ~~add_space~~
 * add_visible?
 * advance_cursor_after_rect
 * allocate_at_least?
@@ -26,10 +26,10 @@
 * ~~centered_and_justified~~
 * ~~checkbox~~
 * clip_rect
-* close_menu
+* ~~close_menu~~
 * ~~code~~
 * ~~code_editor~~
-* collapsing
+* ~~collapsing~~
 * color_edit_button_hsva
 * ~~color_edit_button_rgb~~
 * color_edit_button_rgba_premultiplied
@@ -51,7 +51,7 @@
 * dnd_drop_zone
 * drag_angle
 * drag_angle_tau
-* end_row
+* ~~end_row~~
 * expand_to_include_rect
 * expand_to_include_x
 * expand_to_include_y
@@ -82,12 +82,12 @@
 * max_rect
 * memory?
 * memory_mut?
-* menu_button
+* ~~menu_button~~
 * menu_image_button
 * menu_image_text_button
 * min_rect
 * min_size
-* monospace
+* ~~monospace~~
 * multiply_opacity
 * new?
 * new_child?
@@ -160,3 +160,32 @@
 * with_layout
 * with_visual_transform
 * wrap_mode
+
+# Planned
+
+## Dock tab bar styling
+
+egui_tiles exposes the tab bar through the `Behavior` trait, already implemented in `src/dock.rs`.
+
+1. ~~Colors and sizes: options on `Dock` (and `Dock.set_style`) for the tab bar height and color,
+   active/inactive tab fill, tab text and outline colors, title spacing, gap width, resize stroke,
+   drag preview color, hiding the tab bar with a single pane. Glass style defaults (`glass=True`).~~
+   Done, except the hovered tab fill: egui_tiles does not give the hover state to the color hooks,
+   so it moves to 3.
+2. ~~Contents in the tab bar: Python callbacks `tab_bar_left`, `tab_bar_trailing` and `tab_bar_right`
+   (also `Dock.set_tab_bar`), taking a `DockTabBar` that adds, activates and closes the panes of its
+   own tabs, e.g. a "+" button or a menu listing the tabs.~~
+3. Tab shapes: a custom `tab_ui` keeping click, drag, close button and middle click.
+   ~~Top corners rounded with the radius of the theme (`ctx.set_style(rounding=...)`), active tab with
+   the background of its pane, tinted inactive tabs, space between tabs (`tab_spacing`), hovered tab fill
+   (`hovered_tab_fill`).~~ Still to do: presets `tab_style="pill" | "underline" | "classic"`
+   (pill tabs rounded on every corner, underlined active tab) and icons in the tabs.
+
+Next: the presets of 3.
+
+## Markdown
+
+* ~~the copy button of code blocks shows a missing glyph: add an icon font~~
+* ~~mermaid diagrams in ```mermaid code blocks~~ (mermaid-svg, chosen over mermaid-rs-renderer,
+  ferrigura and merman: complete diagrams, correct ER notation, dark theme, only thiserror as
+  dependency; ferrigura and merman output css or html labels that resvg does not draw)

@@ -1,29 +1,47 @@
 #![allow(static_mut_refs)]
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use eframe::egui::{FontData, FontDefinitions, FontFamily};
 use eframe::{self, egui};
 use egui_extras;
 use log::debug;
+use pyo3::call::PyCallArgs;
 use pyo3::prelude::*;
 use pyo3::{
-    exceptions::{PyOSError, PyRuntimeError},
+    exceptions::{PyOSError, PyRuntimeError, PyValueError},
     types::{PyAny, PyBool, PyDict, PyInt, PyString},
 };
 use std::sync::{Arc, Mutex};
 use std::{fs, ptr};
 
+mod containers;
+mod dock;
+mod markdown;
+mod plot;
+mod style;
+mod table;
+mod tree;
+
 // state
 
-static mut UI: *mut Vec<*mut egui::Ui> = ptr::null_mut();
+pub(crate) static mut UI: *mut Vec<*mut egui::Ui> = ptr::null_mut();
 static mut APP_MUTEX: Mutex<()> = Mutex::new(());
+// central panel is opened lazily, so panels added before any widget take the window's borders
+static mut CENTRAL: Option<Box<CentralPanelState>> = None;
+// backdrop requested by Context.set_backdrop, applied on the next frame
+static PENDING_BACKDROP: Mutex<Option<String>> = Mutex::new(None);
+
+struct CentralPanelState {
+    panel_ui: egui::Ui,
+    prepared: egui::frame::Prepared,
+}
 
 // messages
 
 static APP_MUTEX_ERR: &'static str = "run_simple_native has been called on a separate thread";
-static UI_PTR_NULL_ERR: &'static str = "UI ptr is null. This is likely to be a problem with pyegui";
-static UI_STACK_ERR: &'static str = "UI stack is empty. This is likely to be a problem with pyegui";
-static UI_CALL_OUTSIDE_UPDATE_FUNC: &'static str = "UI functions should be called only within update_fun and on the same thread. update_fun should only be called by run_simple_native";
+pub(crate) static UI_PTR_NULL_ERR: &'static str = "UI ptr is null. This is likely to be a problem with pyegui";
+pub(crate) static UI_STACK_ERR: &'static str = "UI stack is empty. This is likely to be a problem with pyegui";
+pub(crate) static UI_CALL_OUTSIDE_UPDATE_FUNC: &'static str = "UI functions should be called only within update_fun and on the same thread. update_fun should only be called by run_simple_native";
 
 // classes
 
@@ -85,7 +103,7 @@ impl Context {
             e
         })?;
 
-        let mut fonts = FontDefinitions::default();
+        let mut fonts = default_fonts();
         fonts.font_data.insert(
             source.clone(),
             Arc::new(
@@ -118,6 +136,111 @@ impl Context {
     /// Copy the given text to the system clipboard.
     fn copy_text(&self, text: String) {
         self.0.copy_text(text);
+    }
+
+    /// Changes the style of the app. Only the given options are changed.
+    ///
+    /// The style is kept between frames, so this can be called once, for example on the first frame.
+    ///
+    /// Colors are (r, g, b), (r, g, b, a) or "#rrggbb[aa]". Strokes are (width, color).
+    /// Shadows are False, (blur, color) or (offset_x, offset_y, blur, spread, color).
+    ///
+    /// Keyword args:
+    ///
+    ///     theme (str): "light" or "dark" to change only the style of this theme. Default changes both
+    ///
+    ///     rounding (float): corner radius of widgets, windows and menus
+    ///
+    ///     widget_rounding (float), window_rounding (float): corner radius of widgets or windows and menus only
+    ///
+    ///     panel_fill (color): background of the panels and the central panel
+    ///
+    ///     window_fill (color), window_stroke (stroke), window_shadow (shadow): look of windows, menus and popups
+    ///
+    ///     popup_shadow (shadow): shadow of menus, tooltips and combo boxes
+    ///
+    ///     button_fill (color), button_hover_fill (color), button_active_fill (color): background of buttons and other interactive widgets
+    ///
+    ///     button_stroke (stroke), button_hover_stroke (stroke): border of interactive widgets
+    ///
+    ///     text_color (color), hyperlink_color (color), selection_color (color)
+    ///
+    ///     extreme_bg_color (color): background of text edits, plots and scroll bars
+    ///
+    ///     faint_bg_color (color): background of striped rows
+    ///
+    ///     code_bg_color (color): background of code
+    ///
+    ///     item_spacing (tuple[float, float]), button_padding (tuple[float, float]), window_margin (float)
+    ///
+    ///     body_size (float), heading_size (float), monospace_size (float): font sizes
+    ///
+    ///     animation_time (float): duration of animations in seconds
+    ///
+    /// Example::
+    ///
+    ///     def update_func(ctx):
+    ///         ctx.set_style(rounding=12, button_fill="#3b82f6", text_color=(240, 240, 240), body_size=15)
+    #[pyo3(signature = (**kwargs))]
+    fn set_style(&self, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+        let options = style::StyleOptions::from_kwargs(kwargs)?;
+
+        match options.theme {
+            Some(theme) => self.0.style_mut_of(theme, |s| options.apply(s)),
+            None => self.0.all_styles_mut(|s| options.apply(s)),
+        }
+        Ok(())
+    }
+
+    /// Restores the default style of both themes.
+    fn reset_style(&self) {
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            self.0.set_style_of(theme, style::default_style(theme));
+        }
+    }
+
+    /// Applies a translucent style looking like frosted glass, for both themes.
+    ///
+    /// Works best with a backdrop effect: run_native(..., backdrop="mica").
+    /// It can be customized afterwards with set_style.
+    ///
+    /// Args:
+    ///     tint (color): color of the glass. Default is white on light theme and smoked on dark theme
+    ///
+    /// Example::
+    ///
+    ///     def update_func(ctx):
+    ///         ctx.set_glass_style()
+    ///         heading("Glass")
+    ///
+    ///     run_native("Glass", update_func, backdrop="acrylic")
+    #[pyo3(signature = (tint=None))]
+    fn set_glass_style(&self, tint: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let tint = tint.map(style::extract_color).transpose()?;
+
+        self.0.all_styles_mut(|s| style::glass_style(s, tint));
+        Ok(())
+    }
+
+    /// Changes the backdrop effect behind the window, for example to follow the theme.
+    ///
+    /// The window must have been created with a backdrop: run_native(..., backdrop="mica").
+    ///
+    /// Args:
+    ///     backdrop (str): same values as the backdrop argument of run_native
+    ///
+    /// Example::
+    ///
+    ///     ctx.set_dark_theme()
+    ///     ctx.set_backdrop("mica_dark")
+    fn set_backdrop(&self, backdrop: String) -> PyResult<()> {
+        check_backdrop(&backdrop)?;
+
+        *PENDING_BACKDROP
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("backdrop lock is poisoned"))? = Some(backdrop);
+        self.0.request_repaint();
+        Ok(())
     }
 }
 
@@ -266,7 +389,7 @@ impl Date {
 }
 
 /// Values of this enum are used in Layout
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 enum LayoutType {
     Horizontal,
@@ -367,11 +490,6 @@ impl Layout {
         }
     }
 
-    #[staticmethod]
-    fn __init__(scope_type: LayoutType) -> PyResult<Self> {
-        Self::__new__(scope_type)
-    }
-
     fn __enter__(&mut self) -> PyResult<()> {
         unsafe {
             let ui_stack = ui_stack(&UI)?;
@@ -436,11 +554,6 @@ impl Scope {
         }
     }
 
-    #[staticmethod]
-    fn __init__() -> PyResult<Self> {
-        Self::__new__()
-    }
-
     fn __enter__(&mut self) -> PyResult<()> {
         unsafe {
             let ui_stack = ui_stack(&UI)?;
@@ -480,11 +593,16 @@ impl Scope {
 
 /// Visually groups the contents together.
 ///
+/// Accepts the same keyword args as the frame function: fill, stroke, rounding, inner_margin, outer_margin and shadow.
+///
 /// Usage::
 ///
 ///     with Group():
 ///        heading("hi")
 ///        heading("there")
+///
+///     with Group(fill=(255, 255, 255, 40), rounding=12):
+///        label("styled group")
 #[pyclass]
 struct Group {
     prepared: egui::frame::Prepared,
@@ -493,20 +611,16 @@ struct Group {
 #[pymethods]
 impl Group {
     #[new]
-    fn __new__() -> PyResult<Self> {
+    #[pyo3(signature = (**kwargs))]
+    fn __new__(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         unsafe {
             let parent_ui = current_ui(&UI)?;
 
-            let frame = egui::Frame::group(&parent_ui.style());
+            let frame = style::apply_frame_kwargs(egui::Frame::group(&parent_ui.style()), kwargs)?;
             let prepared = frame.begin(parent_ui);
 
             Ok(Self { prepared })
         }
-    }
-
-    #[staticmethod]
-    fn __init__() -> PyResult<Self> {
-        Self::__new__()
     }
 
     fn __enter__(&mut self) -> PyResult<()> {
@@ -546,38 +660,94 @@ impl Group {
     }
 }
 
+/// The fonts of egui, plus the icon of the copy button of the markdown code blocks.
+///
+/// egui_commonmark draws it with 🗐, which was in the emoji font of egui before 0.37 and is in
+/// no font of the systems. The glyph is cut from emoji-icon-font, see src/fonts.
+fn default_fonts() -> FontDefinitions {
+    const COPY_ICON: &str = "copy-icon";
+
+    let mut fonts = FontDefinitions::default();
+    fonts.font_data.insert(
+        COPY_ICON.to_owned(),
+        Arc::new(
+            FontData::from_static(include_bytes!("fonts/copy-icon.ttf")).tweak(
+                egui::FontTweak {
+                    scale: 0.9,
+                    ..Default::default()
+                },
+            ),
+        ),
+    );
+    // last, it holds a single glyph
+    for family in fonts.families.values_mut() {
+        family.push(COPY_ICON.to_owned());
+    }
+    fonts
+}
+
 // Start function
 
 struct PyeguiApp<'py> {
     update_func: Bound<'py, PyAny>,
+    transparent: bool,
 }
 
 impl eframe::App for PyeguiApp<'_> {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let ctx_r = Context(ctx.clone());
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        if self.transparent {
+            // let the backdrop effect or the desktop show through
+            [0.0; 4]
+        } else {
+            egui::Color32::from_rgba_unmultiplied(12, 12, 12, 180).to_normalized_gamma_f32()
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx_r = Context(ui.ctx().clone());
+
+        if let Some(backdrop) = PENDING_BACKDROP.lock().ok().and_then(|mut b| b.take()) {
+            if let Err(err) = apply_backdrop(&*frame, &backdrop) {
+                log::warn!("Cannot apply backdrop '{}': {}", backdrop, err);
+            }
+        }
 
         unsafe {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                debug!("Getting ui stack pointer");
-                let ui_stack = UI.as_mut().expect(UI_PTR_NULL_ERR);
+            debug!("Getting ui stack pointer");
+            let ui_stack = UI.as_mut().expect(UI_PTR_NULL_ERR);
 
-                debug!("Push UI");
-                ui_stack.push(&raw mut *ui);
+            debug!("Push root UI");
+            ui_stack.push(&raw mut *ui);
 
-                debug!("Execute update_func");
+            debug!("Execute update_func");
 
-                Python::with_gil(|py| {
-                    if let Err(err) = self.update_func.call1((ctx_r,)) {
-                        err.display(py);
-                    }
-                });
-
-                debug!("Executed update_func");
-
-                ui_stack.pop().expect(UI_STACK_ERR);
-
-                debug!("Pop UI");
+            Python::attach(|py| {
+                if let Err(err) = self.update_func.call1((ctx_r,)) {
+                    err.display(py);
+                }
             });
+
+            debug!("Executed update_func");
+
+            // the central panel background must be painted even if no widget was added
+            if CENTRAL.is_none() {
+                open_central_panel(ui_stack).expect(UI_STACK_ERR);
+            }
+
+            ui_stack.clear();
+
+            debug!("Clear UI stack");
+
+            if let Some(central) = CENTRAL.take() {
+                let CentralPanelState {
+                    mut panel_ui,
+                    mut prepared,
+                } = *central;
+                let content_ui = &mut prepared.content_ui;
+                content_ui.expand_to_include_rect(content_ui.max_rect());
+                let response = prepared.end(&mut panel_ui);
+                ui.advance_cursor_after_rect(response.rect);
+            }
         }
     }
 }
@@ -612,6 +782,12 @@ impl eframe::App for PyeguiApp<'_> {
 ///
 ///     icon_path (str): path to icon in rgba format
 ///
+///     backdrop (str): blurs what is behind the window, which makes it transparent. Use with ctx.set_glass_style().
+///     "mica", "tabbed" (Windows 11), "acrylic", "blur" (Windows 10 and 11). Add "_light" or "_dark" to mica, tabbed
+///     and acrylic to force their tint, otherwise it follows the theme of the system,
+///     "vibrancy" (macOS), "liquid_glass" and the more see-through "liquid_glass_clear" (macOS 26).
+///     Ignored with a warning on other platforms
+///
 /// Examples::
 ///
 ///     name = Str("")
@@ -643,6 +819,14 @@ unsafe fn run_native(
     UI = &raw mut *&mut ui_stack;
     // parse kwargs
     let mut viewport = egui::viewport::ViewportBuilder::default();
+    let mut transparent = false;
+    let backdrop = kwarg::<String>(kwargs, "backdrop")?;
+
+    if let Some(backdrop) = &backdrop {
+        check_backdrop(backdrop)?;
+        transparent = true;
+        viewport = viewport.with_transparent(true);
+    }
 
     if let Some(kwargs) = kwargs {
         if let (Some(height), Some(width)) = (
@@ -650,8 +834,8 @@ unsafe fn run_native(
             kwargs.get_item("inner_width")?,
         ) {
             viewport = viewport.with_inner_size([
-                width.downcast::<PyInt>()?.extract()?,
-                height.downcast::<PyInt>()?.extract()?,
+                width.cast::<PyInt>()?.extract()?,
+                height.cast::<PyInt>()?.extract()?,
             ]);
         }
 
@@ -660,8 +844,8 @@ unsafe fn run_native(
             kwargs.get_item("min_inner_width")?,
         ) {
             viewport = viewport.with_min_inner_size([
-                width.downcast::<PyInt>()?.extract()?,
-                height.downcast::<PyInt>()?.extract()?,
+                width.cast::<PyInt>()?.extract()?,
+                height.cast::<PyInt>()?.extract()?,
             ]);
         }
 
@@ -670,29 +854,30 @@ unsafe fn run_native(
             kwargs.get_item("max_inner_width")?,
         ) {
             viewport = viewport.with_max_inner_size([
-                width.downcast::<PyInt>()?.extract()?,
-                height.downcast::<PyInt>()?.extract()?,
+                width.cast::<PyInt>()?.extract()?,
+                height.cast::<PyInt>()?.extract()?,
             ]);
         }
 
         if let Some(fullscreen) = kwargs.get_item("fullscreen")? {
-            viewport = viewport.with_fullscreen(fullscreen.downcast::<PyBool>()?.extract()?);
+            viewport = viewport.with_fullscreen(fullscreen.cast::<PyBool>()?.extract()?);
         }
 
         if let Some(maximized) = kwargs.get_item("maximized")? {
-            viewport = viewport.with_maximized(maximized.downcast::<PyBool>()?.extract()?);
+            viewport = viewport.with_maximized(maximized.cast::<PyBool>()?.extract()?);
         }
 
         if let Some(resizable) = kwargs.get_item("resizable")? {
-            viewport = viewport.with_resizable(resizable.downcast::<PyBool>()?.extract()?);
+            viewport = viewport.with_resizable(resizable.cast::<PyBool>()?.extract()?);
         }
 
-        if let Some(transparent) = kwargs.get_item("transparent")? {
-            viewport = viewport.with_transparent(transparent.downcast::<PyBool>()?.extract()?);
+        if let Some(is_transparent) = kwargs.get_item("transparent")? {
+            transparent |= is_transparent.cast::<PyBool>()?.extract::<bool>()?;
+            viewport = viewport.with_transparent(transparent);
         }
 
         if let Some(icon_path) = kwargs.get_item("icon_path")? {
-            let path = icon_path.downcast::<PyString>()?.extract::<String>()?;
+            let path = icon_path.cast::<PyString>()?.extract::<String>()?;
             let buf = fs::read(path)?;
 
             let icon_data = eframe::icon_data::from_png_bytes(&buf)
@@ -703,6 +888,12 @@ unsafe fn run_native(
 
     let options = eframe::NativeOptions {
         viewport,
+        // the wgpu surface often has no transparent alpha mode, OpenGL does
+        renderer: if transparent {
+            eframe::Renderer::Glow
+        } else {
+            eframe::Renderer::default()
+        },
         ..eframe::NativeOptions::default()
     };
     debug!("Creating a window");
@@ -713,9 +904,17 @@ unsafe fn run_native(
         Box::new(|cc| {
             // This gives us image support:
             egui_extras::install_image_loaders(&cc.egui_ctx);
+            cc.egui_ctx.set_fonts(default_fonts());
+
+            if let Some(backdrop) = &backdrop {
+                if let Err(err) = apply_backdrop(cc, backdrop) {
+                    log::warn!("Cannot apply backdrop '{}': {}", backdrop, err);
+                }
+            }
 
             Ok(Box::new(PyeguiApp {
                 update_func: update_func,
+                transparent,
             }))
         }),
     );
@@ -729,9 +928,153 @@ unsafe fn run_native(
     }
 }
 
+static BACKDROPS: [&str; 13] = [
+    "mica",
+    "mica_light",
+    "mica_dark",
+    "tabbed",
+    "tabbed_light",
+    "tabbed_dark",
+    "acrylic",
+    "acrylic_light",
+    "acrylic_dark",
+    "blur",
+    "vibrancy",
+    "liquid_glass",
+    "liquid_glass_clear",
+];
+
+fn check_backdrop(backdrop: &str) -> PyResult<()> {
+    if BACKDROPS.contains(&backdrop) {
+        Ok(())
+    } else {
+        Err(PyValueError::new_err(format!(
+            "Unknown backdrop '{}', expected one of {}",
+            backdrop,
+            BACKDROPS.join(", ")
+        )))
+    }
+}
+
+/// Applies a native blur effect behind the window
+fn apply_backdrop(
+    window: &impl raw_window_handle::HasWindowHandle,
+    backdrop: &str,
+) -> Result<(), String> {
+    use window_vibrancy::*;
+
+    // "_light" and "_dark" force the tint, otherwise it follows the theme of the system
+    let (name, dark) = match backdrop.rsplit_once('_') {
+        Some((name, "light")) => (name, Some(false)),
+        Some((name, "dark")) => (name, Some(true)),
+        _ => (backdrop, None),
+    };
+
+    // on macOS the effect view must sit behind the view egui renders into, see backdrop_host
+    #[cfg(target_os = "macos")]
+    let host = backdrop_host(window)?;
+    #[cfg(target_os = "macos")]
+    let window = &host;
+
+    let result = match name {
+        "mica" => apply_mica(window, dark),
+        "tabbed" => apply_tabbed(window, dark),
+        "acrylic" => {
+            if let Some(dark) = dark {
+                set_dark_mode(window, dark)?;
+            }
+            apply_acrylic(window, None)
+        }
+        "blur" => apply_blur(window, None),
+        "vibrancy" => {
+            apply_vibrancy(window, NSVisualEffectMaterial::UnderWindowBackground, None, None)
+        }
+        #[cfg(target_os = "macos")]
+        "liquid_glass" => apply_liquid_glass(window, LiquidGlassOptions::default()),
+        // barely blurred: the windows behind stay readable
+        #[cfg(target_os = "macos")]
+        "liquid_glass_clear" => apply_liquid_glass(
+            window,
+            LiquidGlassOptions::new(NSGlassEffectViewStyle::Clear),
+        ),
+        _ => return Err("not supported on this platform".to_string()),
+    };
+    result.map_err(|e| e.to_string())
+}
+
+/// The window handle given to window-vibrancy on macOS.
+///
+/// window-vibrancy adds its effect view as a subview of the handle's view. egui draws with
+/// OpenGL directly into the layer of winit's view, and AppKit always draws subviews above their
+/// parent's own content, so the effect would cover the whole UI. Pointing the handle at the
+/// superview (the window frame) puts the effect view behind winit's view instead.
+#[cfg(target_os = "macos")]
+struct BackdropHost(raw_window_handle::AppKitWindowHandle);
+
+#[cfg(target_os = "macos")]
+impl raw_window_handle::HasWindowHandle for BackdropHost {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        // the frame view lives as long as the window that lends us its handle
+        Ok(unsafe {
+            raw_window_handle::WindowHandle::borrow_raw(raw_window_handle::RawWindowHandle::AppKit(
+                self.0,
+            ))
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn backdrop_host(window: &impl raw_window_handle::HasWindowHandle) -> Result<BackdropHost, String> {
+    use objc2_app_kit::NSView;
+
+    let raw_window_handle::RawWindowHandle::AppKit(handle) =
+        window.window_handle().map_err(|e| e.to_string())?.as_raw()
+    else {
+        return Err("not an AppKit window".to_string());
+    };
+    let view = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
+    let superview = unsafe { view.superview() }.ok_or("the window has no frame view")?;
+    let ptr = std::ptr::NonNull::from(&*superview).cast();
+    Ok(BackdropHost(raw_window_handle::AppKitWindowHandle::new(ptr)))
+}
+
+/// Sets the dark mode of the window, which changes the tint of the system backdrops
+#[cfg(target_os = "windows")]
+fn set_dark_mode(window: &impl raw_window_handle::HasWindowHandle, dark: bool) -> Result<(), String> {
+    use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+
+    let raw_window_handle::RawWindowHandle::Win32(handle) =
+        window.window_handle().map_err(|e| e.to_string())?.as_raw()
+    else {
+        return Err("not a win32 window".to_string());
+    };
+    let value: u32 = dark.into();
+
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            handle.hwnd.get() as _,
+            DWMWA_USE_IMMERSIVE_DARK_MODE as _,
+            (&raw const value).cast(),
+            size_of::<u32>() as _,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(format!("DwmSetWindowAttribute failed with {:#x}", result))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_dark_mode(_window: &impl raw_window_handle::HasWindowHandle, _dark: bool) -> Result<(), String> {
+    Err("not supported on this platform".to_string())
+}
+
 // helpers
 
-unsafe fn ui_stack(ui: &*mut Vec<*mut egui::Ui>) -> PyResult<&mut Vec<*mut egui::Ui>> {
+pub(crate) unsafe fn ui_stack(ui: &*mut Vec<*mut egui::Ui>) -> PyResult<&mut Vec<*mut egui::Ui>> {
     ui.as_mut()
         .ok_or(PyRuntimeError::new_err(UI_CALL_OUTSIDE_UPDATE_FUNC))
 }
@@ -746,17 +1089,68 @@ unsafe fn last_ui(ui_stack: &mut Vec<*mut egui::Ui>) -> PyResult<&mut egui::Ui> 
         .ok_or(PyRuntimeError::new_err(UI_PTR_NULL_ERR))
 }
 
-unsafe fn current_ui(ui: &*mut Vec<*mut egui::Ui>) -> PyResult<&mut egui::Ui> {
+/// Returns the ui widgets should be added to. Opens the central panel if needed.
+pub(crate) unsafe fn current_ui(ui: &*mut Vec<*mut egui::Ui>) -> PyResult<&mut egui::Ui> {
+    let ui_stack = ui_stack(ui)?;
+
+    if ui_stack.len() == 1 && CENTRAL.is_none() {
+        open_central_panel(ui_stack)?;
+    }
+
+    last_ui(ui_stack)
+}
+
+/// Returns the ui panels should be added to.
+///
+/// At the top level, before any widget has been added, it is the root ui of the window,
+/// so panels are placed on the window's borders around the central panel.
+pub(crate) unsafe fn panel_parent_ui(ui: &*mut Vec<*mut egui::Ui>) -> PyResult<&mut egui::Ui> {
     last_ui(ui_stack(ui)?)
 }
 
-unsafe fn run_nested_update_func(ui: &mut egui::Ui, update_fun: Bound<'_, PyAny>) -> PyResult<()> {
+/// Same as egui::CentralPanel, but contents are added to the ui stack instead of a closure
+unsafe fn open_central_panel(ui_stack: &mut Vec<*mut egui::Ui>) -> PyResult<()> {
+    let root = ui_stack
+        .first()
+        .ok_or(PyRuntimeError::new_err(UI_STACK_ERR))?
+        .as_mut()
+        .ok_or(PyRuntimeError::new_err(UI_PTR_NULL_ERR))?;
+
+    let outer_rect = root.available_rect_before_wrap();
+    let mut panel_ui = root.new_child(
+        egui::UiBuilder::new()
+            .ui_stack_info(egui::UiStackInfo::new(egui::UiKind::CentralPanel))
+            .max_rect(outer_rect)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    panel_ui.shrink_clip_rect(outer_rect);
+
+    let prepared = egui::Frame::central_panel(root.style()).begin(&mut panel_ui);
+    let central = CENTRAL.insert(Box::new(CentralPanelState { panel_ui, prepared }));
+
+    ui_stack.push(&raw mut central.prepared.content_ui);
+    Ok(())
+}
+
+pub(crate) unsafe fn run_nested_update_func(
+    ui: &mut egui::Ui,
+    update_fun: Bound<'_, PyAny>,
+) -> PyResult<()> {
+    run_nested_call(ui, &update_fun, ())
+}
+
+/// Calls update_fun with args while ui is on top of the ui stack
+pub(crate) unsafe fn run_nested_call<'py>(
+    ui: &mut egui::Ui,
+    update_fun: &Bound<'py, PyAny>,
+    args: impl PyCallArgs<'py>,
+) -> PyResult<()> {
     let ui_stack = ui_stack(&UI).unwrap_unchecked();
 
     ui_stack.push(&raw mut *ui);
 
-    if let Err(err) = update_fun.call0() {
-        Python::with_gil(|py| {
+    if let Err(err) = update_fun.call1(args) {
+        Python::attach(|py| {
             err.display(py);
         });
     }
@@ -765,6 +1159,35 @@ unsafe fn run_nested_update_func(ui: &mut egui::Ui, update_fun: Bound<'_, PyAny>
         Some(_) => Ok(()),
         None => Err(PyRuntimeError::new_err(UI_STACK_ERR)),
     }
+}
+
+/// Extracts an optional keyword argument. None values are treated as missing.
+pub(crate) fn kwarg<'py, T>(kwargs: Option<&Bound<'py, PyDict>>, key: &str) -> PyResult<Option<T>>
+where
+    T: pyo3::conversion::FromPyObjectOwned<'py>,
+{
+    let Some(kwargs) = kwargs else {
+        return Ok(None);
+    };
+
+    match kwargs.get_item(key)? {
+        Some(value) if !value.is_none() => Ok(Some(value.extract::<T>().map_err(Into::into)?)),
+        _ => Ok(None),
+    }
+}
+
+/// Runs f with a copy of the value, so the Python code called by f can still modify it.
+/// The value is written back only if f has changed it.
+pub(crate) fn with_bool_copy<R>(py: Python<'_>, value: &Py<Bool>, f: impl FnOnce(&mut bool) -> R) -> R {
+    let before = value.borrow(py).value;
+    let mut copy = before;
+
+    let result = f(&mut copy);
+
+    if copy != before {
+        value.borrow_mut(py).value = copy;
+    }
+    result
 }
 
 // UI functions
@@ -860,18 +1283,38 @@ unsafe fn code(text: &str) -> PyResult<()> {
     Ok(())
 }
 
-/// Show singleline text field and update the text
+/// Show a multiline monospace text field for code and update the text
+///
+/// Args:
+///     text (Str): the edited text
+///
+///     desired_width (float): width of the field. float("inf") fills the available width. Default is the width of egui
+///
+///     desired_rows (int): minimum number of visible rows. Default is 4
 ///
 /// Example::
 ///
 ///     text = Str("print(42 + 27)")
 ///     # inside update func
 ///     code_editor(text)
+///     code_editor(text, desired_width=float("inf"), desired_rows=20)
 #[pyfunction]
-unsafe fn code_editor(text: &mut Str) -> PyResult<()> {
+#[pyo3(signature = (text, desired_width=None, desired_rows=None))]
+unsafe fn code_editor(
+    text: &mut Str,
+    desired_width: Option<f32>,
+    desired_rows: Option<usize>,
+) -> PyResult<()> {
     let ui = current_ui(&UI)?;
 
-    ui.code_editor(&mut text.value);
+    let mut editor = egui::TextEdit::multiline(&mut text.value).code_editor();
+    if let Some(width) = desired_width {
+        editor = editor.desired_width(width);
+    }
+    if let Some(rows) = desired_rows {
+        editor = editor.desired_rows(rows);
+    }
+    ui.add(editor);
     Ok(())
 }
 
@@ -891,7 +1334,7 @@ unsafe fn text_edit_singleline(text: &mut Str, kwargs: Option<&Bound<'_, PyDict>
 
     if let Some(kwargs) = kwargs {
         if let Some(hint_text) = kwargs.get_item("hint_text")? {
-            w = w.hint_text(hint_text.downcast::<PyString>()?.extract::<String>()?);
+            w = w.hint_text(hint_text.cast::<PyString>()?.extract::<String>()?);
         }
     }
 
@@ -915,7 +1358,7 @@ unsafe fn text_edit_multiline(text: &mut Str, kwargs: Option<&Bound<'_, PyDict>>
 
     if let Some(kwargs) = kwargs {
         if let Some(hint_text) = kwargs.get_item("hint_text")? {
-            w = w.hint_text(hint_text.downcast::<PyString>()?.extract::<String>()?);
+            w = w.hint_text(hint_text.cast::<PyString>()?.extract::<String>()?);
         }
     }
 
@@ -925,15 +1368,54 @@ unsafe fn text_edit_multiline(text: &mut Str, kwargs: Option<&Bound<'_, PyDict>>
 
 /// Returns true if the button was clicked this frame
 ///
+/// Keyword args:
+///
+///     fill (color): background color. Colors are (r, g, b), (r, g, b, a) or "#rrggbb[aa]"
+///
+///     stroke (tuple[float, color]): border width and color
+///
+///     rounding (float): corner radius
+///
+///     text_color (color): color of the text
+///
+///     min_size (tuple[float, float]): minimum width and height
+///
+///     frame (bool): False shows only the text, until hovered
+///
 /// Example::
 ///
 ///     if button_clicked("click me"):
 ///       print("click me, my friend")
+///
+///     button_clicked("Save", fill="#3b82f6", text_color="#ffffff", rounding=20, min_size=(120, 32))
 #[pyfunction]
-unsafe fn button_clicked(text: &str) -> PyResult<bool> {
+#[pyo3(signature = (text, **kwargs))]
+unsafe fn button_clicked(text: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<bool> {
     let ui = current_ui(&UI)?;
 
-    Ok(ui.button(text).clicked())
+    let mut rich_text = egui::RichText::new(text);
+    if let Some(color) = style::kwarg_color(kwargs, "text_color")? {
+        rich_text = rich_text.color(color);
+    }
+
+    let mut button = egui::Button::new(rich_text);
+    if let Some(fill) = style::kwarg_color(kwargs, "fill")? {
+        button = button.fill(fill);
+    }
+    if let Some(stroke) = style::kwarg_stroke(kwargs, "stroke")? {
+        button = button.stroke(stroke);
+    }
+    if let Some(rounding) = kwarg::<f32>(kwargs, "rounding")? {
+        button = button.corner_radius(rounding);
+    }
+    if let Some((width, height)) = kwarg::<(f32, f32)>(kwargs, "min_size")? {
+        button = button.min_size(egui::vec2(width, height));
+    }
+    if let Some(frame) = kwarg::<bool>(kwargs, "frame")? {
+        button = button.frame(frame);
+    }
+
+    Ok(ui.add(button).clicked())
 }
 
 /// Returns true if the small button was clicked this frame
@@ -1062,10 +1544,14 @@ unsafe fn indent(update_fun: Bound<'_, PyAny>) -> PyResult<()> {
 ///       heading("there")
 ///     
 ///     group(update_func)
+/// Accepts the same keyword args as the frame function: fill, stroke, rounding, inner_margin, outer_margin and shadow.
 #[pyfunction]
-unsafe fn group(update_fun: Bound<'_, PyAny>) -> PyResult<()> {
-    current_ui(&UI)?
-        .group(|ui| run_nested_update_func(ui, update_fun))
+#[pyo3(signature = (update_fun, **kwargs))]
+unsafe fn group(update_fun: Bound<'_, PyAny>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+    let ui = current_ui(&UI)?;
+
+    style::apply_frame_kwargs(egui::Frame::group(ui.style()), kwargs)?
+        .show(ui, |ui| run_nested_update_func(ui, update_fun))
         .inner
 }
 
@@ -1408,10 +1894,10 @@ unsafe fn image(source: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()
 
     if let Some(kwargs) = kwargs {
         if let Some(height) = kwargs.get_item("max_height")? {
-            img = img.max_height(height.downcast::<PyInt>()?.extract()?);
+            img = img.max_height(height.cast::<PyInt>()?.extract()?);
         }
         if let Some(width) = kwargs.get_item("max_width")? {
-            img = img.max_width(width.downcast::<PyInt>()?.extract()?);
+            img = img.max_width(width.cast::<PyInt>()?.extract()?);
         }
     }
     ui.add(img);
@@ -1521,7 +2007,16 @@ unsafe fn set_opacity(opacity: f32) -> PyResult<()> {
 unsafe fn date_picker_button(selection: &mut Date) -> PyResult<()> {
     let ui = current_ui(&UI)?;
 
-    ui.add(egui_extras::DatePickerButton::new(&mut selection.value));
+    let value = selection.value;
+    let year = i16::try_from(value.year())
+        .map_err(|_| PyValueError::new_err("Date year is out of the supported range"))?;
+    let mut date = jiff::civil::Date::new(year, value.month() as i8, value.day() as i8)
+        .map_err(|e| PyValueError::new_err(format!("Unsupported date: {}", e)))?;
+
+    ui.add(egui_extras::DatePickerButton::new(&mut date));
+
+    selection.value = NaiveDate::from_ymd_opt(date.year().into(), date.month() as u32, date.day() as u32)
+        .ok_or(PyRuntimeError::new_err("Invalid date returned by date picker"))?;
     Ok(())
 }
 
@@ -1540,9 +2035,42 @@ unsafe fn add_space(amount: f32) -> PyResult<()> {
     Ok(())
 }
 
+/// Forwards the Rust logs to Python logging, only from the thread running Python.
+///
+/// Logging to Python takes the GIL. A background thread logging while the Python thread holds
+/// the GIL and waits for it deadlocks: the system font loader of egui does that when a label
+/// shows a character missing from the default fonts, like an emoji or a symbol.
+struct PythonThreadLogger {
+    inner: pyo3_log::Logger,
+    python_thread: std::thread::ThreadId,
+}
+
+impl log::Log for PythonThreadLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        self.inner.enabled(metadata)
+    }
+
+    fn log(&self, record: &log::Record) {
+        if std::thread::current().id() == self.python_thread {
+            self.inner.log(record);
+        } else if record.level() <= log::Level::Warn {
+            eprintln!("{} {}: {}", record.level(), record.target(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
 #[pymodule]
 fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    pyo3_log::init();
+    let logger = PythonThreadLogger {
+        inner: pyo3_log::Logger::new(m.py(), pyo3_log::Caching::LoggersAndLevels)?,
+        python_thread: std::thread::current().id(),
+    };
+    // fails only if the module is imported a second time, the first logger stays
+    if log::set_boxed_logger(Box::new(logger)).is_ok() {
+        log::set_max_level(log::LevelFilter::Debug);
+    }
     // classes
     m.add_class::<Str>()?;
     m.add_class::<Bool>()?;
@@ -1607,5 +2135,12 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_opacity, m)?)?;
     m.add_function(wrap_pyfunction!(date_picker_button, m)?)?;
     m.add_function(wrap_pyfunction!(add_space, m)?)?;
+    containers::register(m)?;
+    table::register(m)?;
+    tree::register(m)?;
+    dock::register(m)?;
+    plot::register(m)?;
+    markdown::register(m)?;
+    style::register(m)?;
     Ok(())
 }

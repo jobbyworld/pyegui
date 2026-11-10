@@ -44,6 +44,12 @@ where possible to accomplish more smooth expirience in Python.
 - Date picker
 - RBG color picker
 - Text fields, radio buttons, buttons, code, progress bar etc.
+- Side, top and bottom panels, windows, modals, menus, tooltips and grids
+- Tables, tree views, plots and markdown
+- Markdown with mermaid diagrams: flowcharts, sequence, class, state, ER, pie, gantt and more
+- Docking tabs that can be resized, rearranged and styled, with widgets in their tab bars
+- Custom styles: colors, rounding, shadows, styled buttons and frames
+- Glass style with native backdrop effects (Mica and Acrylic on Windows, Liquid Glass on macOS)
 - No dependencies which destroy you project when you distribute it. Just
   pure giant Rust binary
 

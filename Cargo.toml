@@ -9,10 +9,26 @@ name = "pyegui"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.24.0", features = ["chrono", "abi3-py311", "generate-import-lib", "extension-module"] }
-eframe = "0.31.1"
-egui_extras = { version = "0.31.1", features = ["datepicker", "all_loaders"] }
+pyo3 = { version = "0.30.1", features = ["chrono", "abi3-py311", "generate-import-lib", "extension-module"] }
+eframe = { version = "0.37.0", features = ["glow"] }
+egui_extras = { version = "0.37.0", features = ["datepicker", "all_loaders"] }
 image = { version = "0.25", features = ["jpeg", "png"] }
-chrono = "0.4.40"
-log = { version = "0.4.27", features = ["release_max_level_info"] }
-pyo3-log = "0.12.3"
+chrono = "0.4.45"
+jiff = "0.2.42"
+egui_ltreeview = "0.10.0"
+egui_tiles = "0.18.0"
+egui_plot = "0.38.0"
+egui_commonmark = "0.26.0"
+window-vibrancy = "0.8.1"
+raw-window-handle = "0.6.2"
+log = { version = "0.4.35", features = ["release_max_level_info"] }
+pyo3-log = "0.13.5"
+mermaid-svg = "0.7"
+usvg = { version = "0.45", default-features = false, features = ["text", "system-fonts"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSResponder", "NSView"] }
