@@ -3,7 +3,8 @@
 Sidebar with favorites, toolbar with back / forward, list, icon and tree views, search, a preview
 panel and a path bar. The icons are the ones of the Finder on macOS.
 
-Mouse: click to select, double click to open (folders here, files with their app).
+Mouse: click to select, double click to open (folders here, files with their app). In the tree
+view, a double click or Enter opens and closes the folders.
 Keyboard: arrows to select, Enter or Cmd+Down to open, Cmd+Up for the parent folder,
 Cmd+[ and Cmd+] to go back and forward, Escape to clear the search and the selection.
 
@@ -19,6 +20,7 @@ from pyegui import *
 BACKDROP = {"win32": Backdrop.ACRYLIC, "darwin": Backdrop.LIQUID_GLASS}.get(sys.platform)
 MACOS = sys.platform == "darwin"
 HOME = Path.home()
+ICONS_DIR = Path(__file__).resolve().parent / "icons"  # white SVG icons, tinted to the theme
 
 LIST, ICONS, TREE = 0, 1, 2
 LIGHT, DARK, SYSTEM = 0, 1, 2
@@ -177,11 +179,11 @@ def keyboard():
     if key_pressed("Escape", when_typing=True):
         search.value = ""
         selected.value = ""
+    if view.value == TREE:
+        return  # the tree view has its own keyboard navigation, Enter opens the folders in the tree
     item = selected_entry()
     if item and (key_pressed("Enter") or key_pressed("Cmd+ArrowDown")):
         open_item(item)
-    if view.value == TREE:
-        return  # the tree view has its own keyboard navigation
 
     entries = visible_entries()
     if not entries:
@@ -283,22 +285,34 @@ def sidebar():
 
 # toolbar
 
+def svg(name):
+    return (ICONS_DIR / f"{name}.svg").as_uri()
+
+
+def icon_tint():
+    """the color of the icons: light on the dark theme, dark on the light theme"""
+    return (225, 227, 233) if context[0].is_dark_theme else (70, 73, 82)
+
+
 def toolbar():
+    tint = icon_tint()
+
     def bar():
         if MACOS and not show_sidebar.value:
             add_space(64)  # the window buttons are over the toolbar when the sidebar is hidden
-        if small_button_clicked("‹"):
+        if image_button_clicked(svg("chevron-left"), size=16, tint=tint):
             back()
-        if small_button_clicked("›"):
+        if image_button_clicked(svg("chevron-right"), size=16, tint=tint):
             forward()
         add_space(6)
         strong(current().name or str(current()))
-        add_space(max(available_width() - 600, 8))
-        for mode, text in [(LIST, "☰ List"), (ICONS, "▦ Icons"), (TREE, "≡ Tree")]:
-            if selectable_label_clicked(view.value == mode, text):
+        add_space(max(available_width() - 640, 8))
+        for mode, name, text in [(LIST, "list", "List"), (ICONS, "grid", "Icons"), (TREE, "tree", "Tree")]:
+            on = view.value == mode
+            if image_button_clicked(svg(name), text, size=15, tint=(255, 255, 255) if on else tint, selected=on):
                 view.value = mode
-        text_edit_singleline(search, hint_text="🔍 Search")
-        menu_button("⚙", settings_menu)
+        text_edit_singleline(search, hint_text="Search")
+        menu_image_button(svg("gear"), settings_menu, size=18, tint=tint)
 
     horizontal(bar)
 
@@ -375,7 +389,10 @@ def tree_view_ui():
             selected.value = str(tree_paths[tree.selected[0]])
         for node_id in tree.activated:
             item = entry(tree_paths[node_id])
-            if item and not item["is_dir"]:
+            if item and item["is_dir"]:
+                # a double click or Enter opens the folder in the tree, or closes it
+                tree.set_open(node_id, not tree.is_open(node_id))
+            elif item:
                 open_item(item)
 
     scroll_area_vertical(nodes)
