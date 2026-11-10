@@ -366,18 +366,22 @@ fn extract_tint(tint: Option<&Bound<'_, PyAny>>) -> PyResult<Option<egui::Color3
 ///
 ///     selected (bool): show the button as selected, like a toggle. Default is False
 ///
+///     frame (bool): draw the background of the button. False shows it only when the button is
+///         hovered or selected, like the items of a sidebar. Default is True
+///
 /// Example::
 ///
 ///     if image_button_clicked("file://icons/list.svg", "List", selected=view == LIST):
 ///         view = LIST
 #[pyfunction]
-#[pyo3(signature = (source, text=None, size=16.0, tint=None, selected=false))]
+#[pyo3(signature = (source, text=None, size=16.0, tint=None, selected=false, frame=true))]
 unsafe fn image_button_clicked(
     source: &str,
     text: Option<&str>,
     size: f32,
     tint: Option<&Bound<'_, PyAny>>,
     selected: bool,
+    frame: bool,
 ) -> PyResult<bool> {
     let ui = current_ui(&UI)?;
     let image = menu_image(source, size, extract_tint(tint)?);
@@ -385,7 +389,9 @@ unsafe fn image_button_clicked(
         Some(text) => egui::Button::image_and_text(image, text),
         None => egui::Button::image(image),
     };
-    Ok(ui.add(button.selected(selected)).clicked())
+    let button = button.selected(selected);
+    let button = if frame { button } else { button.frame_when_inactive(selected) };
+    Ok(ui.add(button).clicked())
 }
 
 /// A button with an image, showing a menu when clicked. See menu_button.
