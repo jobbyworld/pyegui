@@ -60,7 +60,7 @@ started = Bool(False)
 context = []  # the Context, kept on the first frame
 
 listing_cache = {}  # folder -> entries, read once
-tree = TreeView("tree", default_open=False)
+tree = TreeView("tree", default_open=False, activatable_dirs=True)
 tree_ids = {}  # path -> id of the tree node
 tree_paths = {}  # id -> path
 

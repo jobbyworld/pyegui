@@ -61,6 +61,10 @@ impl TreeNode {
 ///     default_open (bool): directories are open the first time they are shown. Default is True.
 ///         Use False to load the children of a directory only when the user opens it, see is_open
 ///
+///     activatable_dirs (bool): a double click or Enter on a directory activates it, like a leaf,
+///         see activated. Its arrow still opens and closes it. Default is False: a double click
+///         opens and closes the directory
+///
 /// Usage::
 ///
 ///     tree = TreeView("files")
@@ -76,6 +80,7 @@ pub(crate) struct TreeView {
     multi_select: bool,
     drag_and_drop: bool,
     default_open: bool,
+    activatable_dirs: bool,
     state: TreeViewState<i64>,
     activated: Vec<i64>,
     moved: Option<(Vec<i64>, i64, &'static str, Option<i64>)>,
@@ -84,13 +89,20 @@ pub(crate) struct TreeView {
 #[pymethods]
 impl TreeView {
     #[new]
-    #[pyo3(signature = (id, multi_select=false, drag_and_drop=false, default_open=true))]
-    fn new(id: String, multi_select: bool, drag_and_drop: bool, default_open: bool) -> Self {
+    #[pyo3(signature = (id, multi_select=false, drag_and_drop=false, default_open=true, activatable_dirs=false))]
+    fn new(
+        id: String,
+        multi_select: bool,
+        drag_and_drop: bool,
+        default_open: bool,
+        activatable_dirs: bool,
+    ) -> Self {
         TreeView {
             id,
             multi_select,
             drag_and_drop,
             default_open,
+            activatable_dirs,
             state: TreeViewState::default(),
             activated: vec![],
             moved: None,
@@ -153,6 +165,7 @@ fn add_nodes(
     builder: &mut TreeViewBuilder<'_, i64>,
     nodes: &[Py<TreeNode>],
     default_open: bool,
+    activatable_dirs: bool,
 ) {
     for node in nodes {
         let node = node.borrow(py);
@@ -162,10 +175,11 @@ fn add_nodes(
                 builder.node(with_icon(
                     NodeBuilder::dir(node.id)
                         .default_open(default_open)
+                        .activatable(activatable_dirs)
                         .label(node.label.as_str()),
                     node.icon.clone(),
                 ));
-                add_nodes(py, builder, children, default_open);
+                add_nodes(py, builder, children, default_open, activatable_dirs);
                 builder.close_dir();
             }
             None => {
@@ -199,7 +213,7 @@ unsafe fn tree_view(py: Python<'_>, tree: &mut TreeView, nodes: Vec<Py<TreeNode>
         .allow_multi_selection(tree.multi_select)
         .allow_drag_and_drop(tree.drag_and_drop)
         .show_state(ui, &mut tree.state, |builder| {
-            add_nodes(py, builder, &nodes, tree.default_open)
+            add_nodes(py, builder, &nodes, tree.default_open, tree.activatable_dirs)
         });
 
     tree.activated.clear();
