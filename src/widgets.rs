@@ -597,10 +597,10 @@ fn parse_shortcut(shortcut: &str) -> PyResult<(egui::Modifiers, egui::Key)> {
     for part in shortcut.split('+').map(str::trim) {
         match part.to_lowercase().as_str() {
             // the command key on macOS, ctrl elsewhere
-            "cmd" | "command" => modifiers = modifiers | egui::Modifiers::COMMAND,
-            "ctrl" | "control" => modifiers = modifiers | egui::Modifiers::CTRL,
-            "shift" => modifiers = modifiers | egui::Modifiers::SHIFT,
-            "alt" | "option" => modifiers = modifiers | egui::Modifiers::ALT,
+            "cmd" | "command" => modifiers |= egui::Modifiers::COMMAND,
+            "ctrl" | "control" => modifiers |= egui::Modifiers::CTRL,
+            "shift" => modifiers |= egui::Modifiers::SHIFT,
+            "alt" | "option" => modifiers |= egui::Modifiers::ALT,
             _ => {
                 key = Some(egui::Key::from_name(part).ok_or_else(|| {
                     PyValueError::new_err(format!(
