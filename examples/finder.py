@@ -1,7 +1,11 @@
 """A mini Finder written only with the Python API of pyegui.
 
-Sidebar with favorites, toolbar with back / forward, list and icon views, search, a preview panel
-and a path bar. Click an item to select it, click a selected folder to open it.
+Sidebar with favorites, toolbar with back / forward, list, icon and tree views, search, a preview
+panel and a path bar. The icons are the ones of the Finder on macOS.
+
+Mouse: click to select, double click to open (folders here, files with their app).
+Keyboard: arrows to select, Enter or Cmd+Down to open, Cmd+Up for the parent folder,
+Cmd+[ and Cmd+] to go back and forward, Escape to clear the search and the selection.
 
     python finder.py [folder]
 """
@@ -16,14 +20,17 @@ BACKDROP = {"win32": Backdrop.ACRYLIC, "darwin": Backdrop.LIQUID_GLASS}.get(sys.
 MACOS = sys.platform == "darwin"
 HOME = Path.home()
 
-LIST, ICONS = 0, 1
+LIST, ICONS, TREE = 0, 1, 2
+LIGHT, DARK, SYSTEM = 0, 1, 2
+NO_GLASS, PARTIAL, FULL = 0, 1, 2
+ACCENTS = {"Blue": "#3b82f6", "Violet": "#8b5cf6", "Green": "#10b981", "Orange": "#f97316"}
+
 TEXT_SUFFIXES = {".py", ".rs", ".md", ".txt", ".toml", ".rst", ".json", ".yml", ".yaml", ".cfg", ".lock", ".sh", ".js", ".css", ".html"}
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
-ICONS_BY_SUFFIX = {
+EMOJIS = {
     ".py": "🐍", ".rs": "🦀", ".md": "📝", ".txt": "📝", ".rst": "📝", ".pdf": "📕",
     ".png": "🖼", ".jpg": "🖼", ".jpeg": "🖼", ".gif": "🖼", ".svg": "🖼", ".webp": "🖼",
     ".zip": "🗜", ".gz": "🗜", ".toml": "⚙", ".json": "⚙", ".yml": "⚙", ".yaml": "⚙", ".lock": "🔒",
-    ".mp3": "🎵", ".wav": "🎵", ".mp4": "🎬", ".mov": "🎬",
 }
 KINDS = {
     ".py": "Python script", ".rs": "Rust source", ".md": "Markdown", ".txt": "Plain text",
@@ -38,12 +45,22 @@ TAGS = [("Red", "#ef4444"), ("Orange", "#f97316"), ("Green", "#22c55e"), ("Blue"
 start = Path(sys.argv[1]).expanduser().resolve() if len(sys.argv) > 1 else HOME
 history = [start]
 position = Int(0)
-selected = Str("")
+selected = Str("")  # path of the selected item
 view = Int(LIST)
 search = Str("")
+show_sidebar = Bool(True)
 show_preview = Bool(True)
+theme = Int(SYSTEM)
+glass = Int(PARTIAL)
+accent_name = Str("Blue")
+icons_per_row = Int(1)
 started = Bool(False)
-listing_cache = {}  # folder -> list of entries, read once
+context = []  # the Context, kept on the first frame
+
+listing_cache = {}  # folder -> entries, read once
+tree = TreeView("tree", default_open=False)
+tree_ids = {}  # path -> id of the tree node
+tree_paths = {}  # id -> path
 
 
 # files
@@ -65,12 +82,13 @@ def entry(path):
     except OSError:
         return None
     is_dir = path.is_dir()
+    suffix = path.suffix.lower()
     return {
         "path": path,
-        "name": path.name,
+        "name": path.name or str(path),
         "is_dir": is_dir,
-        "icon": "📁" if is_dir else ICONS_BY_SUFFIX.get(path.suffix.lower(), "📄"),
-        "kind": "Folder" if is_dir else KINDS.get(path.suffix.lower(), f"{path.suffix[1:].upper()} file" if path.suffix else "Document"),
+        "emoji": "📁" if is_dir else EMOJIS.get(suffix, "📄"),
+        "kind": "Folder" if is_dir else KINDS.get(suffix, f"{suffix[1:].upper()} file" if suffix else "Document"),
         "size": "--" if is_dir else human_size(stat.st_size),
         "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%d %b %Y at %H:%M"),
     }
@@ -91,6 +109,19 @@ def listing(folder):
 def visible_entries():
     query = search.value.lower()
     return [e for e in listing(current()) if query in e["name"].lower()]
+
+
+def selected_entry():
+    return entry(Path(selected.value)) if selected.value else None
+
+
+def icon(item, size):
+    """the icon of the Finder, or an emoji where the platform gives none"""
+    uri = file_icon(str(item["path"]), size)
+    if uri:
+        image(uri, max_width=size, max_height=size)
+    else:
+        label(item["emoji"], size=size * 0.8)
 
 
 # navigation
@@ -118,16 +149,98 @@ def forward():
         selected.value = ""
 
 
-def click(item):
-    # a second click on a selected folder opens it, like a double click
-    if selected.value == item["name"] and item["is_dir"]:
+def open_item(item):
+    if item["is_dir"]:
         go(item["path"])
     else:
-        selected.value = item["name"]
+        context[0].open_url(item["path"].as_uri())  # with the app of the file
 
 
-def selected_entry():
-    return next((e for e in listing(current()) if e["name"] == selected.value), None)
+def select(item):
+    selected.value = str(item["path"])
+
+
+def handle(item, response):
+    if response.clicked:
+        select(item)
+    if response.double_clicked:
+        open_item(item)
+
+
+def keyboard():
+    if key_pressed("Cmd+ArrowUp"):
+        go(current().parent)
+    if key_pressed("Cmd+OpenBracket"):
+        back()
+    if key_pressed("Cmd+CloseBracket"):
+        forward()
+    if key_pressed("Escape", when_typing=True):
+        search.value = ""
+        selected.value = ""
+    item = selected_entry()
+    if item and (key_pressed("Enter") or key_pressed("Cmd+ArrowDown")):
+        open_item(item)
+    if view.value == TREE:
+        return  # the tree view has its own keyboard navigation
+
+    entries = visible_entries()
+    if not entries:
+        return
+    paths = [str(e["path"]) for e in entries]
+    index = paths.index(selected.value) if selected.value in paths else -1
+    per_row = icons_per_row.value if view.value == ICONS else 1
+    step = 0
+    if key_pressed("ArrowDown"):
+        step = per_row
+    if key_pressed("ArrowUp"):
+        step = -per_row
+    if view.value == ICONS and key_pressed("ArrowRight"):
+        step = 1
+    if view.value == ICONS and key_pressed("ArrowLeft"):
+        step = -1
+    if step:
+        index = min(max(index + step, 0), len(entries) - 1) if index >= 0 else 0
+        select(entries[index])
+
+
+# style, as the View menu of app.py
+
+def apply_style():
+    ctx = context[0]
+    if theme.value == LIGHT:
+        ctx.set_light_theme()
+    elif theme.value == DARK:
+        ctx.set_dark_theme()
+    else:
+        ctx.set_system_theme()
+    ctx.reset_style()
+    if glass.value != NO_GLASS:
+        ctx.set_glass_style(accent=ACCENTS[accent_name.value], mode="full" if glass.value == FULL else "partial")
+    else:
+        ctx.set_accent(ACCENTS[accent_name.value])
+
+
+def settings_menu():
+    before = (theme.value, glass.value, accent_name.value)
+    toggle_value(show_sidebar, "Sidebar")
+    toggle_value(show_preview, "Preview")
+    separator()
+    small("THEME")
+    radio_value(theme, LIGHT, "Light")
+    radio_value(theme, DARK, "Dark")
+    radio_value(theme, SYSTEM, "System")
+    separator()
+    small("GLASS")
+    radio_value(glass, PARTIAL, "Partial")
+    radio_value(glass, FULL, "Full")
+    radio_value(glass, NO_GLASS, "Off")
+    separator()
+    small("ACCENT")
+    for accent in ACCENTS:
+        if radio_clicked(accent_name.value == accent, accent):
+            accent_name.value = accent
+    if (theme.value, glass.value, accent_name.value) != before:
+        apply_style()
 
 
 # sidebar
@@ -136,20 +249,29 @@ def sidebar():
     if MACOS:
         add_space(26)  # the window buttons are over the sidebar
 
-    def place(icon, name, path):
+    def place(name, path):
         path = Path(path)
-        if path.is_dir() and selectable_label_clicked(current() == path, f"{icon}  {name}"):
-            go(path)
+        if not path.is_dir():
+            return
+
+        def row():
+            uri = file_icon(str(path), 16)
+            if uri:
+                image(uri, max_width=16, max_height=16)
+            if selectable_label_clicked(current() == path, name):
+                go(path)
+
+        horizontal(row)
 
     weak("Favorites")
-    place("🏠", HOME.name, HOME)
-    place("🖥", "Desktop", HOME / "Desktop")
-    place("📄", "Documents", HOME / "Documents")
-    place("⬇", "Downloads", HOME / "Downloads")
-    place("🧩", "pyegui", Path(__file__).resolve().parent.parent)
+    place(HOME.name, HOME)
+    place("Desktop", HOME / "Desktop")
+    place("Documents", HOME / "Documents")
+    place("Downloads", HOME / "Downloads")
+    place("pyegui", Path(__file__).resolve().parent.parent)
     add_space(12)
     weak("Locations")
-    place("💽", "Macintosh HD" if MACOS else "Root", Path(current().anchor))
+    place("Macintosh HD" if MACOS else "Root", Path(current().anchor))
     add_space(12)
     weak("Tags")
     for name, color in TAGS:
@@ -163,19 +285,20 @@ def sidebar():
 
 def toolbar():
     def bar():
+        if MACOS and not show_sidebar.value:
+            add_space(64)  # the window buttons are over the toolbar when the sidebar is hidden
         if small_button_clicked("‹"):
             back()
         if small_button_clicked("›"):
             forward()
         add_space(6)
         strong(current().name or str(current()))
-        add_space(max(available_width() - 330, 8))
-        if selectable_label_clicked(view.value == LIST, "☰ List"):
-            view.value = LIST
-        if selectable_label_clicked(view.value == ICONS, "▦ Icons"):
-            view.value = ICONS
-        toggle_value(show_preview, "Preview")
+        add_space(max(available_width() - 600, 8))
+        for mode, text in [(LIST, "☰ List"), (ICONS, "▦ Icons"), (TREE, "≡ Tree")]:
+            if selectable_label_clicked(view.value == mode, text):
+                view.value = mode
         text_edit_singleline(search, hint_text="🔍 Search")
+        menu_button("⚙", settings_menu)
 
     horizontal(bar)
 
@@ -188,8 +311,10 @@ def list_view():
     def cell(row, col):
         item = entries[row]
         if col == 0:
-            if selectable_label_clicked(selected.value == item["name"], f"{item['icon']}  {item['name']}"):
-                click(item)
+            def name():
+                icon(item, 18)
+                handle(item, selectable_label_response(selected.value == str(item["path"]), item["name"]))
+            horizontal(name)
         elif col == 1:
             weak(item["modified"])
         elif col == 2:
@@ -198,12 +323,13 @@ def list_view():
             weak(item["kind"])
 
     table_ui(["Name", "Date Modified", "Size", "Kind"], len(entries), cell,
-             id=f"list {current()}", column_widths=[320, 170, 80, "remainder"], striped=True)
+             id=f"list {current()}", column_widths=[290, 165, 80, "remainder"], striped=True)
 
 
 def icon_view():
     entries = visible_entries()
     per_row = max(int(available_width() // 120), 1)
+    icons_per_row.value = per_row
 
     def rows():
         for start_index in range(0, len(entries), per_row):
@@ -215,10 +341,9 @@ def icon_view():
                 item = row[i]
 
                 def tile():
-                    heading(item["icon"])
+                    icon(item, 56)
                     name = item["name"] if len(item["name"]) <= 16 else item["name"][:15] + "…"
-                    if selectable_label_clicked(selected.value == item["name"], name):
-                        click(item)
+                    handle(item, selectable_label_response(selected.value == str(item["path"]), name))
 
                 vertical_centered(tile)
 
@@ -228,14 +353,39 @@ def icon_view():
     scroll_area_vertical(rows)
 
 
+def tree_node(item):
+    path = item["path"]
+    if path not in tree_ids:
+        tree_ids[path] = len(tree_ids)
+        tree_paths[tree_ids[path]] = path
+    node_id = tree_ids[path]
+    text = f"{item['emoji']}  {item['name']}"
+    if not item["is_dir"]:
+        return TreeNode(node_id, text)
+    # the children of a folder are read only once it is opened
+    children = [tree_node(child) for child in listing(path)] if tree.is_open(node_id) else []
+    return TreeNode(node_id, text, children)
+
+
+def tree_view_ui():
+    def nodes():
+        query = search.value.lower()
+        tree_view(tree, [tree_node(e) for e in listing(current()) if query in e["name"].lower()])
+        if tree.selected:
+            selected.value = str(tree_paths[tree.selected[0]])
+        for node_id in tree.activated:
+            item = entry(tree_paths[node_id])
+            if item and not item["is_dir"]:
+                open_item(item)
+
+    scroll_area_vertical(nodes)
+
+
 def content():
-    if not visible_entries():
+    if not listing(current()) or (search.value and not visible_entries()):
         weak("No items" if not search.value else f"No items match “{search.value}”")
         return
-    if view.value == LIST:
-        list_view()
-    else:
-        icon_view()
+    [list_view, icon_view, tree_view_ui][view.value]()
 
 
 # preview
@@ -247,7 +397,7 @@ def preview():
         return
 
     def head():
-        heading(item["icon"])
+        icon(item, 96)
         strong(item["name"])
         weak(f"{item['kind']} · {item['size']}")
 
@@ -255,23 +405,19 @@ def preview():
     add_space(8)
     separator()
 
-    def info(name, value):
-        weak(name)
-        label(value)
-        end_row()
-
     def rows():
-        info("Kind", item["kind"])
-        info("Size", item["size"])
-        info("Modified", item["modified"])
-        info("Where", str(item["path"].parent).replace(str(HOME), "~"))
+        for name, value in [("Kind", item["kind"]), ("Size", item["size"]), ("Modified", item["modified"]),
+                            ("Where", str(item["path"].parent).replace(str(HOME), "~"))]:
+            weak(name)
+            label(value)
+            end_row()
 
     grid("info", rows, num_columns=2, spacing=(12, 6))
     add_space(8)
 
     suffix = item["path"].suffix.lower()
     if suffix in IMAGE_SUFFIXES:
-        image(f"file://{item['path']}", max_width=260, max_height=220)
+        image(item["path"].as_uri(), max_width=260, max_height=220)
     elif suffix in TEXT_SUFFIXES:
         try:
             text = item["path"].read_text(errors="replace")[:1200]
@@ -282,20 +428,19 @@ def preview():
     elif item["is_dir"]:
         count = len(listing(item["path"]))
         label(f"{count} item{'s' if count != 1 else ''}")
-        if button_clicked("Open"):
-            go(item["path"])
+    if button_clicked("Open"):
+        open_item(item)
 
 
 # path bar
 
 def path_bar():
     def crumbs():
-        parts = [Path(current().anchor)] + [p for p in reversed(current().parents)][1:] + [current()]
+        parts = [Path(current().anchor)] + list(reversed(current().parents))[1:] + [current()]
         for i, part in enumerate(parts):
             if i:
                 weak("›")
-            name = ("Macintosh HD" if MACOS else "Root") if i == 0 else part.name
-            if link_clicked(name):
+            if link_clicked(("Macintosh HD" if MACOS else "Root") if i == 0 else part.name):
                 go(part)
         add_space(max(available_width() - 120, 8))
         count = len(visible_entries())
@@ -306,12 +451,13 @@ def path_bar():
 
 def update_func(ctx):
     if not started.value:
-        ctx.set_glass_style()
-        # heading() only draws the big file icons: the Python API has no text size per label
-        ctx.set_style(heading_size=40)
+        context.append(ctx)
+        apply_style()
         started.value = True
 
-    left_panel("sidebar", sidebar, default_size=215, min_size=200, inner_margin=12, show_separator_line=False)
+    keyboard()
+    left_panel("sidebar", sidebar, expanded=show_sidebar, default_size=215, min_size=200, inner_margin=12,
+               show_separator_line=False)
     top_panel("toolbar", toolbar, inner_margin=8, show_separator_line=False)
     bottom_panel("path", path_bar, inner_margin=8, show_separator_line=False)
     right_panel("preview", preview, expanded=show_preview, default_size=280, inner_margin=14,
