@@ -1283,18 +1283,38 @@ unsafe fn code(text: &str) -> PyResult<()> {
     Ok(())
 }
 
-/// Show singleline text field and update the text
+/// Show a multiline monospace text field for code and update the text
+///
+/// Args:
+///     text (Str): the edited text
+///
+///     desired_width (float): width of the field. float("inf") fills the available width. Default is the width of egui
+///
+///     desired_rows (int): minimum number of visible rows. Default is 4
 ///
 /// Example::
 ///
 ///     text = Str("print(42 + 27)")
 ///     # inside update func
 ///     code_editor(text)
+///     code_editor(text, desired_width=float("inf"), desired_rows=20)
 #[pyfunction]
-unsafe fn code_editor(text: &mut Str) -> PyResult<()> {
+#[pyo3(signature = (text, desired_width=None, desired_rows=None))]
+unsafe fn code_editor(
+    text: &mut Str,
+    desired_width: Option<f32>,
+    desired_rows: Option<usize>,
+) -> PyResult<()> {
     let ui = current_ui(&UI)?;
 
-    ui.code_editor(&mut text.value);
+    let mut editor = egui::TextEdit::multiline(&mut text.value).code_editor();
+    if let Some(width) = desired_width {
+        editor = editor.desired_width(width);
+    }
+    if let Some(rows) = desired_rows {
+        editor = editor.desired_rows(rows);
+    }
+    ui.add(editor);
     Ok(())
 }
 
