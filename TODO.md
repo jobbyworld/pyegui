@@ -184,8 +184,9 @@ egui_tiles exposes the tab bar through the `Behavior` trait, already implemented
 3. Tab shapes: a custom `tab_ui` keeping click, drag, close button and middle click.
    ~~Top corners rounded with the radius of the theme (`ctx.set_style(rounding=...)`), active tab with
    the background of its pane, tinted inactive tabs, space between tabs (`tab_spacing`), hovered tab fill
-   (`hovered_tab_fill`).~~ Still to do: presets `tab_style="pill" | "underline" | "classic"`
-   (pill tabs rounded on every corner, underlined active tab) and icons in the tabs.
+   (`hovered_tab_fill`).~~ ~~`tab_style="classic" | "pill"`: pill tabs rounded on every corner,
+   the active one filled with the selection color.~~ Still to do: `tab_style="underline"`
+   (underlined active tab) and icons in the tabs.
 
 Next: the presets of 3.
 
