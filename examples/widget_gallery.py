@@ -1,4 +1,5 @@
 import datetime
+import math
 from pyegui import *
 
 RED = 0                       
@@ -14,8 +15,17 @@ date = Date(datetime.datetime.now())
 is_visible = Bool(True)
 is_interactive = Bool(True)
 opacity_value = Float(1)
+color_rgba = RGBA(0.23, 0.51, 0.96, 0.8)
+bold = Bool(False)
+angle = Float(0.0)
+fruits = ["apple", "banana", "cherry"]
+basket = []
 
 def update_func(ctx):
+  scroll_area_vertical(gallery)
+
+
+def gallery():
   label("Welcome to the widget gallery!")
 
   hyperlink_to("pyegui on GitHub", "https://github.com/GachiLord/pyegui")
@@ -61,6 +71,42 @@ def update_func(ctx):
   date_picker_button(date) 
 
   collapsing("collapsed", lambda: heading("I'm so collapsed now"))
+
+  separator()
+
+  heading("More widgets")
+
+  with Layout(LayoutType.Horizontal):
+    colored_label((220, 50, 50), "red text")
+    colored_label("#22c55e", "green text")
+    colored_label(color_rgba.to_tuple(), "text in the color below")
+
+  with Layout(LayoutType.Horizontal):
+    color_edit_button_rgba(color_rgba)
+    label(repr(color_rgba))
+
+  with Layout(LayoutType.Horizontal):
+    if selectable_label_clicked(bold.value, "selectable label"):
+      bold.value = not bold.value
+    label("selected" if bold.value else "not selected")
+
+  with Layout(LayoutType.Horizontal):
+    drag_angle(angle)
+    label(f"{math.degrees(angle.value):.0f} degrees")
+
+  def column(i):
+    strong(f"Column {i + 1}")
+    label("Same width")
+
+  columns(3, column)
+
+  label("Drag the fruits into the basket:")
+  with Layout(LayoutType.Horizontal):
+    for fruit in fruits:
+      dnd_drag_source(f"fruit {fruit}", fruit, lambda fruit=fruit: label(fruit))
+  dropped = dnd_drop_zone(lambda: label(f"Basket: {', '.join(basket) or 'empty'}"))
+  if dropped is not None:
+    basket.append(dropped)
 
   separator()
 
