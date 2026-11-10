@@ -226,9 +226,11 @@ struct DockStyle {
     resize_stroke: Option<Stroke>,
     drag_preview_color: Option<Color32>,
     drag_preview_stroke: Option<Stroke>,
+    pane_stroke: Option<Stroke>,
+    pane_margin: Option<f32>,
 }
 
-const STYLE_KEYS: [&str; 17] = [
+const STYLE_KEYS: [&str; 19] = [
     "glass",
     "tab_bar_height",
     "tab_bar_color",
@@ -246,11 +248,31 @@ const STYLE_KEYS: [&str; 17] = [
     "resize_stroke",
     "drag_preview_color",
     "drag_preview_stroke",
+    "pane_stroke",
+    "pane_margin",
 ];
 
 impl DockStyle {
     fn tab_spacing(&self) -> f32 {
         self.tab_spacing.unwrap_or(if self.glass { 4.0 } else { 2.0 })
+    }
+
+    /// A light outline contrasting with the theme
+    fn border(visuals: &Visuals, alpha: u8) -> Color32 {
+        if visuals.dark_mode {
+            Color32::from_white_alpha(alpha)
+        } else {
+            Color32::from_black_alpha(alpha)
+        }
+    }
+
+    fn active_tab_stroke(&self, visuals: &Visuals) -> Stroke {
+        self.active_tab_stroke
+            .unwrap_or(Stroke::new(1.0, Self::border(visuals, 45)))
+    }
+
+    fn pane_stroke(&self, visuals: &Visuals) -> Stroke {
+        self.pane_stroke.unwrap_or(self.active_tab_stroke(visuals))
     }
 
     /// The tint of the inactive tabs, which sets them apart from the active one
@@ -310,6 +332,8 @@ impl DockStyle {
         set!(opt resize_stroke, kwarg_stroke(kwargs, "resize_stroke")?);
         set!(opt drag_preview_color, kwarg_color(kwargs, "drag_preview_color")?);
         set!(opt drag_preview_stroke, kwarg_stroke(kwargs, "drag_preview_stroke")?);
+        set!(opt pane_stroke, kwarg_stroke(kwargs, "pane_stroke")?);
+        set!(opt pane_margin, kwarg::<f32>(kwargs, "pane_margin")?);
         Ok(())
     }
 }
@@ -347,9 +371,10 @@ impl DockStyle {
 ///
 ///     inactive_tab_text_color (color): title color of the other tabs. Default is dimmed
 ///
-///     active_tab_stroke (tuple[float, color]): outline of the active tab. Default is none
+///     active_tab_stroke (tuple[float, color]): outline of the active tab, open at the bottom. Default is a
+///         thin translucent line, dark on light theme and light on dark theme
 ///
-///     inactive_tab_stroke (tuple[float, color]): outline of the other tabs. Default is none
+///     inactive_tab_stroke (tuple[float, color]): outline of the other tabs. Default is a fainter line
 ///
 ///     tab_title_spacing (float): space on the left and right of the tab titles. Default is 8
 ///
@@ -360,6 +385,11 @@ impl DockStyle {
 ///     drag_preview_color (color): fill of the area where a dragged tab will be dropped
 ///
 ///     drag_preview_stroke (tuple[float, color]): outline of the area where a dragged tab will be dropped
+///
+///     pane_stroke (tuple[float, color]): outline of the panes, rounded like the tabs and open under the
+///         active tab so the tab and its pane form one shape. Default is the outline of the active tab
+///
+///     pane_margin (float): space between the outline of the panes and their contents. Default is 6
 ///
 /// Colors are (r, g, b), (r, g, b, a) or "#rrggbb[aa]".
 ///
@@ -439,6 +469,82 @@ fn add_pane_to_tabs(tree: &mut egui_tiles::Tree<Pane>, tabs_id: TileId, pane: Pa
         tabs.add_child(pane_id);
         tabs.set_active(pane_id);
     }
+}
+
+/// Points of the outline of a tab: left side, rounded top and right side, open at the bottom
+fn tab_outline(rect: egui::Rect, radius: f32) -> Vec<egui::Pos2> {
+    use std::f32::consts::FRAC_PI_2;
+
+    let radius = radius.min(rect.width() / 2.0).min(rect.height());
+    let steps = (radius.ceil() as usize).clamp(1, 8);
+    let mut points = vec![rect.left_bottom()];
+    let mut corner = |center: egui::Pos2, start: f32| {
+        for i in 0..=steps {
+            let angle = start + FRAC_PI_2 * i as f32 / steps as f32;
+            points.push(center + radius * egui::vec2(angle.cos(), angle.sin()));
+        }
+    };
+    // angles grow clockwise on screen, as y points down
+    corner(rect.left_top() + egui::vec2(radius, radius), 2.0 * FRAC_PI_2);
+    corner(rect.right_top() + egui::vec2(-radius, radius), 3.0 * FRAC_PI_2);
+    points.push(rect.right_bottom());
+    points
+}
+
+/// Points of the outline of a pane: rounded corners, open at the top under its tab.
+/// A top corner touched by the tab stays square, so the sides of the tab continue into the pane
+fn pane_outline(rect: egui::Rect, tab: Option<egui::Rect>, radius: f32, width: f32) -> Vec<egui::Pos2> {
+    use egui::pos2;
+    use std::f32::consts::FRAC_PI_2;
+
+    let inner = rect.shrink(width / 2.0);
+    let radius = radius.min(inner.width() / 2.0).min(inner.height() / 2.0).max(0.0);
+    let steps = (radius.ceil() as usize).clamp(1, 8);
+    let mut points = vec![];
+
+    // y points down, so the angles of the arcs decrease to go counterclockwise on screen
+    let arc = |points: &mut Vec<egui::Pos2>, center: egui::Pos2, start: f32| {
+        for i in 0..=steps {
+            let angle = start - FRAC_PI_2 * i as f32 / steps as f32;
+            points.push(center + radius * egui::vec2(angle.cos(), angle.sin()));
+        }
+    };
+
+    // without a tab the outline is closed: it starts and ends in the middle of the top side
+    let (gap_left, gap_right) = match tab {
+        Some(tab) => (
+            (tab.left() + width / 2.0).clamp(inner.left(), inner.right()),
+            (tab.right() - width / 2.0).clamp(inner.left(), inner.right()),
+        ),
+        None => (inner.center().x, inner.center().x),
+    };
+    let round_left = gap_left - inner.left() >= radius;
+    let round_right = inner.right() - gap_right >= radius;
+
+    if tab.is_some() {
+        // joins the bottom of the left side of the tab
+        points.push(pos2(gap_left, rect.top() - width / 2.0));
+    }
+    points.push(pos2(gap_left, inner.top()));
+    if round_left {
+        arc(&mut points, inner.left_top() + egui::vec2(radius, radius), 3.0 * FRAC_PI_2);
+    } else {
+        points.push(inner.left_top());
+    }
+    arc(&mut points, inner.left_bottom() + egui::vec2(radius, -radius), 2.0 * FRAC_PI_2);
+    arc(&mut points, inner.right_bottom() + egui::vec2(-radius, -radius), FRAC_PI_2);
+    if round_right {
+        arc(&mut points, inner.right_top() + egui::vec2(-radius, radius), 0.0);
+    } else {
+        points.push(inner.right_top());
+    }
+    points.push(pos2(gap_right, inner.top()));
+    if tab.is_some() {
+        // joins the bottom of the right side of the tab
+        points.push(pos2(gap_right, rect.top() - width / 2.0));
+    }
+    points.dedup_by(|a, b| a.distance(*b) < 0.01);
+    points
 }
 
 /// Finds the first tabs container, depth first
@@ -566,6 +672,10 @@ struct Behavior<'py> {
     style: DockStyle,
     callbacks: TabBarCallbacks,
     added: AddedPanes,
+    /// Panes drawn this frame
+    panes: std::collections::HashSet<TileId>,
+    /// Rect of the tab of the active panes, where their outline is open
+    active_tabs: std::collections::HashMap<TileId, egui::Rect>,
 }
 
 impl Behavior<'_> {
@@ -605,10 +715,16 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         pane.title.as_str().into()
     }
 
-    fn pane_ui(&mut self, ui: &mut egui::Ui, _tile_id: TileId, pane: &mut Pane) -> UiResponse {
+    fn pane_ui(&mut self, ui: &mut egui::Ui, tile_id: TileId, pane: &mut Pane) -> UiResponse {
+        self.panes.insert(tile_id);
         let update_func = pane.update_func.bind(self.py).clone();
+        let margin = self.style.pane_margin.unwrap_or(6.0);
 
-        if let Err(err) = unsafe { run_nested_update_func(ui, update_func) } {
+        let result = egui::Frame::new()
+            .inner_margin(margin)
+            .show(ui, |ui| unsafe { run_nested_update_func(ui, update_func) })
+            .inner;
+        if let Err(err) = result {
             self.result = Err(err);
         }
         UiResponse::None
@@ -663,6 +779,12 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
             WidgetInfo::selected(Role::Button, ui.is_enabled(), state.active, galley.text())
         });
 
+        if state.active {
+            // the outline of the pane is open under its tab, clipped to the visible part of the bar
+            self.active_tabs
+                .insert(tile_id, tab_rect.intersect(ui.clip_rect()));
+        }
+
         // show a gap when dragged
         if ui.is_rect_visible(tab_rect) && !state.is_being_dragged {
             let mut bg_color = self.tab_bg_color(ui.visuals(), tiles, tile_id, state);
@@ -681,21 +803,13 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
                 sw: 0,
                 se: 0,
             };
-            ui.painter().rect(
-                tab_rect.shrink(0.5),
-                corners,
-                bg_color,
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-
-            if state.active && stroke.width > 0.0 {
-                // open the outline at the bottom, so the tab connects with its pane
-                ui.painter().hline(
-                    tab_rect.shrink2(egui::vec2(stroke.width, 0.0)).x_range(),
-                    tab_rect.bottom() - stroke.width / 2.0,
-                    Stroke::new(stroke.width + 1.0, ui.visuals().panel_fill),
-                );
+            ui.painter().rect_filled(tab_rect, corners, bg_color);
+            if stroke.width > 0.0 {
+                // open at the bottom, so the tab connects with its pane
+                ui.painter().add(egui::Shape::line(
+                    tab_outline(tab_rect.shrink(stroke.width / 2.0), f32::from(radius)),
+                    stroke,
+                ));
             }
 
             let text_color = self.tab_text_color(ui.visuals(), tiles, tile_id, state);
@@ -770,6 +884,37 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         self.tab_bar_ui(callback.as_ref(), tiles, ui, tile_id, tabs);
     }
 
+    fn paint_on_top_of_tile(
+        &self,
+        painter: &egui::Painter,
+        style: &egui::Style,
+        tile_id: TileId,
+        rect: egui::Rect,
+    ) {
+        if !self.panes.contains(&tile_id) {
+            return;
+        }
+        let stroke = self.style.pane_stroke(&style.visuals);
+        if stroke.width <= 0.0 {
+            return;
+        }
+        let radius = f32::from(style.visuals.widgets.inactive.corner_radius.sw);
+        let tab = self
+            .active_tabs
+            .get(&tile_id)
+            .filter(|tab| tab.width() > 0.0 && tab.max.y <= rect.min.y + 0.5);
+        // reach the bottom of the tab outline, drawn in the tab bar right above the pane
+        let painter = egui::Painter::new(
+            painter.ctx().clone(),
+            painter.layer_id(),
+            rect.expand2(egui::vec2(0.0, stroke.width)),
+        );
+        painter.add(egui::Shape::line(
+            pane_outline(rect, tab.copied(), radius, stroke.width),
+            stroke,
+        ));
+    }
+
     fn tab_bar_height(&self, _style: &egui::Style) -> f32 {
         self.style.tab_bar_height.unwrap_or(if self.style.glass { 28.0 } else { 24.0 })
     }
@@ -823,15 +968,18 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
 
     fn tab_outline_stroke(
         &self,
-        _visuals: &Visuals,
+        visuals: &Visuals,
         _tiles: &Tiles<Pane>,
         _tile_id: TileId,
         state: &TabState,
     ) -> Stroke {
+        // fainter on inactive tabs
         if state.active {
-            self.style.active_tab_stroke.unwrap_or(Stroke::NONE)
+            self.style.active_tab_stroke(visuals)
         } else {
-            self.style.inactive_tab_stroke.unwrap_or(Stroke::NONE)
+            self.style
+                .inactive_tab_stroke
+                .unwrap_or(Stroke::new(1.0, DockStyle::border(visuals, 25)))
         }
     }
 
@@ -898,6 +1046,8 @@ unsafe fn dock_area(py: Python<'_>, dock: Py<Dock>) -> PyResult<()> {
         style,
         callbacks,
         added: added.clone(),
+        panes: Default::default(),
+        active_tabs: Default::default(),
     };
     tree.ui(&mut behavior, ui);
 
