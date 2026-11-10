@@ -33,7 +33,7 @@ BINARY_SUFFIXES = {
 MAX_FILE_SIZE = 200_000
 
 # acrylic on Windows, liquid glass on macOS, no backdrop elsewhere
-BACKDROP = {"win32": "acrylic", "darwin": "liquid_glass"}.get(sys.platform)
+BACKDROP = {"win32": Backdrop.ACRYLIC, "darwin": Backdrop.LIQUID_GLASS}.get(sys.platform)
 
 LIGHT, DARK, SYSTEM = 0, 1, 2
 
@@ -207,9 +207,9 @@ def apply_theme(ctx):
 
     # the tint of the acrylic follows the theme of Windows, so it is forced here.
     # Liquid glass follows the theme of the app on its own
-    if BACKDROP == "acrylic":
+    if BACKDROP == Backdrop.ACRYLIC:
         ctx.set_backdrop(
-            "acrylic" + {LIGHT: "_light", DARK: "_dark", SYSTEM: ""}[theme.value]
+            {LIGHT: Backdrop.ACRYLIC_LIGHT, DARK: Backdrop.ACRYLIC_DARK, SYSTEM: Backdrop.ACRYLIC}[theme.value]
         )
 
 

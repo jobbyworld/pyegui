@@ -4,7 +4,7 @@ from pyegui import *
 
 # the backdrop blurs what is behind the window: "acrylic" on Windows, "liquid_glass" on macOS 26.
 # Pass another one as argument to try it: mica, tabbed, acrylic, blur, vibrancy, liquid_glass or liquid_glass_clear
-DEFAULT_BACKDROP = {"win32": "acrylic", "darwin": "liquid_glass"}.get(sys.platform)
+DEFAULT_BACKDROP = {"win32": Backdrop.ACRYLIC, "darwin": Backdrop.LIQUID_GLASS}.get(sys.platform)
 BACKDROP = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_BACKDROP
 
 LIGHT, DARK, SYSTEM = 0, 1, 2
@@ -45,7 +45,7 @@ def apply_theme(ctx):
 
     # the tint of mica, tabbed and acrylic follows the theme of Windows, not the one of the app
     base = (BACKDROP or "").removesuffix("_light").removesuffix("_dark")
-    if base in ("mica", "tabbed", "acrylic"):
+    if base in (Backdrop.MICA, Backdrop.TABBED, Backdrop.ACRYLIC):
         ctx.set_backdrop(
             base + {LIGHT: "_light", DARK: "_dark", SYSTEM: ""}[theme.value]
         )

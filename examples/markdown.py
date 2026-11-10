@@ -8,7 +8,7 @@ import sys
 from pyegui import *
 
 # acrylic on Windows, liquid glass on macOS, no backdrop elsewhere
-BACKDROP = {"win32": "acrylic", "darwin": "liquid_glass"}.get(sys.platform)
+BACKDROP = {"win32": Backdrop.ACRYLIC, "darwin": Backdrop.LIQUID_GLASS}.get(sys.platform)
 
 LIGHT, DARK, SYSTEM = 0, 1, 2
 

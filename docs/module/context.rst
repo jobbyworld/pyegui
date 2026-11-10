@@ -15,3 +15,7 @@ Context
 .. automethod:: pyegui.Context.set_glass_style
 .. automethod:: pyegui.Context.set_backdrop
 
+
+.. autoclass:: pyegui.Backdrop
+   :members:
+   :undoc-members:
