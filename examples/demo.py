@@ -60,6 +60,19 @@ def new_tab_button(tab_bar):
     title = f"New {new_pane_count.value}"
     tab_bar.add_pane(DockPane(title, note_pane(f"{title} was added with the + of a tab bar"), closable=True))
 
+def tabs_menu(tab_bar):
+  # drawn before the tabs of every tab bar: lists the tabs and closes the others
+  def items():
+    for title in tab_bar.titles:
+      if button_clicked(("• " if title == tab_bar.active_title else "  ") + title):
+        tab_bar.set_active(title)
+    separator()
+    if button_clicked("Close the others"):
+      for title in tab_bar.titles:
+        if title != tab_bar.active_title:
+          tab_bar.close(title)
+  menu_button("☰", items)
+
 dock = Dock(DockContainer("horizontal", [
   DockPane("Left", note_pane("Drag the tabs to rearrange the panes")),
   DockContainer("vertical", [
@@ -69,7 +82,7 @@ dock = Dock(DockContainer("horizontal", [
       DockPane("Tab B", note_pane("This one can be closed"), closable=True),
     ]),
   ]),
-]), tab_bar_trailing=new_tab_button)
+]), tab_bar_left=tabs_menu, tab_bar_trailing=new_tab_button)
 
 # plots
 

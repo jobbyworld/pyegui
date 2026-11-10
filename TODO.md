@@ -173,7 +173,8 @@ egui_tiles exposes the tab bar through the `Behavior` trait, already implemented
    Done, except the hovered tab fill: egui_tiles does not give the hover state to the color hooks,
    so it moves to 3.
 2. ~~Contents in the tab bar: Python callbacks `tab_bar_left`, `tab_bar_trailing` and `tab_bar_right`
-   (also `Dock.set_tab_bar`), taking a `DockTabBar` that adds panes to its own tabs, e.g. a "+" button.~~
+   (also `Dock.set_tab_bar`), taking a `DockTabBar` that adds, activates and closes the panes of its
+   own tabs, e.g. a "+" button or a menu listing the tabs.~~
 3. Tab shapes: a custom `tab_ui` keeping click, drag, close button and middle click.
    ~~Top corners rounded with the radius of the theme (`ctx.set_style(rounding=...)`), active tab with
    the background of its pane, tinted inactive tabs, space between tabs (`tab_spacing`), hovered tab fill

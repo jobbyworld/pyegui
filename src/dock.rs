@@ -117,8 +117,15 @@ fn insert_tile(tiles: &mut Tiles<Pane>, node: &Bound<'_, PyAny>) -> PyResult<Til
     }
 }
 
-/// Panes added from the tab bar callbacks, with the tabs container they go to
-type AddedPanes = Arc<Mutex<Vec<(TileId, Pane)>>>;
+/// A change asked from a tab bar callback, applied once the dock is drawn
+enum TabBarAction {
+    Add(Pane),
+    Activate(String),
+    Close(String),
+}
+
+/// The changes asked from the tab bar callbacks, with the tabs container they apply to
+type TabBarActions = Arc<Mutex<Vec<(TileId, TabBarAction)>>>;
 
 /// A tab bar of a Dock, given to the tab_bar_left, tab_bar_trailing and tab_bar_right callbacks.
 ///
@@ -129,23 +136,58 @@ type AddedPanes = Arc<Mutex<Vec<(TileId, Pane)>>>;
 ///             tab_bar.add_pane(DockPane(f"Untitled {len(tab_bar.titles) + 1}", editor_ui, closable=True))
 ///
 ///     dock = Dock(root, tab_bar_trailing=new_tab_button)
+///
+///     # a menu listing the tabs
+///     def tabs_menu(tab_bar):
+///         def items():
+///             for title in tab_bar.titles:
+///                 if button_clicked(title):
+///                     tab_bar.set_active(title)
+///             separator()
+///             if button_clicked("Close the others"):
+///                 for title in tab_bar.titles:
+///                     if title != tab_bar.active_title:
+///                         tab_bar.close(title)
+///         menu_button("☰", items)
+///
+///     dock = Dock(root, tab_bar_left=tabs_menu)
+///
+/// The changes are applied once the dock is drawn, so they show up on the next frame.
 #[pyclass]
 pub(crate) struct DockTabBar {
     tile_id: TileId,
     titles: Vec<String>,
     active_title: Option<String>,
-    added: AddedPanes,
+    actions: TabBarActions,
+}
+
+impl DockTabBar {
+    fn push(&self, action: TabBarAction) -> PyResult<()> {
+        self.actions
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("dock lock is poisoned"))?
+            .push((self.tile_id, action));
+        Ok(())
+    }
 }
 
 #[pymethods]
 impl DockTabBar {
-    /// Adds a pane to these tabs and makes it the active tab. The pane shows up on the next frame
+    /// Adds a pane to these tabs and makes it the active tab
     fn add_pane(&self, py: Python<'_>, pane: PyRef<'_, DockPane>) -> PyResult<()> {
-        self.added
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("dock lock is poisoned"))?
-            .push((self.tile_id, Pane::from_py(&pane, py)));
-        Ok(())
+        self.push(TabBarAction::Add(Pane::from_py(&pane, py)))
+    }
+
+    /// Makes the first tab with this title the active tab
+    fn set_active(&self, title: String) -> PyResult<()> {
+        self.check_title(&title)?;
+        self.push(TabBarAction::Activate(title))
+    }
+
+    /// Closes the first tab with this title. Only the panes created with closable=True are closed
+    fn close(&self, title: String) -> PyResult<()> {
+        self.check_title(&title)?;
+        self.push(TabBarAction::Close(title))
     }
 
     /// Titles of the tabs, in display order
@@ -158,6 +200,19 @@ impl DockTabBar {
     #[getter]
     fn active_title(&self) -> Option<String> {
         self.active_title.clone()
+    }
+}
+
+impl DockTabBar {
+    fn check_title(&self, title: &str) -> PyResult<()> {
+        if self.titles.iter().any(|t| t == title) {
+            Ok(())
+        } else {
+            Err(PyValueError::new_err(format!(
+                "No tab '{}' in this tab bar, the tabs are {:?}",
+                title, self.titles
+            )))
+        }
     }
 }
 
@@ -547,6 +602,38 @@ fn pane_outline(rect: egui::Rect, tab: Option<egui::Rect>, radius: f32, width: f
     points
 }
 
+/// Applies a change asked from a tab bar callback
+fn apply_tab_bar_action(tree: &mut egui_tiles::Tree<Pane>, tabs_id: TileId, action: TabBarAction) {
+    let title = match action {
+        TabBarAction::Add(pane) => return add_pane_to_tabs(tree, tabs_id, pane),
+        TabBarAction::Activate(ref title) | TabBarAction::Close(ref title) => title.clone(),
+    };
+    let Some(Tile::Container(Container::Tabs(tabs))) = tree.tiles.get(tabs_id) else {
+        return;
+    };
+    // the tab may have been moved or closed since the callback ran
+    let Some(pane_id) = tabs.children.iter().copied().find(|id| {
+        matches!(tree.tiles.get(*id), Some(Tile::Pane(pane)) if pane.title == title)
+    }) else {
+        return;
+    };
+
+    match action {
+        TabBarAction::Activate(_) => {
+            if let Some(Tile::Container(Container::Tabs(tabs))) = tree.tiles.get_mut(tabs_id) {
+                tabs.set_active(pane_id);
+            }
+        }
+        TabBarAction::Close(_) => {
+            if matches!(tree.tiles.get(pane_id), Some(Tile::Pane(pane)) if pane.closable) {
+                // like the close button of the tab: the tree drops the closed tile on the next frame
+                tree.tiles.remove(pane_id);
+            }
+        }
+        TabBarAction::Add(_) => unreachable!(),
+    }
+}
+
 /// Finds the first tabs container, depth first
 fn find_tabs(tiles: &Tiles<Pane>, tile_id: TileId) -> Option<TileId> {
     match tiles.get(tile_id) {
@@ -671,7 +758,7 @@ struct Behavior<'py> {
     result: PyResult<()>,
     style: DockStyle,
     callbacks: TabBarCallbacks,
-    added: AddedPanes,
+    actions: TabBarActions,
     /// Panes drawn this frame
     panes: std::collections::HashSet<TileId>,
     /// Rect of the tab of the active panes, where their outline is open
@@ -699,7 +786,7 @@ impl Behavior<'_> {
             tile_id,
             titles: tabs.children.iter().filter_map(title).collect(),
             active_title: tabs.active.as_ref().and_then(title),
-            added: self.added.clone(),
+            actions: self.actions.clone(),
         };
         let result = Bound::new(self.py, tab_bar).and_then(|tab_bar| unsafe {
             run_nested_call(ui, callback.bind(self.py), (tab_bar,))
@@ -1039,21 +1126,21 @@ unsafe fn dock_area(py: Python<'_>, dock: Py<Dock>) -> PyResult<()> {
         (tree, dock.style.clone(), dock.callbacks.clone_ref(py))
     };
 
-    let added = AddedPanes::default();
+    let actions = TabBarActions::default();
     let mut behavior = Behavior {
         py,
         result: Ok(()),
         style,
         callbacks,
-        added: added.clone(),
+        actions: actions.clone(),
         panes: Default::default(),
         active_tabs: Default::default(),
     };
     tree.ui(&mut behavior, ui);
 
-    let added = std::mem::take(&mut *added.lock().unwrap_or_else(|e| e.into_inner()));
-    for (tabs_id, pane) in added {
-        add_pane_to_tabs(&mut tree, tabs_id, pane);
+    let actions = std::mem::take(&mut *actions.lock().unwrap_or_else(|e| e.into_inner()));
+    for (tabs_id, action) in actions {
+        apply_tab_bar_action(&mut tree, tabs_id, action);
     }
 
     let mut dock = dock.borrow_mut(py);
