@@ -26,10 +26,10 @@
 * ~~centered_and_justified~~
 * ~~checkbox~~
 * clip_rect
-* close_menu
+* ~~close_menu~~
 * ~~code~~
 * ~~code_editor~~
-* collapsing
+* ~~collapsing~~
 * color_edit_button_hsva
 * ~~color_edit_button_rgb~~
 * color_edit_button_rgba_premultiplied
@@ -51,7 +51,7 @@
 * dnd_drop_zone
 * drag_angle
 * drag_angle_tau
-* end_row
+* ~~end_row~~
 * expand_to_include_rect
 * expand_to_include_x
 * expand_to_include_y
@@ -82,7 +82,7 @@
 * max_rect
 * memory?
 * memory_mut?
-* menu_button
+* ~~menu_button~~
 * menu_image_button
 * menu_image_text_button
 * min_rect
