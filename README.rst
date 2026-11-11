@@ -1,6 +1,14 @@
 pyegui
 ======
 
+.. note::
+
+   This repository is a **personal fork** of
+   `gachilord/pyegui <https://github.com/gachilord/pyegui>`__, maintained for
+   my own use and experiments. It is not published to PyPI and no support is
+   provided. Wheels (Windows and macOS only) are built by CI and available as
+   workflow artifacts; for the official package, use the upstream project.
+
 **pyegui** is a native extenstion for Python that provides bindings for
 Rust immediate mode GUI library
 `egui <https://github.com/emilk/egui>`__.
@@ -59,21 +67,21 @@ Full list of implemented features is available
 Install
 -------
 
-Prebuilt binaries are provided for Linux, Windows and macOS. On other platforms
-pip will build wheel for your OS. In this case you'll need Rust compiler
+This fork only builds wheels for Windows and macOS (CI artifacts, not on PyPI).
+On other platforms you must build from source. In this case you'll need Rust compiler
 and `maturin <https://github.com/PyO3/maturin>`__
 
-Install from pypi:
+Install a wheel built by CI: download it from the "Actions" tab artifacts, then
 
 .. code:: bash
 
-   pip install pyegui
+   pip install path/to/pyegui-*.whl
 
 Install from source:
 
 .. code:: bash
 
-   git clone https://github.com/gachilord/pyegui
+   git clone git@github.com:jobbyworld/pyegui.git
    pip install <path to pyegui>
 
 Usage
