@@ -268,6 +268,8 @@ struct DockStyle {
     tab_bar_height: Option<f32>,
     tab_bar_color: Option<Color32>,
     hide_single_tab_bar: bool,
+    /// pill tabs instead of the classic tabs joined to their pane
+    pill: bool,
     active_tab_fill: Option<Color32>,
     inactive_tab_fill: Option<Color32>,
     hovered_tab_fill: Option<Color32>,
@@ -285,11 +287,12 @@ struct DockStyle {
     pane_margin: Option<f32>,
 }
 
-const STYLE_KEYS: [&str; 19] = [
+const STYLE_KEYS: [&str; 20] = [
     "glass",
     "tab_bar_height",
     "tab_bar_color",
     "hide_single_tab_bar",
+    "tab_style",
     "active_tab_fill",
     "inactive_tab_fill",
     "hovered_tab_fill",
@@ -309,7 +312,8 @@ const STYLE_KEYS: [&str; 19] = [
 
 impl DockStyle {
     fn tab_spacing(&self) -> f32 {
-        self.tab_spacing.unwrap_or(if self.glass { 4.0 } else { 2.0 })
+        self.tab_spacing
+            .unwrap_or(if self.glass || self.pill { 4.0 } else { 2.0 })
     }
 
     /// A light outline contrasting with the theme
@@ -374,6 +378,17 @@ impl DockStyle {
         set!(opt tab_bar_height, kwarg::<f32>(kwargs, "tab_bar_height")?);
         set!(opt tab_bar_color, kwarg_color(kwargs, "tab_bar_color")?);
         set!(hide_single_tab_bar, kwarg::<bool>(kwargs, "hide_single_tab_bar")?);
+        match kwarg::<String>(kwargs, "tab_style")?.as_deref() {
+            None => {}
+            Some("classic") => self.pill = false,
+            Some("pill") => self.pill = true,
+            Some(other) => {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown tab style '{}', expected classic or pill",
+                    other
+                )))
+            }
+        }
         set!(opt active_tab_fill, kwarg_color(kwargs, "active_tab_fill")?);
         set!(opt inactive_tab_fill, kwarg_color(kwargs, "inactive_tab_fill")?);
         set!(opt hovered_tab_fill, kwarg_color(kwargs, "hovered_tab_fill")?);
@@ -409,6 +424,9 @@ impl DockStyle {
 ///     tab_bar_color (color): background of the tab bar. Default is transparent
 ///
 ///     hide_single_tab_bar (bool): hide the tab bar of tabs holding a single pane. Default is False
+///
+///     tab_style (str): "classic" tabs joined to their pane, or "pill" tabs rounded on every corner,
+///         the active one filled with the selection color. Default is "classic"
 ///
 ///     active_tab_fill (color): background of the active tab. Default is transparent, so the active tab
 ///         has the same background as its pane
@@ -725,6 +743,38 @@ impl Dock {
         }
     }
 
+    /// Makes the first pane with this title the active tab. Returns False if there is no such pane
+    ///
+    /// Usage::
+    ///
+    ///     if selectable_label_clicked(dock.active_title == "Tasks", "Tasks"):
+    ///         dock.set_active("Tasks")
+    fn set_active(&mut self, title: &str) -> PyResult<bool> {
+        let tree = self
+            .tree
+            .as_mut()
+            .ok_or(PyRuntimeError::new_err("set_active cannot be called inside a pane of the same dock"))?;
+        let mut found = false;
+        tree.make_active(|_, tile| {
+            let matches = !found && matches!(tile, Tile::Pane(pane) if pane.title == title);
+            found |= matches;
+            matches
+        });
+        Ok(found)
+    }
+
+    /// Title of the active pane: the visible pane of the first tabs, or None
+    #[getter]
+    fn active_title(&self) -> Option<String> {
+        let tree = self.tree.as_ref()?;
+        tree.active_tiles()
+            .into_iter()
+            .find_map(|id| match tree.tiles.get(id) {
+                Some(Tile::Pane(pane)) => Some(pane.title.clone()),
+                _ => None,
+            })
+    }
+
     /// Titles of the panes currently in the dock, in display order
     #[getter]
     fn titles(&self) -> Vec<String> {
@@ -866,7 +916,7 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
             WidgetInfo::selected(Role::Button, ui.is_enabled(), state.active, galley.text())
         });
 
-        if state.active {
+        if state.active && !self.style.pill {
             // the outline of the pane is open under its tab, clipped to the visible part of the bar
             self.active_tabs
                 .insert(tile_id, tab_rect.intersect(ui.clip_rect()));
@@ -879,24 +929,41 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
                 bg_color = self
                     .style
                     .hovered_tab_fill
-                    .unwrap_or(DockStyle::inactive_tint(ui.visuals(), true));
+                    .unwrap_or(if self.style.pill {
+                        ui.visuals().widgets.hovered.weak_bg_fill
+                    } else {
+                        DockStyle::inactive_tint(ui.visuals(), true)
+                    });
             }
             let stroke = self.tab_outline_stroke(ui.visuals(), tiles, tile_id, state);
-            // the radius of the theme, set with ctx.set_style(rounding=...)
-            let radius = ui.visuals().widgets.inactive.corner_radius.nw;
-            let corners = CornerRadius {
-                nw: radius,
-                ne: radius,
-                sw: 0,
-                se: 0,
-            };
-            ui.painter().rect_filled(tab_rect, corners, bg_color);
-            if stroke.width > 0.0 {
-                // open at the bottom, so the tab connects with its pane
-                ui.painter().add(egui::Shape::line(
-                    tab_outline(tab_rect.shrink(stroke.width / 2.0), f32::from(radius)),
+            if self.style.pill {
+                // a capsule floating in the bar
+                let pill = tab_rect.shrink2(egui::vec2(0.0, 3.0));
+                let radius = (pill.height() / 2.0).min(255.0) as u8;
+                ui.painter().rect(
+                    pill,
+                    CornerRadius::same(radius),
+                    bg_color,
                     stroke,
-                ));
+                    egui::StrokeKind::Inside,
+                );
+            } else {
+                // the radius of the theme, set with ctx.set_style(rounding=...)
+                let radius = ui.visuals().widgets.inactive.corner_radius.nw;
+                let corners = CornerRadius {
+                    nw: radius,
+                    ne: radius,
+                    sw: 0,
+                    se: 0,
+                };
+                ui.painter().rect_filled(tab_rect, corners, bg_color);
+                if stroke.width > 0.0 {
+                    // open at the bottom, so the tab connects with its pane
+                    ui.painter().add(egui::Shape::line(
+                        tab_outline(tab_rect.shrink(stroke.width / 2.0), f32::from(radius)),
+                        stroke,
+                    ));
+                }
             }
 
             let text_color = self.tab_text_color(ui.visuals(), tiles, tile_id, state);
@@ -1044,12 +1111,16 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         _tile_id: TileId,
         state: &TabState,
     ) -> Color32 {
-        if state.active {
-            self.style.active_tab_fill.unwrap_or(Color32::TRANSPARENT)
-        } else {
-            self.style
+        match (state.active, self.style.pill) {
+            // pill: the active tab is filled with the selection color, the others are bare
+            (true, true) => self.style.active_tab_fill.unwrap_or(visuals.selection.bg_fill),
+            (false, true) => self.style.inactive_tab_fill.unwrap_or(Color32::TRANSPARENT),
+            // classic: the active tab has the background of its pane, the others are tinted
+            (true, false) => self.style.active_tab_fill.unwrap_or(Color32::TRANSPARENT),
+            (false, false) => self
+                .style
                 .inactive_tab_fill
-                .unwrap_or(DockStyle::inactive_tint(visuals, false))
+                .unwrap_or(DockStyle::inactive_tint(visuals, false)),
         }
     }
 
@@ -1060,6 +1131,14 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         _tile_id: TileId,
         state: &TabState,
     ) -> Stroke {
+        // pill tabs have no outline unless one is given
+        if self.style.pill {
+            return if state.active {
+                self.style.active_tab_stroke.unwrap_or(Stroke::NONE)
+            } else {
+                self.style.inactive_tab_stroke.unwrap_or(Stroke::NONE)
+            };
+        }
         // fainter on inactive tabs
         if state.active {
             self.style.active_tab_stroke(visuals)
@@ -1077,7 +1156,12 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         _tile_id: TileId,
         state: &TabState,
     ) -> Color32 {
-        if state.active {
+        if state.active && self.style.pill {
+            // readable on the selection color
+            self.style
+                .active_tab_text_color
+                .unwrap_or(visuals.selection.stroke.color)
+        } else if state.active {
             self.style
                 .active_tab_text_color
                 .unwrap_or(visuals.widgets.active.text_color())

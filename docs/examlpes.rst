@@ -96,3 +96,16 @@ A markdown editor with a live preview in a glass dock. Code blocks marked ``merm
 
 .. image:: _static/markdown.png
    :alt: markdown screenshot
+
+app
+-------------
+
+Atelier, an application with a sidebar, a toolbar, tabs and a status bar in the modern glass style:
+partial glass, accent color, Inter font, unified title bar on macOS, badges, switches and plots in the colors of the accent.
+
+.. literalinclude:: ../examples/app.py
+   :language: python
+   :linenos:
+
+.. image:: _static/app.png
+   :alt: app screenshot

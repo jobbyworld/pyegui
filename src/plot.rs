@@ -254,12 +254,13 @@ enum Item {
     VLine(VLine),
 }
 
-fn to_item(item: &Bound<'_, PyAny>) -> PyResult<Item> {
+/// Converts a plot item. default is the color of the items without one, from the theme palette
+fn to_item(item: &Bound<'_, PyAny>, default: Option<egui::Color32>) -> PyResult<Item> {
     if let Ok(line) = item.cast::<PlotLine>() {
         let line = line.borrow();
         let mut l = Line::new(line.name.as_str(), PlotPoints::new(line.points.clone()));
-        if let Some(color) = line.color {
-            l = l.color(color32(color));
+        if let Some(color) = line.color.map(color32).or(default) {
+            l = l.color(color);
         }
         if let Some(width) = line.width {
             l = l.width(width);
@@ -274,8 +275,8 @@ fn to_item(item: &Bound<'_, PyAny>) -> PyResult<Item> {
         let points = points.borrow();
         let mut p = Points::new(points.name.as_str(), PlotPoints::new(points.points.clone()))
             .filled(points.filled);
-        if let Some(color) = points.color {
-            p = p.color(color32(color));
+        if let Some(color) = points.color.map(color32).or(default) {
+            p = p.color(color);
         }
         if let Some(radius) = points.radius {
             p = p.radius(radius);
@@ -289,8 +290,8 @@ fn to_item(item: &Bound<'_, PyAny>) -> PyResult<Item> {
             bars.name.as_str(),
             bars.bars.iter().map(|[x, h]| Bar::new(*x, *h)).collect(),
         );
-        if let Some(color) = bars.color {
-            b = b.color(color32(color));
+        if let Some(color) = bars.color.map(color32).or(default) {
+            b = b.color(color);
         }
         if let Some(width) = bars.width {
             b = b.width(width);
@@ -367,11 +368,24 @@ unsafe fn plot(
     items: Vec<Bound<'_, PyAny>>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<Option<(f64, f64)>> {
-    let items = items.iter().map(to_item).collect::<PyResult<Vec<_>>>()?;
+    let palette = crate::style::plot_palette();
+    let items = items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| to_item(item, palette.as_ref().map(|p| p[i % p.len()])))
+        .collect::<PyResult<Vec<_>>>()?;
     let mut p = egui_plot::Plot::new(id);
 
+    let mut legend = Legend::default();
+    if palette.is_some() {
+        // modern theme: a lighter grid, and the legend where the values are the lowest
+        p = p
+            .grid_spacing(egui::Rangef::new(28.0, 120.0))
+            .show_grid([false, true]);
+        legend = legend.position(egui_plot::Corner::LeftTop);
+    }
     if kwarg::<bool>(kwargs, "legend")?.unwrap_or(true) {
-        p = p.legend(Legend::default());
+        p = p.legend(legend);
     }
     if let Some(width) = kwarg::<f32>(kwargs, "width")? {
         p = p.width(width);

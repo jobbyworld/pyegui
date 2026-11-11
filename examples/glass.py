@@ -29,7 +29,7 @@ ACCENT = "#3b82f6"
 def apply_style(ctx):
     ctx.reset_style()
     if glass.value:
-        ctx.set_glass_style()
+        ctx.set_glass_style(mode="full")
         ctx.set_style(selection_color=(59, 130, 246, 160), heading_size=22)
     else:
         ctx.set_style(rounding=6)

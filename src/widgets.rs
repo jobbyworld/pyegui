@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
 use crate::style::extract_color;
-use crate::{current_ui, run_nested_call, run_nested_update_func, Float, UI};
+use crate::{current_ui, run_nested_call, run_nested_update_func, Bool, Float, UI};
 
 /// Shows a text in the given color.
 ///
@@ -360,9 +360,18 @@ fn menu_image(source: &str, size: f32) -> egui::Image<'_> {
 #[pyfunction]
 #[pyo3(signature = (source, update_fun, size=16.0))]
 unsafe fn menu_image_button(source: &str, update_fun: Bound<'_, PyAny>, size: f32) -> PyResult<()> {
-    current_ui(&UI)?
-        .menu_image_button(menu_image(source, size), |ui| run_nested_update_func(ui, update_fun))
-        .inner
+    let ui = current_ui(&UI)?;
+    if egui::containers::menu::is_in_menu(ui) {
+        return ui
+            .menu_image_button(menu_image(source, size), |ui| run_nested_update_func(ui, update_fun))
+            .inner
+            .unwrap_or(Ok(()));
+    }
+    egui::containers::menu::MenuButton::from_button(egui::Button::image(menu_image(source, size)))
+        .config(crate::style::menu_config())
+        .ui(ui, |ui| run_nested_update_func(ui, update_fun))
+        .1
+        .map(|inner| inner.inner)
         .unwrap_or(Ok(()))
 }
 
@@ -379,12 +388,118 @@ unsafe fn menu_image_text_button(
     update_fun: Bound<'_, PyAny>,
     size: f32,
 ) -> PyResult<()> {
-    current_ui(&UI)?
-        .menu_image_text_button(menu_image(source, size), text, |ui| {
-            run_nested_update_func(ui, update_fun)
-        })
-        .inner
-        .unwrap_or(Ok(()))
+    let ui = current_ui(&UI)?;
+    if egui::containers::menu::is_in_menu(ui) {
+        return ui
+            .menu_image_text_button(menu_image(source, size), text, |ui| {
+                run_nested_update_func(ui, update_fun)
+            })
+            .inner
+            .unwrap_or(Ok(()));
+    }
+    egui::containers::menu::MenuButton::from_button(egui::Button::image_and_text(
+        menu_image(source, size),
+        text,
+    ))
+    .config(crate::style::menu_config())
+    .ui(ui, |ui| run_nested_update_func(ui, update_fun))
+    .1
+    .map(|inner| inner.inner)
+    .unwrap_or(Ok(()))
+}
+
+/// An on/off switch, the modern look of a checkbox. The track takes the accent color when on.
+///
+/// Args:
+///     value (Bool): the state of the switch
+///
+///     text (str): a label on the right of the switch
+///
+/// Example::
+///
+///     notifications = Bool(True)
+///     # inside update_func
+///     switch(notifications, "Notifications")
+#[pyfunction]
+#[pyo3(signature = (value, text=None))]
+unsafe fn switch(value: &mut Bool, text: Option<&str>) -> PyResult<()> {
+    let ui = current_ui(&UI)?;
+    ui.horizontal(|ui| {
+        let height = ui.spacing().interact_size.y * 0.8;
+        let (rect, mut response) =
+            ui.allocate_exact_size(egui::vec2(height * 1.75, height), egui::Sense::click());
+        if response.clicked() {
+            value.value = !value.value;
+            response.mark_changed();
+        }
+        let label = text.unwrap_or("");
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::Role::Switch, ui.is_enabled(), value.value, label)
+        });
+
+        if ui.is_rect_visible(rect) {
+            let on = ui.ctx().animate_bool_responsive(response.id, value.value);
+            let visuals = ui.style().interact(&response);
+            let off_fill = ui.visuals().widgets.inactive.bg_fill;
+            let on_fill = ui.visuals().selection.bg_fill;
+            let track = egui::Color32::from_rgba_unmultiplied(
+                egui::lerp(off_fill.r() as f32..=on_fill.r() as f32, on) as u8,
+                egui::lerp(off_fill.g() as f32..=on_fill.g() as f32, on) as u8,
+                egui::lerp(off_fill.b() as f32..=on_fill.b() as f32, on) as u8,
+                egui::lerp(off_fill.a() as f32..=on_fill.a() as f32, on) as u8,
+            );
+            let radius = rect.height() / 2.0;
+            ui.painter()
+                .rect(rect, radius, track, visuals.bg_stroke, egui::StrokeKind::Inside);
+            let x = egui::lerp((rect.left() + radius)..=(rect.right() - radius), on);
+            let knob = egui::pos2(x, rect.center().y);
+            ui.painter().circle(
+                knob,
+                radius - 2.5,
+                egui::Color32::WHITE,
+                egui::Stroke::new(0.5, egui::Color32::from_black_alpha(40)),
+            );
+        }
+
+        if let Some(text) = text {
+            if ui.label(text).clicked() {
+                value.value = !value.value;
+            }
+        }
+    });
+    Ok(())
+}
+
+/// A small colored label, for a status or a tag.
+///
+/// Args:
+///     text (str): the text
+///
+///     color (color): the color of the text, the background is a tint of it. Default is the accent
+///
+/// Example::
+///
+///     badge("Done", "#22c55e")
+///     badge("Blocked", (239, 68, 68))
+#[pyfunction]
+#[pyo3(signature = (text, color=None))]
+unsafe fn badge(text: &str, color: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+    let ui = current_ui(&UI)?;
+    let color = match color {
+        Some(color) => extract_color(color)?,
+        None => crate::style::theme_state()
+            .accent
+            .unwrap_or(ui.visuals().selection.bg_fill),
+    };
+    let fill = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 38);
+    egui::Frame::new()
+        .fill(fill)
+        .corner_radius(egui::CornerRadius::same(255))
+        .inner_margin(egui::Margin::symmetric(8, 1))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(text).color(color).small().strong());
+        });
+    Ok(())
 }
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -412,5 +527,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pixels_per_point, m)?)?;
     m.add_function(wrap_pyfunction!(menu_image_button, m)?)?;
     m.add_function(wrap_pyfunction!(menu_image_text_button, m)?)?;
+    m.add_function(wrap_pyfunction!(switch, m)?)?;
+    m.add_function(wrap_pyfunction!(badge, m)?)?;
     Ok(())
 }

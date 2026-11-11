@@ -1,4 +1,6 @@
-use eframe::egui::{self, Color32, CornerRadius, Frame, Shadow, Stroke, Style, TextStyle};
+use std::sync::Mutex;
+
+use eframe::egui::{self, Color32, CornerRadius, FontFamily, FontId, Frame, Shadow, Stroke, Style, TextStyle};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool, PyDict};
@@ -169,6 +171,7 @@ pub(crate) struct StyleOptions {
     item_spacing: Option<egui::Vec2>,
     button_padding: Option<egui::Vec2>,
     window_margin: Option<f32>,
+    menu_margin: Option<egui::Vec2>,
     body_size: Option<f32>,
     heading_size: Option<f32>,
     monospace_size: Option<f32>,
@@ -213,6 +216,7 @@ impl StyleOptions {
             item_spacing: kwarg_vec2(kwargs, "item_spacing")?,
             button_padding: kwarg_vec2(kwargs, "button_padding")?,
             window_margin: kwarg(kwargs, "window_margin")?,
+            menu_margin: kwarg_vec2(kwargs, "menu_margin")?,
             body_size: kwarg(kwargs, "body_size")?,
             heading_size: kwarg(kwargs, "heading_size")?,
             monospace_size: kwarg(kwargs, "monospace_size")?,
@@ -302,6 +306,9 @@ impl StyleOptions {
         if let Some(margin) = self.window_margin {
             style.spacing.window_margin = margin.into();
         }
+        if let Some(margin) = self.menu_margin {
+            style.spacing.menu_margin = egui::Margin::symmetric(margin.x as i8, margin.y as i8);
+        }
 
         for (text_style, size) in [
             (TextStyle::Body, self.body_size),
@@ -329,6 +336,161 @@ pub(crate) fn default_style(theme: egui::Theme) -> Style {
         },
         ..Style::default()
     }
+}
+
+// modern theme
+
+/// Where the glass goes
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum GlassMode {
+    /// every surface is glass
+    Full,
+    /// the sidebars, bars and menus are glass, the content is an almost opaque sheet
+    Partial,
+}
+
+/// The parts of the theme that egui styles cannot hold
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ThemeState {
+    /// the color of the selection, links, active tabs and plots
+    pub(crate) accent: Option<Color32>,
+    /// set by set_glass_style
+    pub(crate) glass: Option<GlassMode>,
+}
+
+pub(crate) static THEME: Mutex<ThemeState> = Mutex::new(ThemeState {
+    accent: None,
+    glass: None,
+});
+
+pub(crate) fn theme_state() -> ThemeState {
+    THEME.lock().map(|t| *t).unwrap_or_default()
+}
+
+/// The accent of the modern theme when none is given
+pub(crate) const DEFAULT_ACCENT: Color32 = Color32::from_rgb(59, 130, 246);
+
+/// The font family of the titles and strong texts, see app_fonts in lib.rs
+pub(crate) fn bold_family() -> FontFamily {
+    FontFamily::Name("bold".into())
+}
+
+/// True when the user asked the system for less transparency (macOS accessibility setting)
+pub(crate) fn reduce_transparency() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceTransparency()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// The color mixed with white, by amount between 0 and 1
+fn lighten(color: Color32, amount: f32) -> Color32 {
+    let mix = |c: u8| (c as f32 + (255.0 - c as f32) * amount).round() as u8;
+    Color32::from_rgb(mix(color.r()), mix(color.g()), mix(color.b()))
+}
+
+/// Derives the selection, links and text cursor from the accent color
+pub(crate) fn accent_style(style: &mut Style, accent: Color32) {
+    let visuals = &mut style.visuals;
+    let dark = visuals.dark_mode;
+    visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 225);
+    // the text on the selection, like the title of the active pill tab
+    visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+    visuals.hyperlink_color = if dark { lighten(accent, 0.35) } else { accent };
+    visuals.text_cursor.stroke = Stroke::new(2.0, if dark { lighten(accent, 0.3) } else { accent });
+}
+
+/// The almost opaque sheet under the content in the partial glass mode, None otherwise
+pub(crate) fn sheet_fill(visuals: &egui::Visuals) -> Option<Color32> {
+    if theme_state().glass != Some(GlassMode::Partial) {
+        return None;
+    }
+    let alpha = if reduce_transparency() { 255 } else if visuals.dark_mode { 236 } else { 242 };
+    Some(if visuals.dark_mode {
+        Color32::from_rgba_unmultiplied(28, 30, 36, alpha)
+    } else {
+        Color32::from_rgba_unmultiplied(251, 251, 253, alpha)
+    })
+}
+
+/// Colors of the plot items without a color: the accent first, then colors that go with it
+pub(crate) fn plot_palette() -> Option<Vec<Color32>> {
+    let accent = theme_state().accent?;
+    Some(vec![
+        accent,
+        Color32::from_rgb(34, 197, 94),
+        Color32::from_rgb(245, 158, 11),
+        Color32::from_rgb(239, 68, 68),
+        Color32::from_rgb(168, 85, 247),
+        Color32::from_rgb(6, 182, 212),
+    ])
+}
+
+/// The style of the menus: the style of egui menus, which removes the button frames and squeezes
+/// the buttons to 2 points of padding, with room around the texts in the modern theme
+pub(crate) fn menu_style() -> egui::style::StyleModifier {
+    let modern = theme_state().glass.is_some();
+    (move |style: &mut Style| {
+        egui::containers::menu::menu_style(style);
+        if modern {
+            style.spacing.button_padding = egui::vec2(10.0, 4.0);
+        }
+    })
+    .into()
+}
+
+/// The menu config of pyegui, see menu_style
+pub(crate) fn menu_config() -> egui::containers::menu::MenuConfig {
+    egui::containers::menu::MenuConfig::new().style(menu_style())
+}
+
+/// Text sizes of the modern theme: 11.5 / 14 / 20, titles in semibold
+fn modern_text_styles(style: &mut Style) {
+    use FontFamily::{Monospace, Proportional};
+    style.text_styles = [
+        (TextStyle::Small, FontId::new(11.5, Proportional)),
+        (TextStyle::Body, FontId::new(14.0, Proportional)),
+        (TextStyle::Button, FontId::new(14.0, Proportional)),
+        (TextStyle::Heading, FontId::new(20.0, bold_family())),
+        (TextStyle::Monospace, FontId::new(13.0, Monospace)),
+    ]
+    .into();
+}
+
+/// Translucent style looking like frosted glass. Best used with a backdrop effect in run_native.
+pub(crate) fn modern_glass_style(
+    style: &mut Style,
+    tint: Option<Color32>,
+    accent: Color32,
+    mode: GlassMode,
+) {
+    glass_style(style, tint);
+    let dark = style.visuals.dark_mode;
+    let reduce = reduce_transparency();
+
+    // menus and windows are read, so they are almost opaque
+    let window_alpha = match (reduce, mode, dark) {
+        (true, _, _) => 255,
+        (_, GlassMode::Partial, true) => 236,
+        (_, GlassMode::Partial, false) => 242,
+        (_, GlassMode::Full, true) => 200,
+        (_, GlassMode::Full, false) => 215,
+    };
+    let fill = style.visuals.window_fill;
+    style.visuals.window_fill = Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), window_alpha);
+    if reduce {
+        let fill = style.visuals.panel_fill;
+        style.visuals.panel_fill = Color32::from_rgb(fill.r(), fill.g(), fill.b());
+    }
+
+    accent_style(style, accent);
+    modern_text_styles(style);
+    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+    style.spacing.interact_size.y = 24.0;
 }
 
 /// Translucent style looking like frosted glass. Best used with a backdrop effect in run_native.
@@ -395,6 +557,8 @@ pub(crate) fn glass_style(style: &mut Style, tint: Option<Color32>) {
 
     style.spacing.button_padding = egui::vec2(10.0, 4.0);
     style.spacing.window_margin = 12.0.into();
+    // the menus are rounded by 12: their items keep away from the rounded corners
+    style.spacing.menu_margin = egui::Margin::symmetric(10, 8);
 }
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

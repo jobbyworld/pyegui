@@ -104,7 +104,7 @@ impl Context {
             e
         })?;
 
-        let mut fonts = default_fonts();
+        let mut fonts = app_fonts(style::theme_state().glass.is_some());
         fonts.font_data.insert(
             source.clone(),
             Arc::new(
@@ -174,6 +174,8 @@ impl Context {
     ///
     ///     item_spacing (tuple[float, float]), button_padding (tuple[float, float]), window_margin (float)
     ///
+    ///     menu_margin (tuple[float, float]): horizontal and vertical space inside the menus
+    ///
     ///     body_size (float), heading_size (float), monospace_size (float): font sizes
     ///
     ///     animation_time (float): duration of animations in seconds
@@ -198,28 +200,85 @@ impl Context {
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
             self.0.set_style_of(theme, style::default_style(theme));
         }
+        let was_modern = style::theme_state().glass.is_some();
+        if let Ok(mut theme) = style::THEME.lock() {
+            *theme = style::ThemeState::default();
+        }
+        if was_modern {
+            self.0.set_fonts(app_fonts(false));
+        }
     }
 
-    /// Applies a translucent style looking like frosted glass, for both themes.
+    /// Applies a modern style looking like frosted glass, for both themes: translucent surfaces,
+    /// the Inter font with semibold titles, and an accent color for the selection, links, active
+    /// tabs and plots. With the system setting "Reduce transparency" (macOS), the surfaces are opaque.
     ///
     /// Works best with a backdrop effect: run_native(..., backdrop=Backdrop.MICA).
-    /// It can be customized afterwards with set_style.
+    /// It can be customized afterwards with set_style. reset_style removes it.
     ///
     /// Args:
     ///     tint (color): color of the glass. Default is white on light theme and smoked on dark theme
     ///
+    ///     accent (color): color of the selection, links, active tabs and plots. Default is blue
+    ///
+    ///     mode (str): "partial": the panels and menus are glass, the content is an almost opaque
+    ///         sheet, which is easier to read. "full": every surface is glass. Default is "partial"
+    ///
     /// Example::
     ///
     ///     def update_func(ctx):
-    ///         ctx.set_glass_style()
+    ///         ctx.set_glass_style(accent="#8b5cf6")
     ///         heading("Glass")
     ///
     ///     run_native("Glass", update_func, backdrop=Backdrop.ACRYLIC)
-    #[pyo3(signature = (tint=None))]
-    fn set_glass_style(&self, tint: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+    #[pyo3(signature = (tint=None, accent=None, mode="partial"))]
+    fn set_glass_style(
+        &self,
+        tint: Option<&Bound<'_, PyAny>>,
+        accent: Option<&Bound<'_, PyAny>>,
+        mode: &str,
+    ) -> PyResult<()> {
         let tint = tint.map(style::extract_color).transpose()?;
+        let accent = accent
+            .map(style::extract_color)
+            .transpose()?
+            .unwrap_or(style::DEFAULT_ACCENT);
+        let mode = match mode {
+            "partial" => style::GlassMode::Partial,
+            "full" => style::GlassMode::Full,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown glass mode '{}', expected partial or full",
+                    other
+                )))
+            }
+        };
 
-        self.0.all_styles_mut(|s| style::glass_style(s, tint));
+        let was_modern = style::theme_state().glass.is_some();
+        if let Ok(mut theme) = style::THEME.lock() {
+            theme.accent = Some(accent);
+            theme.glass = Some(mode);
+        }
+        if !was_modern {
+            self.0.set_fonts(app_fonts(true));
+        }
+        self.0
+            .all_styles_mut(|s| style::modern_glass_style(s, tint, accent, mode));
+        Ok(())
+    }
+
+    /// Changes the accent color: selection, links, text cursor, active pill tabs and the plot
+    /// items without a color.
+    ///
+    /// Example::
+    ///
+    ///     ctx.set_accent("#22c55e")
+    fn set_accent(&self, color: &Bound<'_, PyAny>) -> PyResult<()> {
+        let accent = style::extract_color(color)?;
+        if let Ok(mut theme) = style::THEME.lock() {
+            theme.accent = Some(accent);
+        }
+        self.0.all_styles_mut(|s| style::accent_style(s, accent));
         Ok(())
     }
 
@@ -283,9 +342,9 @@ impl Str {
 ///             data.value = False
 ///         checkbox(data, "Check me")
 #[pyclass]
-struct Bool {
+pub(crate) struct Bool {
     #[pyo3(get, set)]
-    value: bool,
+    pub(crate) value: bool,
 }
 
 #[pymethods]
@@ -661,6 +720,37 @@ impl Group {
     }
 }
 
+/// The fonts of the app: the fonts of egui, or Inter with the modern theme of set_glass_style.
+/// The "bold" family is always defined, so a style can use it in both cases.
+pub(crate) fn app_fonts(modern: bool) -> FontDefinitions {
+    let mut fonts = default_fonts();
+    let proportional = fonts.families[&FontFamily::Proportional].clone();
+
+    if modern {
+        for (name, data) in [
+            ("Inter-Regular", &include_bytes!("fonts/Inter-Regular.ttf")[..]),
+            ("Inter-SemiBold", &include_bytes!("fonts/Inter-SemiBold.ttf")[..]),
+        ] {
+            fonts
+                .font_data
+                .insert(name.to_owned(), Arc::new(FontData::from_static(data)));
+        }
+        fonts
+            .families
+            .get_mut(&FontFamily::Proportional)
+            .unwrap()
+            .insert(0, "Inter-Regular".to_owned());
+        // the other fonts stay as fallbacks for the characters Inter does not have
+        let bold = std::iter::once("Inter-SemiBold".to_owned())
+            .chain(proportional)
+            .collect();
+        fonts.families.insert(style::bold_family(), bold);
+    } else {
+        fonts.families.insert(style::bold_family(), proportional);
+    }
+    fonts
+}
+
 /// The fonts of egui, plus the icon of the copy button of the markdown code blocks.
 ///
 /// egui_commonmark draws it with 🗐, which was in the emoji font of egui before 0.37 and is in
@@ -790,6 +880,10 @@ impl eframe::App for PyeguiApp<'_> {
 ///     The Backdrop class has a constant for each of them, like Backdrop.MICA.
 ///     Ignored with a warning on other platforms
 ///
+///     fullsize_content (bool): macOS: the content fills the window under a transparent title bar,
+///     keeping the window buttons at the top left. Leave about 28 points free at the top of the
+///     first panel. Ignored on other platforms
+///
 /// Examples::
 ///
 ///     name = Str("")
@@ -873,6 +967,14 @@ unsafe fn run_native(
             viewport = viewport.with_resizable(resizable.cast::<PyBool>()?.extract()?);
         }
 
+        if kwarg::<bool>(Some(kwargs), "fullsize_content")?.unwrap_or(false) {
+            // macOS: the content goes under a transparent title bar, with the window buttons on it
+            viewport = viewport
+                .with_fullsize_content_view(true)
+                .with_titlebar_shown(false)
+                .with_title_shown(false);
+        }
+
         if let Some(is_transparent) = kwargs.get_item("transparent")? {
             transparent |= is_transparent.cast::<PyBool>()?.extract::<bool>()?;
             viewport = viewport.with_transparent(transparent);
@@ -906,7 +1008,7 @@ unsafe fn run_native(
         Box::new(|cc| {
             // This gives us image support:
             egui_extras::install_image_loaders(&cc.egui_ctx);
-            cc.egui_ctx.set_fonts(default_fonts());
+            cc.egui_ctx.set_fonts(app_fonts(false));
 
             if let Some(backdrop) = &backdrop {
                 if let Err(err) = apply_backdrop(cc, backdrop) {
@@ -1174,7 +1276,12 @@ unsafe fn open_central_panel(ui_stack: &mut Vec<*mut egui::Ui>) -> PyResult<()> 
     );
     panel_ui.shrink_clip_rect(outer_rect);
 
-    let prepared = egui::Frame::central_panel(root.style()).begin(&mut panel_ui);
+    let mut frame = egui::Frame::central_panel(root.style());
+    // partial glass: the content is an almost opaque sheet over the glass
+    if let Some(fill) = style::sheet_fill(&root.style().visuals) {
+        frame = frame.fill(fill);
+    }
+    let prepared = frame.begin(&mut panel_ui);
     let central = CENTRAL.insert(Box::new(CentralPanelState { panel_ui, prepared }));
 
     ui_stack.push(&raw mut central.prepared.content_ui);
@@ -1250,7 +1357,12 @@ pub(crate) fn with_bool_copy<R>(py: Python<'_>, value: &Py<Bool>, f: impl FnOnce
 unsafe fn heading(text: &str) -> PyResult<()> {
     let ui = current_ui(&UI)?;
 
-    ui.heading(text);
+    if style::theme_state().glass.is_some() {
+        // the modern theme gives titles the strongest text color
+        ui.label(egui::RichText::new(text).heading().strong());
+    } else {
+        ui.heading(text);
+    }
     Ok(())
 }
 
@@ -1289,7 +1401,8 @@ unsafe fn small(text: &str) -> PyResult<()> {
 unsafe fn strong(text: &str) -> PyResult<()> {
     let ui = current_ui(&UI)?;
 
-    ui.strong(text);
+    // semibold with the modern theme, the "bold" family is the regular font otherwise
+    ui.label(egui::RichText::new(text).strong().family(style::bold_family()));
     Ok(())
 }
 
