@@ -40,6 +40,36 @@ fn columns(num_columns: usize, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<V
         .collect()
 }
 
+/// The width the columns of column_widths ask for, 0 when they fit the contents
+fn natural_width(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<f32> {
+    let Some(widths) = kwarg::<Vec<Bound<'_, PyAny>>>(kwargs, "column_widths")? else {
+        return Ok(0.0);
+    };
+    // a "remainder" column is never narrower than this, a number is its starting width
+    Ok(widths.iter().map(|w| w.extract::<f32>().unwrap_or(100.0)).sum())
+}
+
+/// Runs add in ui. Columns wider than ui must not paint over what is next to it, like a side
+/// panel: they are clipped, with a horizontal scroll bar to reach them
+fn in_clipped_width<R>(
+    ui: &mut egui::Ui,
+    min_width: f32,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let clip = ui.available_rect_before_wrap();
+    ui.shrink_clip_rect(clip);
+    if min_width <= ui.available_width() {
+        return add(ui);
+    }
+    egui::ScrollArea::horizontal()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_width(min_width);
+            add(ui)
+        })
+        .inner
+}
+
 /// Creates a table builder with the options shared by table and table_ui
 fn table_builder<'a>(
     ui: &'a mut egui::Ui,
@@ -115,6 +145,8 @@ unsafe fn table(
     }
 
     let ui = current_ui(&UI)?;
+    let min_width = natural_width(kwargs)?;
+    in_clipped_width(ui, min_width, |ui| {
     let row_height = ui.spacing().interact_size.y;
 
     let mut t = table_builder(ui, num_columns, kwargs)?;
@@ -152,6 +184,7 @@ unsafe fn table(
     });
 
     Ok(())
+    })
 }
 
 /// Shows a table whose cells are drawn by a function. Only visible rows are drawn.
@@ -192,6 +225,8 @@ unsafe fn table_ui(
     }
 
     let ui = current_ui(&UI)?;
+    let min_width = natural_width(kwargs)?;
+    in_clipped_width(ui, min_width, |ui| {
     let row_height = ui.spacing().interact_size.y;
     let mut result = Ok(());
 
@@ -218,6 +253,7 @@ unsafe fn table_ui(
         });
 
     result
+    })
 }
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

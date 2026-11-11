@@ -413,7 +413,7 @@ def tree_view_ui():
             if item:
                 open_item(item)
 
-    scroll_area_vertical(nodes)
+    scroll_area_both(nodes)
 
 
 def content():

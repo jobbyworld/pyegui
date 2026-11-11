@@ -1740,9 +1740,32 @@ unsafe fn group(update_fun: Bound<'_, PyAny>, kwargs: Option<&Bound<'_, PyDict>>
 ///     scroll_area_vertical(update_func)
 #[pyfunction]
 unsafe fn scroll_area_vertical(update_fun: Bound<'_, PyAny>) -> PyResult<()> {
-    egui::ScrollArea::vertical().show(current_ui(&UI)?, |ui| run_nested_update_func(ui, update_fun)).inner
+    let ui = current_ui(&UI)?;
+    // content wider than the area (long names, wide rows) must not paint over its neighbours
+    let clip = ui.available_rect_before_wrap();
+    ui.scope(|ui| {
+        ui.shrink_clip_rect(clip);
+        egui::ScrollArea::vertical().show(ui, |ui| run_nested_update_func(ui, update_fun)).inner
+    })
+    .inner
 }
 
+
+/// Create a scroll area that scrolls in both directions, with a bar for each.
+///
+/// Example::
+///
+///     scroll_area_both(wide_and_tall_ui)
+#[pyfunction]
+unsafe fn scroll_area_both(update_fun: Bound<'_, PyAny>) -> PyResult<()> {
+    let ui = current_ui(&UI)?;
+    let clip = ui.available_rect_before_wrap();
+    ui.scope(|ui| {
+        ui.shrink_clip_rect(clip);
+        egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| run_nested_update_func(ui, update_fun)).inner
+    })
+    .inner
+}
 
 /// Create a horizontal scroll area.
 ///
@@ -2294,6 +2317,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(group, m)?)?;
     m.add_function(wrap_pyfunction!(scroll_area_vertical, m)?)?;
     m.add_function(wrap_pyfunction!(scroll_area_horizontal, m)?)?;
+    m.add_function(wrap_pyfunction!(scroll_area_both, m)?)?;
     m.add_function(wrap_pyfunction!(scope, m)?)?;
     m.add_function(wrap_pyfunction!(slider_float, m)?)?;
     m.add_function(wrap_pyfunction!(slider_int, m)?)?;
