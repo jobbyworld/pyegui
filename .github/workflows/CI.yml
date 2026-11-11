@@ -1,9 +1,17 @@
 # Build wheels (Windows + macOS only). No publication to PyPI.
+# A pushed tag v* also publishes the wheels as a GitHub Release.
 name: CI
 
 on:
   pull_request:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish as a GitHub Release (empty: only build)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -16,6 +24,8 @@ jobs:
         target: [x64]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
@@ -39,6 +49,8 @@ jobs:
         target: [x86_64, aarch64]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
@@ -53,3 +65,34 @@ jobs:
         with:
           name: wheels-macos-${{ matrix.target }}
           path: dist
+
+  release:
+    name: GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+      - name: Release notes from CHANGELOG.md
+        run: |
+          awk -v head="## ${TAG#v}" 'index($0, "## ") == 1 { p = (index($0, head) == 1); next } p' CHANGELOG.md > notes.md
+          cat notes.md
+      - name: Create or update the release
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.whl --clobber
+          else
+            gh release create "$TAG" dist/*.whl --verify-tag --title "pyegui ${TAG#v}" --notes-file notes.md
+          fi
