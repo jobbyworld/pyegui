@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0 (unreleased)
+## 0.6.0 (2026-11-11)
 
 Update to egui 0.37 and pyo3 0.30. No function of 0.5.0 was removed.
 
