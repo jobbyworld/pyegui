@@ -61,7 +61,7 @@ struct Context(egui::Context);
 
 #[pymethods]
 impl Context {
-    /// True when theme is dark
+    /// True when theme is light
     #[getter]
     fn is_light_theme(&self) -> bool {
         self.0.theme() == egui::Theme::Light
@@ -1427,19 +1427,25 @@ unsafe fn weak(text: &str) -> PyResult<()> {
 ///
 ///     size (float): font size of this text only. Default is the size of the body text
 ///
+///     truncate (bool): keep the text on one line and end it with … when it is too long for the
+///         width, instead of wrapping it. Default is False
+///
 /// Example::
 ///
 ///     label("some text")
 ///     label("📁", size=48)
+///     label(file_name, truncate=True)
 #[pyfunction]
-#[pyo3(signature = (text, size=None))]
-unsafe fn label(text: &str, size: Option<f32>) -> PyResult<()> {
+#[pyo3(signature = (text, size=None, truncate=false))]
+unsafe fn label(text: &str, size: Option<f32>, truncate: bool) -> PyResult<()> {
     let ui = current_ui(&UI)?;
 
-    match size {
-        Some(size) => ui.label(egui::RichText::new(text).size(size)),
-        None => ui.label(text),
+    let text = match size {
+        Some(size) => egui::RichText::new(text).size(size),
+        None => egui::RichText::new(text),
     };
+    let label = egui::Label::new(text);
+    ui.add(if truncate { label.truncate() } else { label });
     Ok(())
 }
 
@@ -1745,7 +1751,11 @@ unsafe fn scroll_area_vertical(update_fun: Bound<'_, PyAny>) -> PyResult<()> {
     let clip = ui.available_rect_before_wrap();
     ui.scope(|ui| {
         ui.shrink_clip_rect(clip);
-        egui::ScrollArea::vertical().show(ui, |ui| run_nested_update_func(ui, update_fun)).inner
+        // fills the width, so the scroll bar is at the edge of the area and not of its contents
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, true])
+            .show(ui, |ui| run_nested_update_func(ui, update_fun))
+            .inner
     })
     .inner
 }
@@ -2081,11 +2091,15 @@ unsafe fn color_edit_button_rgb(rgb: &mut RGB) -> PyResult<()> {
 ///
 ///     max_width (int), max_height (int): the image is scaled down to fit
 ///
+///     size (float): shows the image in a square of this side, scaled up or down. The space is
+///         kept while the image loads, so the layout does not jump when it appears
+///
 ///     tint (color): multiplies the colors of the image. With a white icon, the icon takes the color
 ///
 /// Example::
 ///
 ///     image("https://picsum.photos/480")
+///     image("file://icons/folder.svg", size=48)
 ///     image("file://assets/ferris.png", max_height = 50, max_width = 50)
 ///     image("file://icons/gear.svg", max_width=16, max_height=16, tint=(120, 120, 128))
 #[pyfunction]
@@ -2103,8 +2117,16 @@ unsafe fn image(source: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()
             img = img.max_width(width.cast::<PyInt>()?.extract()?);
         }
     }
+    if let Some(size) = kwarg::<f32>(kwargs, "size")? {
+        img = img.fit_to_exact_size(egui::vec2(size, size));
+    }
     if let Some(tint) = style::kwarg_color(kwargs, "tint")? {
         img = img.tint(tint);
+    }
+    // an image is decoded in the background: draw again until it is there, or it stays blank
+    // until the next mouse move
+    if let Ok(egui::load::TexturePoll::Pending { .. }) = img.load_for_size(ui.ctx(), ui.available_size()) {
+        ui.ctx().request_repaint();
     }
     ui.add(img);
     Ok(())

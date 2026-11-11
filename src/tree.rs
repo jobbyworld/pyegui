@@ -160,6 +160,25 @@ fn with_icon<'a>(config: NodeBuilder<'a, i64>, icon: Option<String>) -> NodeBuil
     }
 }
 
+/// The position of a node among the rows shown: the children of the closed directories are not
+fn row_index(py: Python<'_>, tree: &TreeView, nodes: &[Py<TreeNode>], id: i64, row: &mut usize) -> Option<usize> {
+    for node in nodes {
+        let node = node.borrow(py);
+        if node.id == id {
+            return Some(*row);
+        }
+        *row += 1;
+        if let Some(children) = &node.children {
+            if tree.state.is_open(&node.id).unwrap_or(tree.default_open) {
+                if let Some(found) = row_index(py, tree, children, id, row) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn add_nodes(
     py: Python<'_>,
     builder: &mut TreeViewBuilder<'_, i64>,
@@ -194,6 +213,14 @@ fn add_nodes(
 
 /// Shows a tree of nodes. Directories can be opened and nodes selected, with keyboard navigation.
 ///
+/// Args:
+///     tree (TreeView): the state of the tree
+///
+///     nodes (list[TreeNode]): the nodes
+///
+///     scroll_to (int): id of a node to scroll to, just enough to show it. Give it only during
+///         the frame the tree has to scroll. The tree has to be the first thing of a scroll area
+///
 /// Example::
 ///
 ///     tree = TreeView("files")
@@ -205,8 +232,22 @@ fn add_nodes(
 ///     def update_func(ctx):
 ///         tree_view(tree, nodes)
 #[pyfunction]
-unsafe fn tree_view(py: Python<'_>, tree: &mut TreeView, nodes: Vec<Py<TreeNode>>) -> PyResult<()> {
+#[pyo3(signature = (tree, nodes, scroll_to=None))]
+unsafe fn tree_view(
+    py: Python<'_>,
+    tree: &mut TreeView,
+    nodes: Vec<Py<TreeNode>>,
+    scroll_to: Option<i64>,
+) -> PyResult<()> {
     let ui = current_ui(&UI)?;
+    if let Some(id) = scroll_to {
+        // the rows out of the window are not drawn, so the row is placed from its index
+        if let Some(index) = row_index(py, tree, &nodes, id, &mut 0) {
+            let height = ui.spacing().interact_size.y;
+            let top = ui.cursor().min + egui::vec2(0.0, index as f32 * (height + ui.spacing().item_spacing.y));
+            ui.scroll_to_rect(egui::Rect::from_min_size(top, egui::vec2(1.0, height)), None);
+        }
+    }
     let id = ui.make_persistent_id(&tree.id);
 
     let (_, actions) = egui_ltreeview::TreeView::new(id)

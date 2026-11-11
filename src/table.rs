@@ -87,6 +87,9 @@ fn table_builder<'a>(
     if let Some(id) = kwarg::<String>(kwargs, "id")? {
         t = t.id_salt(id);
     }
+    if let Some(row) = kwarg::<usize>(kwargs, "scroll_to_row")? {
+        t = t.scroll_to_row(row, None); // just enough to bring the row into view
+    }
     if let Some(height) = kwarg::<f32>(kwargs, "max_height")? {
         t = t.max_scroll_height(height);
     }
@@ -111,6 +114,9 @@ fn table_builder<'a>(
 ///     resizable (bool): columns can be resized. Default is True
 ///
 ///     max_height (float): max height of the table before scrolling
+///
+///     scroll_to_row (int): scrolls the table just enough to show this row. Give it only during the
+///         frame the table has to scroll, the user can scroll away afterwards
 ///
 ///     column_widths (list[float | None | str]): width of each column: a starting width, None to fit
 ///     the contents or "remainder" for the rest of the width. Default fits the contents, the last
