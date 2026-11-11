@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::{fs, ptr};
 
 mod containers;
+mod icons;
 mod dock;
 mod markdown;
 mod plot;
@@ -1421,14 +1422,24 @@ unsafe fn weak(text: &str) -> PyResult<()> {
 
 /// Show some text.
 ///
+/// Args:
+///     text (str): the text
+///
+///     size (float): font size of this text only. Default is the size of the body text
+///
 /// Example::
 ///
 ///     label("some text")
+///     label("📁", size=48)
 #[pyfunction]
-unsafe fn label(text: &str) -> PyResult<()> {
+#[pyo3(signature = (text, size=None))]
+unsafe fn label(text: &str, size: Option<f32>) -> PyResult<()> {
     let ui = current_ui(&UI)?;
 
-    ui.label(text);
+    match size {
+        Some(size) => ui.label(egui::RichText::new(text).size(size)),
+        None => ui.label(text),
+    };
     Ok(())
 }
 
@@ -2043,10 +2054,17 @@ unsafe fn color_edit_button_rgb(rgb: &mut RGB) -> PyResult<()> {
 
 /// Show an image available at the given uri.
 ///
+/// Keyword args:
+///
+///     max_width (int), max_height (int): the image is scaled down to fit
+///
+///     tint (color): multiplies the colors of the image. With a white icon, the icon takes the color
+///
 /// Example::
 ///
 ///     image("https://picsum.photos/480")
 ///     image("file://assets/ferris.png", max_height = 50, max_width = 50)
+///     image("file://icons/gear.svg", max_width=16, max_height=16, tint=(120, 120, 128))
 #[pyfunction]
 #[pyo3(signature = (source, **kwargs))]
 unsafe fn image(source: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
@@ -2061,6 +2079,9 @@ unsafe fn image(source: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()
         if let Some(width) = kwargs.get_item("max_width")? {
             img = img.max_width(width.cast::<PyInt>()?.extract()?);
         }
+    }
+    if let Some(tint) = style::kwarg_color(kwargs, "tint")? {
+        img = img.tint(tint);
     }
     ui.add(img);
     Ok(())
@@ -2302,6 +2323,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     table::register(m)?;
     tree::register(m)?;
     widgets::register(m)?;
+    icons::register(m)?;
     dock::register(m)?;
     plot::register(m)?;
     markdown::register(m)?;

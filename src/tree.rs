@@ -1,4 +1,5 @@
-use egui_ltreeview::{Action, DirPosition, TreeViewBuilder, TreeViewState};
+use eframe::egui;
+use egui_ltreeview::{Action, DirPosition, NodeBuilder, TreeViewBuilder, TreeViewState};
 use pyo3::prelude::*;
 
 use crate::{current_ui, UI};
@@ -7,11 +8,20 @@ use crate::{current_ui, UI};
 ///
 /// Ids must be unique in the tree.
 ///
+/// Args:
+///     id (int): unique id of the node
+///
+///     label (str): the text of the node
+///
+///     children (list[TreeNode]): the nodes of a directory, None for a leaf
+///
+///     icon (str): uri of an image shown before the label, like for image(), e.g. from file_icon
+///
 /// Usage::
 ///
 ///     nodes = [
 ///         TreeNode(0, "src", [TreeNode(1, "main.py"), TreeNode(2, "utils.py")]),
-///         TreeNode(3, "README.md"),
+///         TreeNode(3, "README.md", icon=file_icon("README.md", 16)),
 ///     ]
 #[pyclass]
 pub(crate) struct TreeNode {
@@ -21,17 +31,20 @@ pub(crate) struct TreeNode {
     label: String,
     #[pyo3(get, set)]
     children: Option<Vec<Py<TreeNode>>>,
+    #[pyo3(get, set)]
+    icon: Option<String>,
 }
 
 #[pymethods]
 impl TreeNode {
     #[new]
-    #[pyo3(signature = (id, label, children=None))]
-    fn new(id: i64, label: String, children: Option<Vec<Py<TreeNode>>>) -> Self {
+    #[pyo3(signature = (id, label, children=None, icon=None))]
+    fn new(id: i64, label: String, children: Option<Vec<Py<TreeNode>>>, icon: Option<String>) -> Self {
         TreeNode {
             id,
             label,
             children,
+            icon,
         }
     }
 }
@@ -44,6 +57,13 @@ impl TreeNode {
 ///     multi_select (bool): allow selecting several nodes with ctrl and shift. Default is False
 ///
 ///     drag_and_drop (bool): allow moving nodes by dragging them. Default is False
+///
+///     default_open (bool): directories are open the first time they are shown. Default is True.
+///         Use False to load the children of a directory only when the user opens it, see is_open
+///
+///     activatable_dirs (bool): a double click or Enter on a directory activates it, like a leaf,
+///         see activated. Its arrow still opens and closes it. Default is False: a double click
+///         opens and closes the directory
 ///
 /// Usage::
 ///
@@ -59,6 +79,8 @@ pub(crate) struct TreeView {
     id: String,
     multi_select: bool,
     drag_and_drop: bool,
+    default_open: bool,
+    activatable_dirs: bool,
     state: TreeViewState<i64>,
     activated: Vec<i64>,
     moved: Option<(Vec<i64>, i64, &'static str, Option<i64>)>,
@@ -67,12 +89,20 @@ pub(crate) struct TreeView {
 #[pymethods]
 impl TreeView {
     #[new]
-    #[pyo3(signature = (id, multi_select=false, drag_and_drop=false))]
-    fn new(id: String, multi_select: bool, drag_and_drop: bool) -> Self {
+    #[pyo3(signature = (id, multi_select=false, drag_and_drop=false, default_open=true, activatable_dirs=false))]
+    fn new(
+        id: String,
+        multi_select: bool,
+        drag_and_drop: bool,
+        default_open: bool,
+        activatable_dirs: bool,
+    ) -> Self {
         TreeView {
             id,
             multi_select,
             drag_and_drop,
+            default_open,
+            activatable_dirs,
             state: TreeViewState::default(),
             activated: vec![],
             moved: None,
@@ -110,19 +140,54 @@ impl TreeView {
     fn set_open(&mut self, id: i64, open: bool) {
         self.state.set_openness(id, open);
     }
+
+    /// True if the directory is open. Useful to load the children of a directory only when it is
+    /// opened: give it an empty list of children until then
+    fn is_open(&self, id: i64) -> bool {
+        self.state.is_open(&id).unwrap_or(false)
+    }
 }
 
-fn add_nodes(py: Python<'_>, builder: &mut TreeViewBuilder<'_, i64>, nodes: &[Py<TreeNode>]) {
+/// Shows the image at icon before the label of the node
+fn with_icon<'a>(config: NodeBuilder<'a, i64>, icon: Option<String>) -> NodeBuilder<'a, i64> {
+    match icon {
+        Some(uri) => config.icon(move |ui| {
+            let side = ui.text_style_height(&egui::TextStyle::Body);
+            ui.add(egui::Image::new(uri.as_str()).fit_to_exact_size(egui::vec2(side, side)));
+            ui.add_space(4.0);
+        }),
+        None => config,
+    }
+}
+
+fn add_nodes(
+    py: Python<'_>,
+    builder: &mut TreeViewBuilder<'_, i64>,
+    nodes: &[Py<TreeNode>],
+    default_open: bool,
+    activatable_dirs: bool,
+) {
     for node in nodes {
         let node = node.borrow(py);
 
         match &node.children {
             Some(children) => {
-                builder.dir(node.id, node.label.as_str());
-                add_nodes(py, builder, children);
+                builder.node(with_icon(
+                    NodeBuilder::dir(node.id)
+                        .default_open(default_open)
+                        .activatable(activatable_dirs)
+                        .label(node.label.as_str()),
+                    node.icon.clone(),
+                ));
+                add_nodes(py, builder, children, default_open, activatable_dirs);
                 builder.close_dir();
             }
-            None => builder.leaf(node.id, node.label.as_str()),
+            None => {
+                builder.node(with_icon(
+                    NodeBuilder::leaf(node.id).label(node.label.as_str()),
+                    node.icon.clone(),
+                ));
+            }
         }
     }
 }
@@ -147,7 +212,9 @@ unsafe fn tree_view(py: Python<'_>, tree: &mut TreeView, nodes: Vec<Py<TreeNode>
     let (_, actions) = egui_ltreeview::TreeView::new(id)
         .allow_multi_selection(tree.multi_select)
         .allow_drag_and_drop(tree.drag_and_drop)
-        .show_state(ui, &mut tree.state, |builder| add_nodes(py, builder, &nodes));
+        .show_state(ui, &mut tree.state, |builder| {
+            add_nodes(py, builder, &nodes, tree.default_open, tree.activatable_dirs)
+        });
 
     tree.activated.clear();
     tree.moved = None;
