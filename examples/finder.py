@@ -17,6 +17,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from pyegui import *
 
@@ -746,6 +747,33 @@ def action_open():
         open_item(folders[0])  # a folder opens in place, only one at a time
 
 
+def app_installed(name):
+    """a macOS application in /Applications or ~/Applications"""
+    return MACOS and any((Path(base) / f"{name}.app").exists() for base in ("/Applications", HOME / "Applications"))
+
+
+def zed_command():
+    """the command that opens files in Zed, or None when it is not installed"""
+    if app_installed("Zed"):
+        return ["open", "-a", "Zed"]  # never blocks, the CLI is often not installed
+    return next(([found] for found in map(shutil.which, ("zed", "zeditor")) if found), None)
+
+
+def target_directory():
+    """the selected folder, the folder of the selected file, or the current folder"""
+    path = targets()[0]
+    return path if path.is_dir() else path.parent
+
+
+def open_in_zed():
+    subprocess.Popen([*zed_command(), *map(str, targets())])  # without selection: the current folder
+
+
+def open_in_claude(mode):
+    """Claude Desktop opens the folder in Code or Cowork mode, and asks to confirm it"""
+    context[0].open_url(f"claude://{mode}/new?folder={quote(str(target_directory()), safe='')}")
+
+
 def has_selection():
     return bool(chosen())
 
@@ -759,6 +787,9 @@ ACTIONS = [
     ("Open", "Open", "open", "Cmd+ArrowDown", has_selection, action_open),
     ("Open", "Show Parent Folder", "folder-up", None,
      lambda: one_selected() and Path(selected.value).parent != current(), show_parent),
+    *([("Open", "Open with Zed", "zed", "Cmd+Shift+Z", lambda: True, open_in_zed)] if zed_command() else []),
+    *([("Open", f"Open with Claude ({label})", "claude", None, lambda: True, lambda mode=mode: open_in_claude(mode))
+       for mode, label in (("code", "Code"), ("cowork", "Cowork"))] if app_installed("Claude") or sys.platform == "win32" else []),
     ("Edit", "Rename", "rename", "F2", one_selected, lambda: start_rename(Path(selected.value))),
     ("Edit", "Copy", "copy", "Cmd+C", has_selection, lambda: copy_to_clipboard(False)),
     ("Edit", "Cut", "cut", "Cmd+X", has_selection, lambda: copy_to_clipboard(True)),
