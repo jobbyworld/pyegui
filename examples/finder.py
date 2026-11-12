@@ -211,7 +211,7 @@ search = Str("")
 show_sidebar = Bool(True)
 ZONES = ["sidebar", "content", "dock"]  # F6 goes through them, left to right
 focus_zone = Str("content")  # the part of the window the keyboard acts on, see keyboard()
-show_dock = Bool(True)  # the dock on the right: Actions and Preview
+show_dock = Bool(True)  # the dock around the files: Actions, Preview, Notes and Tags
 folded = set()  # categories of the Actions panel folded shut
 renaming = Str("")  # path being renamed, or ""
 new_name = Str("")
@@ -599,8 +599,12 @@ def restore(saved):
     show_dock.value = saved.get("show_dock", show_dock.value)
     folded.update(saved.get("folded", []))
     tree_to_open.update(Path(p) for p in saved.get("tree_open", []) if isinstance(p, str))
-    if saved.get("dock"):
-        dock.load(saved["dock"])  # a layout that no longer fits is ignored
+    layout = saved.get("dock")
+    if layout and not has_pane(layout, CENTRAL):
+        # saved before the files were a pane: what was on the right stays there
+        layout = {"kind": "horizontal", "shares": [4.0, 1.0], "children": [{"pane": CENTRAL}, layout]}
+    if layout:
+        dock.load(layout)  # a layout that no longer fits is ignored
     folder = Path(saved.get("folder", ""))
     if len(sys.argv) < 2 and folder.is_dir():  # a folder given on the command line wins
         history[:] = [folder]
@@ -2023,23 +2027,6 @@ def path_bar():
     horizontal(crumbs)
 
 
-# the dock on the right: panes the user can close, move by their tab, and drop on another side
-PANES = {
-    "Actions": lambda: scroll_area_vertical(actions_panel),
-    "Preview": lambda: scroll_area_vertical(preview),
-    "Notes": notes_panel,
-    "Tags": lambda: scroll_area_vertical(tags_panel),
-}
-dock = Dock(
-    DockContainer(
-        "vertical", [DockPane(title, ui, closable=True) for title, ui in PANES.items()]
-    ),
-    id="inspector",
-    tab_bar_height=26,
-    pane_margin=8,
-)
-
-
 def in_zone(zone, ui):
     """a click anywhere in the part of the window moves the keyboard focus there"""
 
@@ -2070,6 +2057,58 @@ def zone_stroke(zone, otherwise):
     color = ACCENTS[accent_name.value]
     r, g, b = (int(color[i : i + 2], 16) for i in (1, 3, 5))
     return (2, (r, g, b, round(255 * alpha)))
+
+
+# the dock fills the middle of the window: the files are one of its panes (that cannot be closed), the
+# others can be closed, moved by their tab and dropped on any side of the files or of each other
+CENTRAL = "Fichiers"
+
+
+def zone_pane(zone, ui, margin=0):
+    """a pane of the dock that is a zone of the keyboard focus: a click in it gives it the focus, and
+    its outline shows it when the focus moves"""
+    return lambda: frame(
+        in_zone(zone, ui),
+        inner_margin=margin,
+        rounding=6,
+        stroke=zone_stroke(zone, (0, (0, 0, 0, 0))),
+    )
+
+
+PANES = {
+    "Actions": zone_pane("dock", lambda: scroll_area_vertical(actions_panel)),
+    "Preview": zone_pane("dock", lambda: scroll_area_vertical(preview)),
+    "Notes": zone_pane("dock", notes_panel),
+    "Tags": zone_pane("dock", lambda: scroll_area_vertical(tags_panel)),
+}
+central_ui = zone_pane("content", content, margin=8)
+dock = Dock(
+    DockContainer(
+        "horizontal",
+        [
+            DockPane(CENTRAL, central_ui),
+            DockContainer(
+                "vertical",
+                [DockPane(title, ui, closable=True) for title, ui in PANES.items()],
+            ),
+        ],
+    ),
+    id="inspector",
+    tab_bar_height=26,
+    pane_margin=8,
+)
+default_layout = dock.save()
+default_layout["shares"] = [4.0, 1.0]  # the files take most of the width
+dock.load(default_layout)
+
+
+def has_pane(layout, title):
+    """is this pane in a layout saved by dock.save()"""
+    if not isinstance(layout, dict):
+        return False
+    return layout.get("pane") == title or any(
+        has_pane(child, title) for child in layout.get("children", [])
+    )
 
 
 def update_func(ctx):
@@ -2112,21 +2151,8 @@ def update_func(ctx):
         rounding=12,
         stroke=edge,
     )
-    right_panel(
-        "dock",
-        in_zone("dock", lambda: dock_area(dock)),
-        expanded=show_dock,
-        default_size=300,
-        min_size=220,
-        inner_margin=6,
-        show_separator_line=False,
-        stroke=zone_stroke("dock", (0, (0, 0, 0, 0))),
-    )
-    frame(
-        in_zone("content", content),
-        inner_margin=16,
-        stroke=zone_stroke("content", (0, (0, 0, 0, 0))),
-    )
+    # the panes of the dock, or the files alone when the dock is hidden
+    frame(lambda: dock_area(dock) if show_dock.value else central_ui(), inner_margin=6)
     if renaming.value:
         rename_dialog()
     if palette_open.value:
