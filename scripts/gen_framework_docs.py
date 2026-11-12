@@ -81,7 +81,7 @@ THEMES = [
     ("interaction", "Keyboard, mouse and drag and drop",
      "Shortcuts are read with `key_pressed`; what the user did to a widget is read from its "
      "`Response` or from the value the function returns.",
-     ["key_pressed", "typed_text", "modifiers", "pointer_pos", "ui_contains_pointer", "interactive", "draw_rect",
+     ["key_pressed", "typed_text", "modifiers", "pointer_pos", "pointer_pressed", "ui_contains_pointer", "interactive", "draw_rect",
       "dnd_drag_source", "dnd_drop_zone"]),
     ("styling", "Themes, colors, fonts and glass",
      "Everything that changes the look is a method of the `Context`, given to the update "
@@ -219,7 +219,7 @@ def main():
     if missing:
         sys.exit(f"names in no theme: {sorted(missing)}")
     uncovered = [f"Context.{m}" for m in members(pyegui.Context)
-                 if f"Context.{m}" not in placed and m not in ("copy_text", "open_url", "load_state", "save_state")]
+                 if f"Context.{m}" not in placed and m not in ("copy_text", "open_url", "load_state", "save_state", "request_repaint")]
     if uncovered:
         sys.exit(f"members of Context in no theme: {uncovered}")
     (OUT / "README.md").write_text("\n".join(index) + "\n")

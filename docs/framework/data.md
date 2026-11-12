@@ -118,9 +118,20 @@ def update_func(ctx):
 
 
 - `TreeView.activated` (attribute): Ids of the nodes activated by a double click or enter during the last frame
+- `TreeView.focus(focused=True)` (method): Gives the keyboard focus to the tree (True, the default) or takes it away (False) at the
+
+  next tree_view. With the focus the arrows, Enter and the other keys work without a click,
+  so an app that manages its own focus can hand it to the tree, or to another part of the
+  window
+
 - `TreeView.is_open(id)` (method): True if the directory is open. Useful to load the children of a directory only when it is
 
   opened: give it an empty list of children until then
+
+- `TreeView.keep_focus` (attribute): If True, the tree takes back the keyboard focus at every tree_view when another widget
+
+  holds it, except a text field being edited. For an app where the tree is the part of the
+  window the keyboard acts on: a click on a button or a blank area does not cut the arrows
 
 - `TreeView.moved` (attribute): Nodes dropped during the last frame, if drag_and_drop is enabled.
 
@@ -145,6 +156,7 @@ Ids must be unique in the tree.
 - `label` (str): the text of the node
 - `children` (list[TreeNode]): the nodes of a directory, None for a leaf
 - `icon` (str): uri of an image shown before the label, like for image(), e.g. from file_icon
+- `badges` (list[tuple]): colors (r, g, b, a) of dots drawn at the right end of the row, e.g. the tags of a file
 
 **Usage:**
 
@@ -156,6 +168,7 @@ nodes = [
 ```
 
 
+- `TreeNode.badges` (attribute)
 - `TreeNode.children` (attribute)
 - `TreeNode.icon` (attribute)
 - `TreeNode.id` (attribute)
