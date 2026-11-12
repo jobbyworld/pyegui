@@ -1430,22 +1430,32 @@ unsafe fn weak(text: &str) -> PyResult<()> {
 ///     truncate (bool): keep the text on one line and end it with … when it is too long for the
 ///         width, instead of wrapping it. Default is False
 ///
+///     selectable (bool): whether the user can select the text to copy it. Default is True.
+///         Set it to False when the label is inside an interactive() area, otherwise clicking
+///         the text starts a text selection instead of reaching the click of the area around it
+///
 /// Example::
 ///
 ///     label("some text")
 ///     label("📁", size=48)
 ///     label(file_name, truncate=True)
 #[pyfunction]
-#[pyo3(signature = (text, size=None, truncate=false))]
-unsafe fn label(text: &str, size: Option<f32>, truncate: bool) -> PyResult<()> {
+#[pyo3(signature = (text, size=None, truncate=false, selectable=None))]
+unsafe fn label(text: &str, size: Option<f32>, truncate: bool, selectable: Option<bool>) -> PyResult<()> {
     let ui = current_ui(&UI)?;
 
     let text = match size {
         Some(size) => egui::RichText::new(text).size(size),
         None => egui::RichText::new(text),
     };
-    let label = egui::Label::new(text);
-    ui.add(if truncate { label.truncate() } else { label });
+    let mut label = egui::Label::new(text);
+    if truncate {
+        label = label.truncate();
+    }
+    if let Some(selectable) = selectable {
+        label = label.selectable(selectable);
+    }
+    ui.add(label);
     Ok(())
 }
 

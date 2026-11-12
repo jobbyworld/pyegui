@@ -19,32 +19,150 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from pyegui import *
+from pyegui import (
+    Backdrop,
+    Bool,
+    Dock,
+    DockContainer,
+    DockPane,
+    Int,
+    Str,
+    TreeNode,
+    TreeView,
+    add_enabled,
+    add_space,
+    available_height,
+    available_width,
+    bottom_panel,
+    button_clicked,
+    close_menu,
+    code,
+    colored_label,
+    columns,
+    dock_area,
+    draw_rect,
+    end_row,
+    file_icon,
+    grid,
+    horizontal,
+    image,
+    image_button_clicked,
+    interactive,
+    key_pressed,
+    label,
+    left_panel,
+    link_clicked,
+    menu_button,
+    menu_image_button,
+    modal,
+    modifiers,
+    pointer_pos,
+    radio_clicked,
+    radio_value,
+    right_panel,
+    run_native,
+    scroll_area_both,
+    scroll_area_vertical,
+    scroll_to_rect,
+    segmented_control,
+    selectable_label_response,
+    separator,
+    set_min_height,
+    set_min_width,
+    small,
+    strong,
+    table_ui,
+    text_edit_singleline,
+    toggle_value,
+    tooltip,
+    top_panel,
+    tree_view,
+    typed_text,
+    vertical_centered,
+    weak,
+)
 
-BACKDROP = {"win32": Backdrop.ACRYLIC, "darwin": Backdrop.LIQUID_GLASS}.get(sys.platform)
+BACKDROP = {"win32": Backdrop.ACRYLIC, "darwin": Backdrop.LIQUID_GLASS}.get(
+    sys.platform
+)
 MACOS = sys.platform == "darwin"
 HOME = Path.home()
-ICONS_DIR = Path(__file__).resolve().parent / "icons"  # white SVG icons, tinted to the theme
+ICONS_DIR = (
+    Path(__file__).resolve().parent / "icons"
+)  # white SVG icons, tinted to the theme
 
 TREE, LIST, ICONS = 0, 1, 2  # the order of the segmented control of the toolbar
 LIGHT, DARK, SYSTEM = 0, 1, 2
 NO_GLASS, PARTIAL, FULL = 0, 1, 2
-ACCENTS = {"Blue": "#3b82f6", "Violet": "#8b5cf6", "Green": "#10b981", "Orange": "#f97316"}
+ACCENTS = {
+    "Blue": "#3b82f6",
+    "Violet": "#8b5cf6",
+    "Green": "#10b981",
+    "Orange": "#f97316",
+}
 
-TEXT_SUFFIXES = {".py", ".rs", ".md", ".txt", ".toml", ".rst", ".json", ".yml", ".yaml", ".cfg", ".lock", ".sh", ".js", ".css", ".html"}
+TEXT_SUFFIXES = {
+    ".py",
+    ".rs",
+    ".md",
+    ".txt",
+    ".toml",
+    ".rst",
+    ".json",
+    ".yml",
+    ".yaml",
+    ".cfg",
+    ".lock",
+    ".sh",
+    ".js",
+    ".css",
+    ".html",
+}
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
 EMOJIS = {
-    ".py": "🐍", ".rs": "🦀", ".md": "📝", ".txt": "📝", ".rst": "📝", ".pdf": "📕",
-    ".png": "🖼", ".jpg": "🖼", ".jpeg": "🖼", ".gif": "🖼", ".svg": "🖼", ".webp": "🖼",
-    ".zip": "🗜", ".gz": "🗜", ".toml": "⚙", ".json": "⚙", ".yml": "⚙", ".yaml": "⚙", ".lock": "🔒",
+    ".py": "🐍",
+    ".rs": "🦀",
+    ".md": "📝",
+    ".txt": "📝",
+    ".rst": "📝",
+    ".pdf": "📕",
+    ".png": "🖼",
+    ".jpg": "🖼",
+    ".jpeg": "🖼",
+    ".gif": "🖼",
+    ".svg": "🖼",
+    ".webp": "🖼",
+    ".zip": "🗜",
+    ".gz": "🗜",
+    ".toml": "⚙",
+    ".json": "⚙",
+    ".yml": "⚙",
+    ".yaml": "⚙",
+    ".lock": "🔒",
 }
 KINDS = {
-    ".py": "Python script", ".rs": "Rust source", ".md": "Markdown", ".txt": "Plain text",
-    ".rst": "reStructuredText", ".pdf": "PDF document", ".png": "PNG image", ".jpg": "JPEG image",
-    ".jpeg": "JPEG image", ".svg": "SVG image", ".toml": "TOML", ".json": "JSON", ".lock": "Lock file",
+    ".py": "Python script",
+    ".rs": "Rust source",
+    ".md": "Markdown",
+    ".txt": "Plain text",
+    ".rst": "reStructuredText",
+    ".pdf": "PDF document",
+    ".png": "PNG image",
+    ".jpg": "JPEG image",
+    ".jpeg": "JPEG image",
+    ".svg": "SVG image",
+    ".toml": "TOML",
+    ".json": "JSON",
+    ".lock": "Lock file",
     ".zip": "ZIP archive",
 }
-TAGS = [("Red", "#ef4444"), ("Orange", "#f97316"), ("Green", "#22c55e"), ("Blue", "#3b82f6"), ("Purple", "#a855f7")]
+TAGS = [
+    ("Red", "#ef4444"),
+    ("Orange", "#f97316"),
+    ("Green", "#22c55e"),
+    ("Blue", "#3b82f6"),
+    ("Purple", "#a855f7"),
+]
 
 # state
 
@@ -81,6 +199,7 @@ tree_paths = {}  # id -> path
 
 # files
 
+
 def current():
     return history[position.value]
 
@@ -104,7 +223,9 @@ def entry(path):
         "name": path.name or str(path),
         "is_dir": is_dir,
         "emoji": "📁" if is_dir else EMOJIS.get(suffix, "📄"),
-        "kind": "Folder" if is_dir else KINDS.get(suffix, f"{suffix[1:].upper()} file" if suffix else "Document"),
+        "kind": "Folder"
+        if is_dir
+        else KINDS.get(suffix, f"{suffix[1:].upper()} file" if suffix else "Document"),
         "size": "--" if is_dir else human_size(stat.st_size),
         "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%d %b %Y at %H:%M"),
     }
@@ -118,7 +239,9 @@ def listing(folder):
             paths = []
         entries = [e for e in map(entry, paths) if e]
         # folders first, then by name like the Finder
-        listing_cache[folder] = sorted(entries, key=lambda e: (not e["is_dir"], e["name"].lower()))
+        listing_cache[folder] = sorted(
+            entries, key=lambda e: (not e["is_dir"], e["name"].lower())
+        )
     return listing_cache[folder]
 
 
@@ -133,7 +256,9 @@ def selected_entry():
 
 def chosen():
     """the selected paths that still exist, in name order"""
-    return sorted((Path(p) for p in picked if Path(p).exists()), key=lambda p: p.name.lower())
+    return sorted(
+        (Path(p) for p in picked if Path(p).exists()), key=lambda p: p.name.lower()
+    )
 
 
 def deselect():
@@ -153,16 +278,19 @@ def icon(item, size):
     if uri:
         image(uri, size=size)  # the room is kept while the icon loads
     else:
-        label(item["emoji"], size=size * 0.8)
+        # not selectable: inside icon_view's interactive() tile, a selectable label would
+        # steal the click as a text selection instead of letting the tile's own click through
+        label(item["emoji"], size=size * 0.8, selectable=False)
 
 
 # navigation
+
 
 def go(folder):
     folder = Path(folder)
     if folder == current() or not folder.is_dir():
         return
-    del history[position.value + 1:]
+    del history[position.value + 1 :]
     history.append(folder)
     position.value = len(history) - 1
     deselect()
@@ -209,7 +337,7 @@ def pick(item, entries):
         if anchor.value in paths and path in paths:
             a, b = sorted((paths.index(anchor.value), paths.index(path)))
             picked.clear()
-            picked.update(paths[a:b + 1])
+            picked.update(paths[a : b + 1])
             selected.value = path
         else:
             select(item)
@@ -267,7 +395,12 @@ def keyboard():
     index = paths.index(selected.value) if selected.value in paths else -1
     per_row = icons_per_row.value if view.value == ICONS else 1
     page = per_row * 5
-    steps = [("ArrowDown", per_row), ("ArrowUp", -per_row), ("PageDown", page), ("PageUp", -page)]
+    steps = [
+        ("ArrowDown", per_row),
+        ("ArrowUp", -per_row),
+        ("PageDown", page),
+        ("PageUp", -page),
+    ]
     if view.value == ICONS:
         steps += [("ArrowRight", 1), ("ArrowLeft", -1)]
     target = None
@@ -280,10 +413,12 @@ def keyboard():
         target = len(entries) - 1
     if target is None:
         return
-    if modifiers()["shift"] and anchor.value in paths:  # Shift extends the range from the anchor
+    if (
+        modifiers()["shift"] and anchor.value in paths
+    ):  # Shift extends the range from the anchor
         a, b = sorted((paths.index(anchor.value), target))
         picked.clear()
-        picked.update(paths[a:b + 1])
+        picked.update(paths[a : b + 1])
         selected.value = paths[target]
     else:
         select(entries[target])
@@ -291,6 +426,7 @@ def keyboard():
 
 
 # style, as the View menu of app.py
+
 
 def apply_style():
     ctx = context[0]
@@ -302,7 +438,10 @@ def apply_style():
         ctx.set_system_theme()
     ctx.reset_style()
     if glass.value != NO_GLASS:
-        ctx.set_glass_style(accent=ACCENTS[accent_name.value], mode="full" if glass.value == FULL else "partial")
+        ctx.set_glass_style(
+            accent=ACCENTS[accent_name.value],
+            mode="full" if glass.value == FULL else "partial",
+        )
     else:
         ctx.set_accent(ACCENTS[accent_name.value])
 
@@ -335,6 +474,7 @@ def settings_menu():
 
 # sidebar
 
+
 def sidebar():
     if MACOS:
         add_space(26)  # the window buttons are over the sidebar
@@ -347,8 +487,14 @@ def sidebar():
         if not path.is_dir():
             return
         on = current() == path
-        if image_button_clicked(svg(icon_name), name, size=16, tint=(255, 255, 255) if on else accent,
-                                selected=on, frame=False):
+        if image_button_clicked(
+            svg(icon_name),
+            name,
+            size=16,
+            tint=(255, 255, 255) if on else accent,
+            selected=on,
+            frame=False,
+        ):
             go(path)
 
     weak("Favorites")
@@ -357,19 +503,26 @@ def sidebar():
     place("document", "Documents", HOME / "Documents")
     place("download", "Downloads", HOME / "Downloads")
     place("folder", "pyegui", Path(__file__).resolve().parent.parent)
+    place("folder", "Developpement", r"C:\developpement")
+    place("folder", "Tech", r"C:\Users\Joachim\tech")
+
     add_space(12)
     weak("Locations")
-    place("drive", "Macintosh HD" if MACOS else "Root", Path(current().anchor))
+    for drive in drives():
+        place("drive", place_name(drive), drive)
     add_space(12)
     weak("Tags")
     for name, color in TAGS:
+
         def tag(name=name, color=color):
             colored_label(color, "●")
             label(name)
+
         horizontal(tag)
 
 
 # toolbar
+
 
 def svg(name):
     return (ICONS_DIR / f"{name}.svg").as_uri()
@@ -381,17 +534,36 @@ def icon_tint():
 
 
 def place_name(path):
-    return path.name or ("Macintosh HD" if MACOS else str(path))
+    return path.name or ("Macintosh HD" if MACOS else path.drive)
+
+
+def drives():
+    """the mounted drives, for the Locations section of the sidebar: one on macOS, every
+    connected drive letter on Windows (local disks and mapped network drives alike)"""
+    if MACOS:
+        return [Path("/")]
+    import ctypes
+    import string
+
+    mask = ctypes.windll.kernel32.GetLogicalDrives()
+    return [Path(f"{letter}:/") for i, letter in enumerate(string.ascii_uppercase) if mask & (1 << i)]
 
 
 def ancestors_menu():
     """the current folder then its parents, like the title menu of the Finder"""
     for path in [current(), *current().parents]:
+
         def row(path=path):
             # the check mark of the current folder, an invisible one keeps the others aligned
-            colored_label((127, 127, 127, 255) if path == current() else (0, 0, 0, 0), "✓")
+            colored_label(
+                (127, 127, 127, 255) if path == current() else (0, 0, 0, 0), "✓"
+            )
             uri = file_icon(str(path), 16)
-            clicked = image_button_clicked(uri, place_name(path)) if uri else button_clicked(place_name(path))
+            clicked = (
+                image_button_clicked(uri, place_name(path))
+                if uri
+                else button_clicked(place_name(path))
+            )
             if clicked:
                 go(path)
                 close_menu()
@@ -404,7 +576,9 @@ def toolbar():
 
     def bar():
         if MACOS and not show_sidebar.value:
-            add_space(64)  # the window buttons are over the toolbar when the sidebar is hidden
+            add_space(
+                64
+            )  # the window buttons are over the toolbar when the sidebar is hidden
         if image_button_clicked(svg("chevron-left"), size=16, tint=tint):
             back()
         if image_button_clicked(svg("chevron-right"), size=16, tint=tint):
@@ -414,11 +588,18 @@ def toolbar():
             if image_button_clicked(svg("chevron-up"), size=16, tint=tint):
                 go(current().parent)
 
-        add_enabled(current().parent != current(), parent_button)  # greyed out at the root
+        add_enabled(
+            current().parent != current(), parent_button
+        )  # greyed out at the root
         add_space(6)
         menu_button(f"{place_name(current())}  ▾", ancestors_menu, size=14)
         add_space(max(available_width() - 640, 8))
-        segmented_control(view, [(svg("tree"), None), (svg("list"), None), (svg("grid"), None)], size=16, tint=tint)
+        segmented_control(
+            view,
+            [(svg("tree"), None), (svg("list"), None), (svg("grid"), None)],
+            size=16,
+            tint=tint,
+        )
         text_edit_singleline(search, hint_text="Search")
         menu_image_button(svg("gear"), settings_menu, size=18, tint=tint)
 
@@ -427,15 +608,24 @@ def toolbar():
 
 # views
 
+
 def list_view():
     entries = visible_entries()
 
     def cell(row, col):
         item = entries[row]
         if col == 0:
+
             def name():
                 icon(item, 18)
-                handle(item, selectable_label_response(str(item["path"]) in picked, item["name"]), entries)
+                handle(
+                    item,
+                    selectable_label_response(
+                        str(item["path"]) in picked, item["name"]
+                    ),
+                    entries,
+                )
+
             horizontal(name)
         elif col == 1:
             weak(item["modified"])
@@ -446,9 +636,15 @@ def list_view():
 
     paths = [str(e["path"]) for e in entries]
     row = paths.index(scroll_target.value) if scroll_target.value in paths else None
-    table_ui(["Name", "Date Modified", "Size", "Kind"], len(entries), cell,
-             id=f"list {current()}", column_widths=[290, 165, 80, "remainder"], striped=True,
-             scroll_to_row=row)
+    table_ui(
+        ["Name", "Date Modified", "Size", "Kind"],
+        len(entries),
+        cell,
+        id=f"list {current()}",
+        column_widths=[290, 165, 80, "remainder"],
+        striped=True,
+        scroll_to_row=row,
+    )
 
 
 def icon_view():
@@ -461,7 +657,7 @@ def icon_view():
 
     def rows():
         for start_index in range(0, len(entries), per_row):
-            row = entries[start_index:start_index + per_row]
+            row = entries[start_index : start_index + per_row]
 
             def column(i, row=row):
                 if i >= len(row):
@@ -471,13 +667,19 @@ def icon_view():
                 def tile():
                     set_min_width(available_width())  # every tile as wide as its column
                     icon(item, 56)
-                    label(item["name"], truncate=True)  # one line, ended with … when too long
+                    # not selectable, so the click reaches the tile instead of selecting the text
+                    label(item["name"], truncate=True, selectable=False)
 
                 # the icon and the name are one target: a click anywhere on the tile selects it
                 response = interactive(lambda: vertical_centered(tile))
                 tiles[str(item["path"])] = response.rect
                 if str(item["path"]) in picked:
-                    draw_rect(response.rect, fill=accent + "50", stroke=(1, accent), rounding=6)
+                    draw_rect(
+                        response.rect,
+                        fill=accent + "50",
+                        stroke=(1, accent),
+                        rounding=6,
+                    )
                 elif response.hovered:
                     draw_rect(response.rect, fill=(127, 127, 127, 40), rounding=6)
                 handle(item, response, entries)
@@ -513,8 +715,11 @@ def rubber_band(response, tiles, accent):
         return
     (x0, y0), (x1, y1) = band["start"], here
     rect = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
-    touched = {path for path, (l, t, r, b) in tiles.items()
-               if l < rect[2] and r > rect[0] and t < rect[3] and b > rect[1]}
+    touched = {
+        path
+        for path, (l, t, r, b) in tiles.items()
+        if l < rect[2] and r > rect[0] and t < rect[3] and b > rect[1]
+    }
     picked.clear()
     picked.update(band["base"] | touched)
     if selected.value not in picked:
@@ -534,17 +739,29 @@ def tree_node(item):
     if not item["is_dir"]:
         return TreeNode(node_id, text, icon=icon_uri)
     # the children of a folder are read only once it is opened
-    children = [tree_node(child) for child in listing(path)] if tree.is_open(node_id) else []
+    children = (
+        [tree_node(child) for child in listing(path)] if tree.is_open(node_id) else []
+    )
     return TreeNode(node_id, text, children, icon=icon_uri)
 
 
 def tree_view_ui():
     def nodes():
         query = search.value.lower()
-        nodes_ = [tree_node(e) for e in listing(current()) if query in e["name"].lower()]
-        if picked != tree_picked:  # selected somewhere else since the last frame: the tree follows
+        nodes_ = [
+            tree_node(e) for e in listing(current()) if query in e["name"].lower()
+        ]
+        if (
+            picked != tree_picked
+        ):  # selected somewhere else since the last frame: the tree follows
             tree.selected = [tree_ids[Path(p)] for p in picked if Path(p) in tree_ids]
-        tree_view(tree, nodes_, scroll_to=tree_ids.get(Path(scroll_target.value)) if scroll_target.value else None)
+        tree_view(
+            tree,
+            nodes_,
+            scroll_to=tree_ids.get(Path(scroll_target.value))
+            if scroll_target.value
+            else None,
+        )
         tree_picked.clear()
         tree_picked.update(str(tree_paths[i]) for i in tree.selected)
         if tree_picked != picked:
@@ -572,6 +789,7 @@ def content():
 
 # preview
 
+
 def preview():
     item = selected_entry()
     if item is None:
@@ -598,8 +816,12 @@ def preview():
     separator()
 
     def rows():
-        for name, value in [("Kind", item["kind"]), ("Size", item["size"]), ("Modified", item["modified"]),
-                            ("Where", str(item["path"].parent).replace(str(HOME), "~"))]:
+        for name, value in [
+            ("Kind", item["kind"]),
+            ("Size", item["size"]),
+            ("Modified", item["modified"]),
+            ("Where", str(item["path"].parent).replace(str(HOME), "~")),
+        ]:
             weak(name)
             label(value)
             end_row()
@@ -625,6 +847,7 @@ def preview():
 
 
 # actions: one registry read by the panel and by the keyboard, like the Actions dock of pyfinder
+
 
 def targets():
     """the selected items, or the current folder when nothing is selected"""
@@ -676,7 +899,9 @@ def duplicate():
     copies = []
     for source in chosen():
         target = unique(source)
-        shutil.copytree(source, target) if source.is_dir() else shutil.copy2(source, target)
+        shutil.copytree(source, target) if source.is_dir() else shutil.copy2(
+            source, target
+        )
         copies.append(target)
     refresh(current())
     picked.clear()
@@ -727,7 +952,11 @@ def group():
 
 def can_group():
     paths = chosen()
-    return bool(paths) and len({p.parent for p in paths}) == 1 and paths[0].parent == current()
+    return (
+        bool(paths)
+        and len({p.parent for p in paths}) == 1
+        and paths[0].parent == current()
+    )
 
 
 def show_parent():
@@ -749,14 +978,19 @@ def action_open():
 
 def app_installed(name):
     """a macOS application in /Applications or ~/Applications"""
-    return MACOS and any((Path(base) / f"{name}.app").exists() for base in ("/Applications", HOME / "Applications"))
+    return MACOS and any(
+        (Path(base) / f"{name}.app").exists()
+        for base in ("/Applications", HOME / "Applications")
+    )
 
 
 def zed_command():
     """the command that opens files in Zed, or None when it is not installed"""
     if app_installed("Zed"):
         return ["open", "-a", "Zed"]  # never blocks, the CLI is often not installed
-    return next(([found] for found in map(shutil.which, ("zed", "zeditor")) if found), None)
+    return next(
+        ([found] for found in map(shutil.which, ("zed", "zeditor")) if found), None
+    )
 
 
 def target_directory():
@@ -766,12 +1000,16 @@ def target_directory():
 
 
 def open_in_zed():
-    subprocess.Popen([*zed_command(), *map(str, targets())])  # without selection: the current folder
+    subprocess.Popen(
+        [*zed_command(), *map(str, targets())]
+    )  # without selection: the current folder
 
 
 def open_in_claude(mode):
     """Claude Desktop opens the folder in Code or Cowork mode, and asks to confirm it"""
-    context[0].open_url(f"claude://{mode}/new?folder={quote(str(target_directory()), safe='')}")
+    context[0].open_url(
+        f"claude://{mode}/new?folder={quote(str(target_directory()), safe='')}"
+    )
 
 
 def has_selection():
@@ -785,22 +1023,79 @@ def one_selected():
 # category, label, icon, shortcut, enabled, run. "Cmd" is the command key on macOS and ctrl elsewhere
 ACTIONS = [
     ("Open", "Open", "open", "Cmd+ArrowDown", has_selection, action_open),
-    ("Open", "Show Parent Folder", "folder-up", None,
-     lambda: one_selected() and Path(selected.value).parent != current(), show_parent),
-    *([("Open", "Open with Zed", "zed", "Cmd+Shift+Z", lambda: True, open_in_zed)] if zed_command() else []),
-    *([("Open", f"Open with Claude ({label})", "claude", None, lambda: True, lambda mode=mode: open_in_claude(mode))
-       for mode, label in (("code", "Code"), ("cowork", "Cowork"))] if app_installed("Claude") or sys.platform == "win32" else []),
-    ("Edit", "Rename", "rename", "F2", one_selected, lambda: start_rename(Path(selected.value))),
+    (
+        "Open",
+        "Show Parent Folder",
+        "folder-up",
+        None,
+        lambda: one_selected() and Path(selected.value).parent != current(),
+        show_parent,
+    ),
+    *(
+        [("Open", "Open with Zed", "zed", "Cmd+Shift+Z", lambda: True, open_in_zed)]
+        if zed_command()
+        else []
+    ),
+    *(
+        [
+            (
+                "Open",
+                f"Open with Claude ({label})",
+                "claude",
+                None,
+                lambda: True,
+                lambda mode=mode: open_in_claude(mode),
+            )
+            for mode, label in (("code", "Code"), ("cowork", "Cowork"))
+        ]
+        if app_installed("Claude") or sys.platform == "win32"
+        else []
+    ),
+    (
+        "Edit",
+        "Rename",
+        "rename",
+        "F2",
+        one_selected,
+        lambda: start_rename(Path(selected.value)),
+    ),
     ("Edit", "Copy", "copy", "Cmd+C", has_selection, lambda: copy_to_clipboard(False)),
     ("Edit", "Cut", "cut", "Cmd+X", has_selection, lambda: copy_to_clipboard(True)),
     ("Edit", "Paste", "paste", "Cmd+V", lambda: bool(file_clipboard["paths"]), paste),
     ("Edit", "Duplicate", "duplicate", "Cmd+D", has_selection, duplicate),
-    ("Edit", "Group into Folder", "group", "Ctrl+Cmd+N" if MACOS else "Cmd+Alt+N", can_group, group),
+    (
+        "Edit",
+        "Group into Folder",
+        "group",
+        "Ctrl+Cmd+N" if MACOS else "Cmd+Alt+N",
+        can_group,
+        group,
+    ),
     ("Edit", "New Folder", "folder-plus", "Cmd+Shift+N", lambda: True, new_folder),
-    ("Edit", "Move to Trash", "trash", "Cmd+Backspace", lambda: MACOS and has_selection(), trash),
-    ("Tools", "Copy Path", "copy", "Cmd+Alt+C", lambda: True,
-     lambda: context[0].copy_text("\n".join(map(str, targets())))),
-    ("Tools", "Reveal in Finder" if MACOS else "Reveal in File Manager", "reveal", None, lambda: True, reveal),
+    (
+        "Edit",
+        "Move to Trash",
+        "trash",
+        "Cmd+Backspace",
+        lambda: MACOS and has_selection(),
+        trash,
+    ),
+    (
+        "Tools",
+        "Copy Path",
+        "copy",
+        "Cmd+Alt+C",
+        lambda: True,
+        lambda: context[0].copy_text("\n".join(map(str, targets()))),
+    ),
+    (
+        "Tools",
+        "Reveal in Finder" if MACOS else "Reveal in File Manager",
+        "reveal",
+        None,
+        lambda: True,
+        reveal,
+    ),
 ]
 
 
@@ -816,8 +1111,13 @@ def actions_panel():
     accent = ACCENTS[accent_name.value]
     for category in dict.fromkeys(a[0] for a in ACTIONS):
         opened = category not in folded
-        if image_button_clicked(svg("chevron-down" if opened else "chevron-right"), category.upper(), size=12,
-                                tint=accent, frame=False):
+        if image_button_clicked(
+            svg("chevron-down" if opened else "chevron-right"),
+            category.upper(),
+            size=12,
+            tint=accent,
+            frame=False,
+        ):
             folded.symmetric_difference_update({category})
         if not opened:
             continue
@@ -826,7 +1126,9 @@ def actions_panel():
                 continue
 
             def button(text=text, icon_name=icon_name, run=run):
-                if image_button_clicked(svg(icon_name), text, size=15, tint=tint, frame=False):
+                if image_button_clicked(
+                    svg(icon_name), text, size=15, tint=tint, frame=False
+                ):
                     run()
 
             def row(enabled=enabled, button=button):
@@ -844,7 +1146,12 @@ def rename_dialog():
         weak(f"Rename “{path.name}”")
         text_edit_singleline(new_name)
         valid = bool(new_name.value) and "/" not in new_name.value
-        if key_pressed("Enter", when_typing=True) and valid or button_clicked("Rename") and valid:
+        if (
+            key_pressed("Enter", when_typing=True)
+            and valid
+            or button_clicked("Rename")
+            and valid
+        ):
             if new_name.value != path.name:
                 try:
                     path.rename(path.with_name(new_name.value))
@@ -860,25 +1167,44 @@ def rename_dialog():
 
 # path bar
 
+
 def path_bar():
     def crumbs():
-        parts = [Path(current().anchor)] + list(reversed(current().parents))[1:] + [current()]
+        toggle_value(show_sidebar, "◧")
+        add_space(4)
+
+        anchor = Path(current().anchor)
+        ancestors = list(reversed(current().parents))[1:]
+        # current() is the anchor itself at a drive root: do not repeat it as an empty crumb
+        parts = [anchor] + ancestors + ([current()] if current() != anchor else [])
         for i, part in enumerate(parts):
             if i:
                 weak("›")
-            if link_clicked(("Macintosh HD" if MACOS else "Root") if i == 0 else part.name):
+            if link_clicked(place_name(part) if i == 0 else part.name):
                 go(part)
-        add_space(max(available_width() - 120, 8))
+
+        add_space(max(available_width() - 150, 8))
         count = len(visible_entries())
         weak(f"{count} item{'s' if count != 1 else ''}")
+        add_space(4)
+        toggle_value(show_dock, "◨")
 
     horizontal(crumbs)
 
 
 # the dock on the right: panes the user can close, move by their tab, and drop on another side
-PANES = {"Actions": lambda: scroll_area_vertical(actions_panel), "Preview": lambda: scroll_area_vertical(preview)}
-dock = Dock(DockContainer("vertical", [DockPane(title, ui, closable=True) for title, ui in PANES.items()]),
-            id="inspector", tab_bar_height=26, pane_margin=8)
+PANES = {
+    "Actions": lambda: scroll_area_vertical(actions_panel),
+    "Preview": lambda: scroll_area_vertical(preview),
+}
+dock = Dock(
+    DockContainer(
+        "vertical", [DockPane(title, ui, closable=True) for title, ui in PANES.items()]
+    ),
+    id="inspector",
+    tab_bar_height=26,
+    pane_margin=8,
+)
 
 
 def update_func(ctx):
@@ -889,17 +1215,57 @@ def update_func(ctx):
 
     keyboard()
     action_keys()
-    left_panel("sidebar", sidebar, expanded=show_sidebar, default_size=215, min_size=200, inner_margin=12,
-               show_separator_line=False)
-    top_panel("toolbar", toolbar, inner_margin=8, show_separator_line=False)
-    bottom_panel("path", path_bar, inner_margin=8, show_separator_line=False)
-    right_panel("dock", lambda: dock_area(dock), expanded=show_dock, default_size=300, min_size=220,
-                inner_margin=6, show_separator_line=False)
+    edge = (
+        1,
+        (127, 127, 127, 60),
+    )  # a hairline so the rounded corner reads against the content
+    left_panel(
+        "sidebar",
+        sidebar,
+        expanded=show_sidebar,
+        default_size=215,
+        min_size=200,
+        inner_margin=12,
+        show_separator_line=False,
+        rounding=12,
+        stroke=edge,
+    )
+    top_panel(
+        "toolbar",
+        toolbar,
+        inner_margin=8,
+        show_separator_line=False,
+        rounding=12,
+        stroke=edge,
+    )
+    bottom_panel(
+        "path",
+        path_bar,
+        inner_margin=8,
+        show_separator_line=False,
+        rounding=12,
+        stroke=edge,
+    )
+    right_panel(
+        "dock",
+        lambda: dock_area(dock),
+        expanded=show_dock,
+        default_size=300,
+        min_size=220,
+        inner_margin=6,
+        show_separator_line=False,
+    )
     content()
     if renaming.value:
         rename_dialog()
 
 
 if __name__ == "__main__":
-    run_native("Finder", update_func, inner_width=1180, inner_height=720, backdrop=BACKDROP,
-               fullsize_content=True)
+    run_native(
+        "Finder",
+        update_func,
+        inner_width=1180,
+        inner_height=720,
+        backdrop=BACKDROP,
+        fullsize_content=True,
+    )
