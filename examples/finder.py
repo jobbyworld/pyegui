@@ -1170,9 +1170,9 @@ def sidebar_content():
             hidden_below = tag["depth"]
 
         def row(tag=tag):
-            add_space(8 * tag["depth"])
+            add_space(12 + 8 * tag["depth"])  # the dot under the icons of the places
             colored_label(hex_color(tag["color"]) + (255,), "●")
-            add_space(-5)  # the name close to its dot
+            add_space(-13)  # the name in line with the names of the places
             if selectable_label_clicked(tag_filter.value == tag["id"], tag["name"]):
                 tag_filter.value = tag["id"]
                 deselect()
