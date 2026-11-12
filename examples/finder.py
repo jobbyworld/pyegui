@@ -1332,6 +1332,19 @@ def list_view():
     )
 
 
+TILE_DOT, TILE_DOT_GAP = 9, 3  # the dots of the tags over a tile of the icon view
+
+
+def draw_tag_dots(item, rect):
+    """the tags of an item as dots on the top left corner of its tile, from left to right"""
+    left, top, right, _ = rect
+    icon_left = (left + right) / 2 - 28  # the icon is 56 wide, in the middle of the tile
+    for i, (tag, how) in enumerate(tags_of(item["path"])):
+        x = icon_left + 2 + i * (TILE_DOT + TILE_DOT_GAP)
+        color = hex_color(tag["color"]) + (255 if how == "own" else 110,)
+        draw_rect((x, top + 4, x + TILE_DOT, top + 4 + TILE_DOT), fill=color, rounding=TILE_DOT / 2)
+
+
 def icon_view():
     entries = visible_entries()
     width, height = available_width(), available_height()
@@ -1354,7 +1367,6 @@ def icon_view():
                     icon(item, 56)
                     # not selectable, so the click reaches the tile instead of selecting the text
                     label(item["name"], truncate=True, selectable=False)
-                    horizontal(lambda item=item: tag_dots(item))
 
                 # the icon and the name are one target: a click anywhere on the tile selects it
                 response = interactive(lambda: vertical_centered(tile))
@@ -1368,6 +1380,7 @@ def icon_view():
                     )
                 elif response.hovered:
                     draw_rect(response.rect, fill=(127, 127, 127, 40), rounding=6)
+                draw_tag_dots(item, response.rect)
                 handle(item, response, entries)
                 if str(item["path"]) == scroll_target.value:
                     scroll_to_rect(response.rect)  # the whole tile comes into view
