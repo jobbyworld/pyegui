@@ -10,7 +10,7 @@ HOME = Path.home()
 @dataclass
 class AppState:
     pwd: Path = HOME
-    pwd_contents: [DirEntry] = None
+    pwd_contents: list[DirEntry] | None = None
 
     def set_pwd(self, entry):
         self.pwd = entry

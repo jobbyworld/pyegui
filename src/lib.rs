@@ -32,6 +32,10 @@ static mut APP_MUTEX: Mutex<()> = Mutex::new(());
 static mut CENTRAL: Option<Box<CentralPanelState>> = None;
 // backdrop requested by Context.set_backdrop, applied on the next frame
 static PENDING_BACKDROP: Mutex<Option<String>> = Mutex::new(None);
+// the state of the app as JSON: what was saved by the last run, and what the next save writes
+static LOADED_STATE: Mutex<Option<String>> = Mutex::new(None);
+static PENDING_STATE: Mutex<Option<String>> = Mutex::new(None);
+const STATE_KEY: &str = "pyegui_state";
 
 struct CentralPanelState {
     panel_ui: egui::Ui,
@@ -61,7 +65,7 @@ struct Context(egui::Context);
 
 #[pymethods]
 impl Context {
-    /// True when theme is dark
+    /// True when theme is light
     #[getter]
     fn is_light_theme(&self) -> bool {
         self.0.theme() == egui::Theme::Light
@@ -130,9 +134,56 @@ impl Context {
         Ok(())
     }
 
-    /// Open an URL in a browser.
+    /// Returns the state saved by the previous run with save_state(), or None the first time (or
+    /// without persist_id in run_native). Call it on the first frame, before drawing.
+    ///
+    /// Example::
+    ///
+    ///     def update_func(ctx):
+    ///         if not started:
+    ///             saved = ctx.load_state() or {}
+    ///             theme.value = saved.get("theme", 0)
+    ///             started = True
+    fn load_state(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let text = LOADED_STATE.lock().ok().and_then(|s| s.clone());
+        let Some(text) = text else { return Ok(None) };
+        match py.import("json")?.call_method1("loads", (text,)) {
+            Ok(state) => Ok(Some(state.unbind())),
+            Err(err) => {
+                log::warn!("Cannot read the saved state: {}", err);
+                Ok(None)
+            }
+        }
+    }
+
+    /// Remembers the state of the app, any value json can write (dict, list, str, numbers, bool,
+    /// None), to give it back to load_state() at the next run. It is written to disk every 30
+    /// seconds and when the window closes, only if run_native has a persist_id. The last call
+    /// wins: call it every frame with the whole state, it is cheap, or only when it changes.
+    ///
+    /// Example::
+    ///
+    ///     ctx.save_state({"theme": theme.value, "folder": str(current_folder)})
+    fn save_state(&self, py: Python<'_>, state: Bound<'_, PyAny>) -> PyResult<()> {
+        let text: String = py.import("json")?.call_method1("dumps", (state,))?.extract()?;
+        if let Ok(mut pending) = PENDING_STATE.lock() {
+            *pending = Some(text);
+        }
+        Ok(())
+    }
+
+    /// Opens an URL with whatever the OS has registered for it: the browser for a http(s)
+    /// address, or an installed application for its own scheme, e.g. "claude://..." for Claude
+    /// Desktop.
+    ///
+    /// Args:
+    ///     url (str): the address to open
+    ///
+    /// Example::
+    ///
+    ///     ctx.open_url("https://example.com")
     fn open_url(&self, url: &str) {
-        self.0.open_url(egui::OpenUrl::new_tab(url));
+        open_url_native(url);
     }
 
     /// Copy the given text to the system clipboard.
@@ -783,9 +834,20 @@ fn default_fonts() -> FontDefinitions {
 struct PyeguiApp<'py> {
     update_func: Bound<'py, PyAny>,
     transparent: bool,
+    persist: bool,
 }
 
 impl eframe::App for PyeguiApp<'_> {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        if let Some(state) = PENDING_STATE.lock().ok().and_then(|mut s| s.take()) {
+            storage.set_string(STATE_KEY, state);
+        }
+    }
+
+    fn persist_egui_memory(&self) -> bool {
+        self.persist
+    }
+
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         if self.transparent {
             // let the backdrop effect or the desktop show through
@@ -880,6 +942,11 @@ impl eframe::App for PyeguiApp<'_> {
 ///     "vibrancy" (macOS), "liquid_glass" and the more see-through "liquid_glass_clear" (macOS 26).
 ///     The Backdrop class has a constant for each of them, like Backdrop.MICA.
 ///     Ignored with a warning on other platforms
+///
+///     persist_id (str): a name that is unique to the app, e.g. "mycompany.finder". The position and
+///     size of the window, what egui remembers (scroll positions, collapsed sections) and the state
+///     given to ctx.save_state() are saved on disk under this name and come back at the next run.
+///     Nothing is saved without it
 ///
 ///     fullsize_content (bool): macOS: the content fills the window under a transparent title bar,
 ///     keeping the window buttons at the top left. Leave about 28 points free at the top of the
@@ -991,8 +1058,22 @@ unsafe fn run_native(
         }
     }
 
+    let persist_id = kwarg::<String>(kwargs, "persist_id")?;
+    let persist = persist_id.is_some();
+    if let Some(id) = &persist_id {
+        // the folder of the saved state is named after the app id
+        viewport = viewport.with_app_id(id.clone());
+    }
+    if let Ok(mut loaded) = LOADED_STATE.lock() {
+        *loaded = None;
+    }
+    if let Ok(mut pending) = PENDING_STATE.lock() {
+        *pending = None;
+    }
+
     let options = eframe::NativeOptions {
         viewport,
+        persist_window: persist,
         // the wgpu surface often has no transparent alpha mode, OpenGL does
         renderer: if transparent {
             eframe::Renderer::Glow
@@ -1011,6 +1092,17 @@ unsafe fn run_native(
             egui_extras::install_image_loaders(&cc.egui_ctx);
             cc.egui_ctx.set_fonts(app_fonts(false));
 
+            if persist {
+                let saved = cc.storage.and_then(|storage| storage.get_string(STATE_KEY));
+                if let Ok(mut loaded) = LOADED_STATE.lock() {
+                    *loaded = saved.clone();
+                }
+                // what was saved stays saved until the app saves something new
+                if let Ok(mut pending) = PENDING_STATE.lock() {
+                    *pending = saved;
+                }
+            }
+
             if let Some(backdrop) = &backdrop {
                 if let Err(err) = apply_backdrop(cc, backdrop) {
                     log::warn!("Cannot apply backdrop '{}': {}", backdrop, err);
@@ -1020,6 +1112,7 @@ unsafe fn run_native(
             Ok(Box::new(PyeguiApp {
                 update_func: update_func,
                 transparent,
+                persist,
             }))
         }),
     );
@@ -1222,6 +1315,47 @@ fn set_dark_mode(window: &impl raw_window_handle::HasWindowHandle, dark: bool) -
 #[cfg(not(target_os = "windows"))]
 fn set_dark_mode(_window: &impl raw_window_handle::HasWindowHandle, _dark: bool) -> Result<(), String> {
     Err("not supported on this platform".to_string())
+}
+
+/// Opens an URL with whatever the OS has registered for it: the default browser for a http(s)
+/// address, or an installed application for its own scheme, e.g. "claude://...". eframe's native
+/// backends don't act on egui's Context::open_url (only the web one does), so this shells out
+/// directly instead.
+#[cfg(target_os = "windows")]
+fn open_url_native(url: &str) {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let to_wide = |s: &str| -> Vec<u16> { OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect() };
+    let operation = to_wide("open");
+    let file = to_wide(url);
+    // passed directly to the OS, not through a shell, so no quoting/injection concern
+    unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            operation.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn open_url_native(url: &str) {
+    if let Err(e) = std::process::Command::new("open").arg(url).spawn() {
+        eprintln!("Cannot open '{}': {}", url, e);
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn open_url_native(url: &str) {
+    if let Err(e) = std::process::Command::new("xdg-open").arg(url).spawn() {
+        eprintln!("Cannot open '{}': {}", url, e);
+    }
 }
 
 // helpers
@@ -1427,19 +1561,35 @@ unsafe fn weak(text: &str) -> PyResult<()> {
 ///
 ///     size (float): font size of this text only. Default is the size of the body text
 ///
+///     truncate (bool): keep the text on one line and end it with … when it is too long for the
+///         width, instead of wrapping it. Default is False
+///
+///     selectable (bool): whether the user can select the text to copy it. Default is True.
+///         Set it to False when the label is inside an interactive() area, otherwise clicking
+///         the text starts a text selection instead of reaching the click of the area around it
+///
 /// Example::
 ///
 ///     label("some text")
 ///     label("📁", size=48)
+///     label(file_name, truncate=True)
 #[pyfunction]
-#[pyo3(signature = (text, size=None))]
-unsafe fn label(text: &str, size: Option<f32>) -> PyResult<()> {
+#[pyo3(signature = (text, size=None, truncate=false, selectable=None))]
+unsafe fn label(text: &str, size: Option<f32>, truncate: bool, selectable: Option<bool>) -> PyResult<()> {
     let ui = current_ui(&UI)?;
 
-    match size {
-        Some(size) => ui.label(egui::RichText::new(text).size(size)),
-        None => ui.label(text),
+    let text = match size {
+        Some(size) => egui::RichText::new(text).size(size),
+        None => egui::RichText::new(text),
     };
+    let mut label = egui::Label::new(text);
+    if truncate {
+        label = label.truncate();
+    }
+    if let Some(selectable) = selectable {
+        label = label.selectable(selectable);
+    }
+    ui.add(label);
     Ok(())
 }
 
@@ -1493,6 +1643,13 @@ unsafe fn code_editor(
 
 /// Show singleline text field and update the text
 ///
+/// Keyword args:
+///
+///     hint_text (str): grey text shown when the field is empty
+///
+///     request_focus (bool): give the field the keyboard focus this frame, for example to let the
+///         user type into it right as it appears, like a search field in a popup. Default is False
+///
 /// Example::
 ///
 ///     text = Str("editable")
@@ -1504,14 +1661,21 @@ unsafe fn text_edit_singleline(text: &mut Str, kwargs: Option<&Bound<'_, PyDict>
     let ui = current_ui(&UI)?;
 
     let mut w = egui::TextEdit::singleline(&mut text.value);
+    let mut request_focus = false;
 
     if let Some(kwargs) = kwargs {
         if let Some(hint_text) = kwargs.get_item("hint_text")? {
             w = w.hint_text(hint_text.cast::<PyString>()?.extract::<String>()?);
         }
+        if let Some(focus) = kwarg::<bool>(Some(kwargs), "request_focus")? {
+            request_focus = focus;
+        }
     }
 
-    ui.add(w);
+    let response = ui.add(w);
+    if request_focus {
+        response.request_focus();
+    }
     Ok(())
 }
 
@@ -1740,9 +1904,36 @@ unsafe fn group(update_fun: Bound<'_, PyAny>, kwargs: Option<&Bound<'_, PyDict>>
 ///     scroll_area_vertical(update_func)
 #[pyfunction]
 unsafe fn scroll_area_vertical(update_fun: Bound<'_, PyAny>) -> PyResult<()> {
-    egui::ScrollArea::vertical().show(current_ui(&UI)?, |ui| run_nested_update_func(ui, update_fun)).inner
+    let ui = current_ui(&UI)?;
+    // content wider than the area (long names, wide rows) must not paint over its neighbours
+    let clip = ui.available_rect_before_wrap();
+    ui.scope(|ui| {
+        ui.shrink_clip_rect(clip);
+        // fills the width, so the scroll bar is at the edge of the area and not of its contents
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, true])
+            .show(ui, |ui| run_nested_update_func(ui, update_fun))
+            .inner
+    })
+    .inner
 }
 
+
+/// Create a scroll area that scrolls in both directions, with a bar for each.
+///
+/// Example::
+///
+///     scroll_area_both(wide_and_tall_ui)
+#[pyfunction]
+unsafe fn scroll_area_both(update_fun: Bound<'_, PyAny>) -> PyResult<()> {
+    let ui = current_ui(&UI)?;
+    let clip = ui.available_rect_before_wrap();
+    ui.scope(|ui| {
+        ui.shrink_clip_rect(clip);
+        egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| run_nested_update_func(ui, update_fun)).inner
+    })
+    .inner
+}
 
 /// Create a horizontal scroll area.
 ///
@@ -2058,11 +2249,15 @@ unsafe fn color_edit_button_rgb(rgb: &mut RGB) -> PyResult<()> {
 ///
 ///     max_width (int), max_height (int): the image is scaled down to fit
 ///
+///     size (float): shows the image in a square of this side, scaled up or down. The space is
+///         kept while the image loads, so the layout does not jump when it appears
+///
 ///     tint (color): multiplies the colors of the image. With a white icon, the icon takes the color
 ///
 /// Example::
 ///
 ///     image("https://picsum.photos/480")
+///     image("file://icons/folder.svg", size=48)
 ///     image("file://assets/ferris.png", max_height = 50, max_width = 50)
 ///     image("file://icons/gear.svg", max_width=16, max_height=16, tint=(120, 120, 128))
 #[pyfunction]
@@ -2080,8 +2275,16 @@ unsafe fn image(source: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()
             img = img.max_width(width.cast::<PyInt>()?.extract()?);
         }
     }
+    if let Some(size) = kwarg::<f32>(kwargs, "size")? {
+        img = img.fit_to_exact_size(egui::vec2(size, size));
+    }
     if let Some(tint) = style::kwarg_color(kwargs, "tint")? {
         img = img.tint(tint);
+    }
+    // an image is decoded in the background: draw again until it is there, or it stays blank
+    // until the next mouse move
+    if let Ok(egui::load::TexturePoll::Pending { .. }) = img.load_for_size(ui.ctx(), ui.available_size()) {
+        ui.ctx().request_repaint();
     }
     ui.add(img);
     Ok(())
@@ -2294,6 +2497,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(group, m)?)?;
     m.add_function(wrap_pyfunction!(scroll_area_vertical, m)?)?;
     m.add_function(wrap_pyfunction!(scroll_area_horizontal, m)?)?;
+    m.add_function(wrap_pyfunction!(scroll_area_both, m)?)?;
     m.add_function(wrap_pyfunction!(scope, m)?)?;
     m.add_function(wrap_pyfunction!(slider_float, m)?)?;
     m.add_function(wrap_pyfunction!(slider_int, m)?)?;

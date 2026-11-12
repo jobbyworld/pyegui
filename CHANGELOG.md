@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- `run_native(..., persist_id="app.name")`: the position and size of the window and what egui remembers (scroll, collapsed sections) come back at the next run
+- `ctx.save_state(obj)` and `ctx.load_state()`: the choices of the user (theme, folder, view...) as JSON, saved with the window. `examples/finder.py` uses them
+- `dock.save()` and `dock.load(layout, panes=None)`: the open panes, tabs, splits and sizes of a `Dock` as plain values, to keep with `ctx.save_state()`
+
+- `scripts/make_shortcut_windows.py` and `scripts/make_app_macos.py`: launchers to start and pin an app (the Finder example by default) on the taskbar or the Dock
+- `tree_view(..., context_menu=f)`: `f(ids)` is called on a right click on a node
+- `file_icon(path, size)`: also gives the icons of the Windows Explorer (via `IShellItemImageFactory`)
+
 ## 0.6.0 (2026-11-11)
 
 Update to egui 0.37 and pyo3 0.30. No function of 0.5.0 was removed.

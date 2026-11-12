@@ -5,7 +5,8 @@ use egui_tiles::{
 };
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict};
+use pyo3::types::{PyAny, PyDict, PyList};
+use std::collections::HashMap;
 
 use std::sync::{Arc, Mutex};
 
@@ -80,6 +81,14 @@ struct Pane {
 }
 
 impl Pane {
+    fn clone_ref(&self, py: Python<'_>) -> Self {
+        Pane {
+            title: self.title.clone(),
+            update_func: self.update_func.clone_ref(py),
+            closable: self.closable,
+        }
+    }
+
     fn from_py(pane: &DockPane, py: Python<'_>) -> Self {
         Pane {
             title: pane.title.clone(),
@@ -115,6 +124,99 @@ fn insert_tile(tiles: &mut Tiles<Pane>, node: &Bound<'_, PyAny>) -> PyResult<Til
             kind
         ))),
     }
+}
+
+/// The layout of a tile as plain Python values, for Dock.save(). None for a tile that is gone
+fn save_tile<'py>(py: Python<'py>, tiles: &Tiles<Pane>, tile_id: TileId) -> PyResult<Option<Bound<'py, PyDict>>> {
+    let node = PyDict::new(py);
+    match tiles.get(tile_id) {
+        Some(Tile::Pane(pane)) => node.set_item("pane", &pane.title)?,
+        Some(Tile::Container(container)) => {
+            let children = PyList::empty(py);
+            let mut kept = vec![];
+            for child in container.children() {
+                if let Some(saved) = save_tile(py, tiles, *child)? {
+                    children.append(saved)?;
+                    kept.push(*child);
+                }
+            }
+            node.set_item("children", children)?;
+            match container {
+                Container::Tabs(tabs) => {
+                    node.set_item("kind", "tabs")?;
+                    let active = tabs.active.and_then(|active| kept.iter().position(|child| *child == active));
+                    node.set_item("active", active)?;
+                }
+                Container::Linear(linear) => {
+                    let horizontal = matches!(linear.dir, egui_tiles::LinearDir::Horizontal);
+                    node.set_item("kind", if horizontal { "horizontal" } else { "vertical" })?;
+                    let shares: Vec<f32> = kept.iter().map(|child| linear.shares[*child]).collect();
+                    node.set_item("shares", shares)?;
+                }
+                Container::Grid(_) => node.set_item("kind", "grid")?,
+            }
+        }
+        None => return Ok(None),
+    }
+    Ok(Some(node))
+}
+
+/// Rebuilds a tile saved by save_tile from the panes available by title. A pane that is not
+/// available is left out, and so is a container left without children
+fn load_tile(
+    node: &Bound<'_, PyAny>,
+    tiles: &mut Tiles<Pane>,
+    available: &mut HashMap<String, Pane>,
+) -> PyResult<Option<TileId>> {
+    let node = node.cast::<PyDict>()?;
+    if let Some(title) = node.get_item("pane")? {
+        let title: String = title.extract()?;
+        return Ok(available.remove(&title).map(|pane| tiles.insert_pane(pane)));
+    }
+    let kind: String = node
+        .get_item("kind")?
+        .ok_or_else(|| PyValueError::new_err("a container of the layout has no kind"))?
+        .extract()?;
+    let children = node
+        .get_item("children")?
+        .ok_or_else(|| PyValueError::new_err("a container of the layout has no children"))?;
+    let mut ids = vec![];
+    let mut saved_index = vec![]; // where each kept child was among the saved ones
+    for (index, child) in children.cast::<PyList>()?.iter().enumerate() {
+        if let Some(id) = load_tile(&child, tiles, available)? {
+            ids.push(id);
+            saved_index.push(index);
+        }
+    }
+    if ids.is_empty() {
+        return Ok(None);
+    }
+    let id = match kind.as_str() {
+        "tabs" => tiles.insert_tab_tile(ids.clone()),
+        "horizontal" => tiles.insert_horizontal_tile(ids.clone()),
+        "vertical" => tiles.insert_vertical_tile(ids.clone()),
+        "grid" => tiles.insert_grid_tile(ids.clone()),
+        kind => return Err(PyValueError::new_err(format!("Unknown container kind '{}'", kind))),
+    };
+    match tiles.get_mut(id) {
+        Some(Tile::Container(Container::Tabs(tabs))) => {
+            let active = node.get_item("active")?.and_then(|a| a.extract::<usize>().ok());
+            if let Some(position) = active.and_then(|a| saved_index.iter().position(|i| *i == a)) {
+                tabs.set_active(ids[position]);
+            }
+        }
+        Some(Tile::Container(Container::Linear(linear))) => {
+            let shares = node.get_item("shares")?.and_then(|s| s.extract::<Vec<f32>>().ok());
+            for (position, child) in ids.iter().enumerate() {
+                let share = shares.as_ref().and_then(|s| s.get(saved_index[position])).copied();
+                if let Some(share) = share.filter(|share| share.is_finite() && *share > 0.0) {
+                    linear.shares.set_share(*child, share);
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(Some(id))
 }
 
 /// A change asked from a tab bar callback, applied once the dock is drawn
@@ -773,6 +875,83 @@ impl Dock {
                 Some(Tile::Pane(pane)) => Some(pane.title.clone()),
                 _ => None,
             })
+    }
+
+    /// Returns the layout of the dock as plain Python values (dicts, lists, strings, numbers): which
+    /// panes are open, how they are grouped in tabs and splits, the active tab of each group and the
+    /// size of each part. It is made to be given to ctx.save_state() and later to load(). Returns
+    /// None if called inside a pane of the same dock.
+    ///
+    /// Usage::
+    ///
+    ///     ctx.save_state({"dock": dock.save()})
+    fn save<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let Some(tree) = &self.tree else { return Ok(None) };
+        match tree.root {
+            Some(root) => save_tile(py, &tree.tiles, root),
+            None => Ok(None),
+        }
+    }
+
+    /// Restores a layout given by save(). Returns True if the layout was applied, and False,
+    /// leaving the dock as it is, if it is empty, damaged or from an unrelated dock: an old
+    /// saved state never raises.
+    ///
+    /// The panes are found by title among the ones of the dock. A pane saved in the layout but
+    /// that does not exist any more is left out. A pane that was closed when the layout was saved
+    /// is not in it, so it is closed again; to be able to open it, give it in panes: the layout
+    /// can then also bring back a pane that is not in the dock yet.
+    ///
+    /// Args:
+    ///     layout (dict): what save() returned
+    ///
+    ///     panes (list[DockPane]): more panes the layout can use, for the ones that are not in
+    ///         the dock now
+    ///
+    /// Usage::
+    ///
+    ///     saved = ctx.load_state() or {}
+    ///     if "dock" in saved:
+    ///         dock.load(saved["dock"], panes=all_panes)
+    #[pyo3(signature = (layout, panes=None))]
+    fn load(
+        &mut self,
+        py: Python<'_>,
+        layout: &Bound<'_, PyAny>,
+        panes: Option<Vec<PyRef<'_, DockPane>>>,
+    ) -> PyResult<bool> {
+        let tree = self
+            .tree
+            .as_mut()
+            .ok_or(PyRuntimeError::new_err("load cannot be called inside a pane of the same dock"))?;
+        let mut available: HashMap<String, Pane> = HashMap::new();
+        for (_, tile) in tree.tiles.iter() {
+            if let Tile::Pane(pane) = tile {
+                available.entry(pane.title.clone()).or_insert_with(|| pane.clone_ref(py));
+            }
+        }
+        for pane in &self.pending {
+            available.entry(pane.title.clone()).or_insert_with(|| pane.clone_ref(py));
+        }
+        for pane in panes.iter().flatten() {
+            available
+                .entry(pane.title.clone())
+                .or_insert_with(|| Pane::from_py(pane, py));
+        }
+
+        let mut tiles = Tiles::default();
+        match load_tile(layout, &mut tiles, &mut available) {
+            Ok(Some(root)) => {
+                *tree = egui_tiles::Tree::new(tree.id(), root, tiles);
+                self.pending.clear();
+                Ok(true)
+            }
+            Ok(None) => Ok(false),
+            Err(err) => {
+                log::warn!("Cannot load the layout of the dock: {}", err);
+                Ok(false)
+            }
+        }
     }
 
     /// Titles of the panes currently in the dock, in display order

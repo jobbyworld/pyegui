@@ -39,7 +39,7 @@ def plot_ui():
   if pos:
     small(f"x: {pos[0]:.2f} y: {pos[1]:.2f}")
 
-def table_ui():
+def people_table_ui():
   table(["Name", "Age", "City"], people, selected_row)
 
 def form_ui():
@@ -57,7 +57,7 @@ def form_ui():
 
 dock = Dock(DockContainer("tabs", [
   DockPane("Plot", plot_ui),
-  DockPane("Table", table_ui),
+  DockPane("Table", people_table_ui),
   DockPane("Form", form_ui),
 ]))
 
