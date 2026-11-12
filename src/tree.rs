@@ -2,7 +2,7 @@ use eframe::egui;
 use egui_ltreeview::{Action, DirPosition, NodeBuilder, TreeViewBuilder, TreeViewState};
 use pyo3::prelude::*;
 
-use crate::{current_ui, UI};
+use crate::{current_ui, run_nested_call, UI};
 
 /// A node of a tree view. It is a directory if children is a list, even an empty one, and a leaf otherwise.
 ///
@@ -84,6 +84,8 @@ pub(crate) struct TreeView {
     state: TreeViewState<i64>,
     activated: Vec<i64>,
     moved: Option<(Vec<i64>, i64, &'static str, Option<i64>)>,
+    focus: Option<bool>,
+    keep_focus: bool,
 }
 
 #[pymethods]
@@ -106,6 +108,8 @@ impl TreeView {
             state: TreeViewState::default(),
             activated: vec![],
             moved: None,
+            focus: None,
+            keep_focus: false,
         }
     }
 
@@ -136,6 +140,28 @@ impl TreeView {
         self.moved.clone()
     }
 
+    /// Gives the keyboard focus to the tree (True, the default) or takes it away (False) at the
+    /// next tree_view. With the focus the arrows, Enter and the other keys work without a click,
+    /// so an app that manages its own focus can hand it to the tree, or to another part of the
+    /// window
+    #[pyo3(signature = (focused=true))]
+    fn focus(&mut self, focused: bool) {
+        self.focus = Some(focused);
+    }
+
+    /// If True, the tree takes back the keyboard focus at every tree_view when another widget
+    /// holds it, except a text field being edited. For an app where the tree is the part of the
+    /// window the keyboard acts on: a click on a button or a blank area does not cut the arrows
+    #[getter]
+    fn get_keep_focus(&self) -> bool {
+        self.keep_focus
+    }
+
+    #[setter]
+    fn set_keep_focus(&mut self, keep: bool) {
+        self.keep_focus = keep;
+    }
+
     /// Opens or closes a directory
     fn set_open(&mut self, id: i64, open: bool) {
         self.state.set_openness(id, open);
@@ -158,6 +184,25 @@ fn with_icon<'a>(config: NodeBuilder<'a, i64>, icon: Option<String>) -> NodeBuil
         }),
         None => config,
     }
+}
+
+/// The position of a node among the rows shown: the children of the closed directories are not
+fn row_index(py: Python<'_>, tree: &TreeView, nodes: &[Py<TreeNode>], id: i64, row: &mut usize) -> Option<usize> {
+    for node in nodes {
+        let node = node.borrow(py);
+        if node.id == id {
+            return Some(*row);
+        }
+        *row += 1;
+        if let Some(children) = &node.children {
+            if tree.state.is_open(&node.id).unwrap_or(tree.default_open) {
+                if let Some(found) = row_index(py, tree, children, id, row) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn add_nodes(
@@ -194,6 +239,18 @@ fn add_nodes(
 
 /// Shows a tree of nodes. Directories can be opened and nodes selected, with keyboard navigation.
 ///
+/// Args:
+///     tree (TreeView): the state of the tree
+///
+///     nodes (list[TreeNode]): the nodes
+///
+///     scroll_to (int): id of a node to scroll to, just enough to show it. Give it only during
+///         the frame the tree has to scroll. The tree has to be the first thing of a scroll area
+///
+///     context_menu (callable): called with the list of ids concerned when a node is right-clicked,
+///         inside a menu: the selected nodes if the node clicked is one of them, else only the
+///         node clicked. Build the menu in it, or call close_menu() to act without a menu
+///
 /// Example::
 ///
 ///     tree = TreeView("files")
@@ -204,17 +261,50 @@ fn add_nodes(
 ///
 ///     def update_func(ctx):
 ///         tree_view(tree, nodes)
+///         # a menu on right click
+///         tree_view(tree, nodes, context_menu=lambda ids: button_clicked(f"{len(ids)} selected"))
 #[pyfunction]
-unsafe fn tree_view(py: Python<'_>, tree: &mut TreeView, nodes: Vec<Py<TreeNode>>) -> PyResult<()> {
+#[pyo3(signature = (tree, nodes, scroll_to=None, context_menu=None))]
+unsafe fn tree_view(
+    py: Python<'_>,
+    tree: &mut TreeView,
+    nodes: Vec<Py<TreeNode>>,
+    scroll_to: Option<i64>,
+    context_menu: Option<Bound<'_, PyAny>>,
+) -> PyResult<()> {
     let ui = current_ui(&UI)?;
+    if let Some(id) = scroll_to {
+        // the rows out of the window are not drawn, so the row is placed from its index
+        if let Some(index) = row_index(py, tree, &nodes, id, &mut 0) {
+            let height = ui.spacing().interact_size.y;
+            let top = ui.cursor().min + egui::vec2(0.0, index as f32 * (height + ui.spacing().item_spacing.y));
+            ui.scroll_to_rect(egui::Rect::from_min_size(top, egui::vec2(1.0, height)), None);
+        }
+    }
     let id = ui.make_persistent_id(&tree.id);
+    match tree.focus.take() {
+        Some(true) => ui.memory_mut(|m| m.request_focus(id)),
+        Some(false) => ui.memory_mut(|m| m.surrender_focus(id)),
+        None if tree.keep_focus && !ui.ctx().text_edit_focused() => {
+            ui.memory_mut(|m| m.request_focus(id))
+        }
+        None => {}
+    }
 
-    let (_, actions) = egui_ltreeview::TreeView::new(id)
+    let mut menu_result = Ok(());
+    let mut view = egui_ltreeview::TreeView::new(id)
         .allow_multi_selection(tree.multi_select)
-        .allow_drag_and_drop(tree.drag_and_drop)
-        .show_state(ui, &mut tree.state, |builder| {
-            add_nodes(py, builder, &nodes, tree.default_open, tree.activatable_dirs)
+        .allow_drag_and_drop(tree.drag_and_drop);
+    if let Some(menu_fun) = &context_menu {
+        // the menu is drawn in its own ui: the Python function runs on top of the ui stack
+        view = view.fallback_context_menu(|menu_ui, ids| {
+            menu_result = run_nested_call(menu_ui, menu_fun, (ids.clone(),));
         });
+    }
+    let (_, actions) = view.show_state(ui, &mut tree.state, |builder| {
+        add_nodes(py, builder, &nodes, tree.default_open, tree.activatable_dirs)
+    });
+    menu_result?;
 
     tree.activated.clear();
     tree.moved = None;

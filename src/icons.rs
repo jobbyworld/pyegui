@@ -4,6 +4,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
+#[cfg(target_os = "windows")]
+use image::ImageEncoder;
 use pyo3::prelude::*;
 
 use crate::{current_ui, UI};
@@ -32,7 +34,89 @@ fn native_icon_png(path: &str, pixels: u32) -> Option<Vec<u8>> {
     Some(png.to_vec())
 }
 
-#[cfg(not(target_os = "macos"))]
+/// The icon of a file as a PNG, from the shell like the Explorer shows it
+#[cfg(target_os = "windows")]
+fn native_icon_png(path: &str, pixels: u32) -> Option<Vec<u8>> {
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::SIZE;
+    use windows::Win32::Graphics::Gdi::{
+        DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER,
+        BI_RGB, DIB_RGB_COLORS,
+    };
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::Shell::{
+        IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_ICONONLY, SIIGBF_BIGGERSIZEOK,
+    };
+
+    unsafe {
+        // already initialized by the window system on the GUI thread: the error is harmless
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+        // the shell wants backslashes
+        let wide = HSTRING::from(path.replace('/', "\\"));
+        let factory: IShellItemImageFactory = SHCreateItemFromParsingName(&wide, None).ok()?;
+        let side = pixels as i32;
+        let hbitmap = factory
+            .GetImage(SIZE { cx: side, cy: side }, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK)
+            .ok()?;
+
+        let mut bitmap = BITMAP::default();
+        GetObjectW(
+            hbitmap.into(),
+            std::mem::size_of::<BITMAP>() as i32,
+            Some(&mut bitmap as *mut _ as *mut _),
+        );
+        let (width, height) = (bitmap.bmWidth, bitmap.bmHeight.abs());
+        if width <= 0 || height <= 0 {
+            let _ = DeleteObject(hbitmap.into());
+            return None;
+        }
+
+        let mut info = BITMAPINFO::default();
+        info.bmiHeader = BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height, // top-down rows
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        };
+        let mut data = vec![0u8; (width * height * 4) as usize];
+        let dc = GetDC(None);
+        let lines = GetDIBits(
+            dc,
+            hbitmap,
+            0,
+            height as u32,
+            Some(data.as_mut_ptr() as *mut _),
+            &mut info,
+            DIB_RGB_COLORS,
+        );
+        ReleaseDC(None, dc);
+        let _ = DeleteObject(hbitmap.into());
+        if lines == 0 {
+            return None;
+        }
+
+        // BGRA -> RGBA, and opaque when the icon carries no alpha at all
+        let opaque = data.chunks_exact(4).all(|px| px[3] == 0);
+        for px in data.chunks_exact_mut(4) {
+            px.swap(0, 2);
+            if opaque {
+                px[3] = 255;
+            }
+        }
+
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(&data, width as u32, height as u32, image::ExtendedColorType::Rgba8)
+            .ok()?;
+        Some(png)
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn native_icon_png(_path: &str, _pixels: u32) -> Option<Vec<u8>> {
     None
 }
@@ -40,7 +124,8 @@ fn native_icon_png(_path: &str, _pixels: u32) -> Option<Vec<u8>> {
 /// Returns the native icon of a file or folder, as the file manager of the platform shows it,
 /// to draw with image(). Returns None when the platform has no icon to give: draw your own then.
 ///
-/// For now only macOS gives icons, the ones of the Finder.
+/// macOS gives the icons of the Finder and Windows the ones of the Explorer (the shell, so the
+/// icons of the file types installed on the machine, thumbnails excluded). Linux gives none.
 ///
 /// Args:
 ///     path (str): path of the file or folder

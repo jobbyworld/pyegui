@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
 use crate::style::extract_color;
-use crate::{current_ui, run_nested_call, run_nested_update_func, Bool, Float, UI};
+use crate::{current_ui, run_nested_call, run_nested_update_func, Bool, Float, Int, UI};
 
 /// Shows a text in the given color.
 ///
@@ -561,8 +561,8 @@ unsafe fn badge(text: &str, color: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
     Ok(())
 }
 
-/// What the user did with a widget during the frame, returned by label_response and
-/// selectable_label_response
+/// What the user did with a widget during the frame, returned by label_response,
+/// selectable_label_response and interactive
 #[pyclass(frozen, get_all)]
 pub(crate) struct Response {
     /// clicked with the primary button
@@ -573,14 +573,22 @@ pub(crate) struct Response {
     secondary_clicked: bool,
     /// the mouse is over the widget
     hovered: bool,
+    /// the widget is being dragged with the primary button
+    dragged: bool,
+    /// the drag started during this frame
+    drag_started: bool,
+    /// the drag ended during this frame
+    drag_stopped: bool,
+    /// where the widget is on the window, as (left, top, right, bottom) in points
+    rect: (f32, f32, f32, f32),
 }
 
 #[pymethods]
 impl Response {
     fn __repr__(&self) -> String {
         format!(
-            "Response(clicked={}, double_clicked={}, secondary_clicked={}, hovered={})",
-            self.clicked, self.double_clicked, self.secondary_clicked, self.hovered
+            "Response(clicked={}, double_clicked={}, secondary_clicked={}, hovered={}, dragged={})",
+            self.clicked, self.double_clicked, self.secondary_clicked, self.hovered, self.dragged
         )
     }
 }
@@ -592,8 +600,241 @@ impl From<egui::Response> for Response {
             double_clicked: response.double_clicked(),
             secondary_clicked: response.secondary_clicked(),
             hovered: response.hovered(),
+            dragged: response.dragged(),
+            drag_started: response.drag_started(),
+            drag_stopped: response.drag_stopped(),
+            rect: (
+                response.rect.min.x,
+                response.rect.min.y,
+                response.rect.max.x,
+                response.rect.max.y,
+            ),
         }
     }
+}
+
+/// Runs update_fun in a child ui that reacts to the mouse as a whole: the widgets inside keep
+/// their own clicks, the rest of the area is clickable. Returns a Response with the position of
+/// the area, so a click on an icon and its name is one click on a tile, and the tiles can be
+/// tested against a rectangle drawn with the mouse.
+///
+/// Args:
+///     update_fun (Callable[[], None]): draws the contents
+///
+///     drag (bool): also react to dragging, shown in dragged, drag_started and drag_stopped.
+///         Default is False
+///
+/// Example::
+///
+///     def tile():
+///         image(uri, max_width=56, max_height=56)
+///         label(name)
+///
+///     response = interactive(tile)
+///     if response.clicked:
+///         select(name)
+#[pyfunction]
+#[pyo3(signature = (update_fun, drag=false))]
+unsafe fn interactive(update_fun: Bound<'_, PyAny>, drag: bool) -> PyResult<Response> {
+    let ui = current_ui(&UI)?;
+    let sense = if drag { egui::Sense::click_and_drag() } else { egui::Sense::click() };
+    let output = ui.scope_builder(egui::UiBuilder::new().sense(sense), |ui| {
+        run_nested_update_func(ui, update_fun)
+    });
+    output.inner?;
+    Ok(output.response.into())
+}
+
+/// Where the mouse is on the window in points, as (x, y), or None when it is outside. Compare it
+/// with Response.rect.
+#[pyfunction]
+unsafe fn pointer_pos() -> PyResult<Option<(f32, f32)>> {
+    let ctx = current_ui(&UI)?.ctx().clone();
+    Ok(ctx.input(|i| i.pointer.latest_pos()).map(|p| (p.x, p.y)))
+}
+
+/// True during the frame in which the primary mouse button went down, wherever the mouse is.
+/// With ui_contains_pointer it tells which part of the window was clicked, even when the click
+/// lands on no widget, to move the keyboard focus there.
+///
+/// Example::
+///
+///     if pointer_pressed() and ui_contains_pointer():
+///         focused_zone.value = "sidebar"
+#[pyfunction]
+unsafe fn pointer_pressed() -> PyResult<bool> {
+    let ctx = current_ui(&UI)?.ctx().clone();
+    Ok(ctx.input(|i| i.pointer.primary_pressed()))
+}
+
+/// The modifier keys held during the frame, as a dict with the keys shift, command and alt.
+/// command is the command key on macOS and ctrl elsewhere.
+///
+/// Example::
+///
+///     if response.clicked:
+///         if modifiers()["command"]:
+///             toggle(item)
+///         elif modifiers()["shift"]:
+///             select_range(item)
+///         else:
+///             select_only(item)
+#[pyfunction]
+unsafe fn modifiers(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyDict>> {
+    let ctx = current_ui(&UI)?.ctx().clone();
+    let held = ctx.input(|i| i.modifiers);
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("shift", held.shift)?;
+    dict.set_item("command", held.command)?;
+    dict.set_item("alt", held.alt)?;
+    Ok(dict)
+}
+
+/// Draws a rectangle over what was drawn before, e.g. the rectangle of a selection made with the
+/// mouse.
+///
+/// Args:
+///     rect (tuple[float, float, float, float]): (left, top, right, bottom) in points, like
+///         Response.rect
+///
+///     fill (color): inside of the rectangle. Default is transparent
+///
+///     stroke (tuple[float, color]): outline as (width, color). Default is no outline
+///
+///     rounding (float): radius of the corners. Default is 0
+#[pyfunction]
+#[pyo3(signature = (rect, fill=None, stroke=None, rounding=0.0))]
+unsafe fn draw_rect(
+    rect: (f32, f32, f32, f32),
+    fill: Option<&Bound<'_, PyAny>>,
+    stroke: Option<(f32, Bound<'_, PyAny>)>,
+    rounding: f32,
+) -> PyResult<()> {
+    let ui = current_ui(&UI)?;
+    let fill = match fill {
+        Some(color) => extract_color(color)?,
+        None => egui::Color32::TRANSPARENT,
+    };
+    let stroke = match stroke {
+        Some((width, color)) => egui::Stroke::new(width, extract_color(&color)?),
+        None => egui::Stroke::NONE,
+    };
+    let rect = egui::Rect::from_min_max(egui::pos2(rect.0, rect.1), egui::pos2(rect.2, rect.3));
+    ui.painter()
+        .rect(rect, rounding, fill, stroke, egui::StrokeKind::Inside);
+    Ok(())
+}
+
+/// A row of buttons in one rounded track, where exactly one is selected: the view switch of a
+/// file manager (list, icons, tree). The selected one is filled with the accent color.
+///
+/// Args:
+///     selected (Int): index of the selected option, written when the user picks another
+///
+///     options (list[tuple[str | None, str | None]]): one (icon, text) per option. The icon is the
+///         uri of an image, like for image(), the text may be None for an icon only option
+///
+///     size (float): size of the icons. Default is 15
+///
+///     tint (color): color of the icons of the options that are not selected. The selected one
+///         is white. Default is the color of the icons as they are
+///
+/// Returns True during the frame the selection changed.
+///
+/// Example::
+///
+///     view = Int(0)
+///
+///     def update_func(ctx):
+///         segmented_control(view, [("file://icons/list.svg", "List"), ("file://icons/grid.svg", "Icons")])
+///         if view.value == 0:
+///             list_view()
+#[pyfunction]
+#[pyo3(signature = (selected, options, size=15.0, tint=None))]
+unsafe fn segmented_control(
+    selected: &mut Int,
+    options: Vec<(Option<String>, Option<String>)>,
+    size: f32,
+    tint: Option<&Bound<'_, PyAny>>,
+) -> PyResult<bool> {
+    let ui = current_ui(&UI)?;
+    let tint = extract_tint(tint)?;
+    let radius = ui.visuals().widgets.inactive.corner_radius.nw;
+    let mut picked = None;
+    egui::Frame::new()
+        .fill(ui.visuals().extreme_bg_color)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(egui::CornerRadius::same(radius.saturating_add(2)))
+        .inner_margin(egui::Margin::same(2))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for (index, (icon, text)) in options.iter().enumerate() {
+                    let on = selected.value == index as i32;
+                    let icon_tint = if on { Some(egui::Color32::WHITE) } else { tint };
+                    let button = match (icon, text) {
+                        (Some(icon), Some(text)) => {
+                            egui::Button::image_and_text(menu_image(icon, size, icon_tint), text.as_str())
+                        }
+                        (Some(icon), None) => egui::Button::image(menu_image(icon, size, icon_tint)),
+                        (None, text) => egui::Button::new(text.as_deref().unwrap_or("")),
+                    };
+                    if ui.add(button.selected(on).frame_when_inactive(on)).clicked() && !on {
+                        picked = Some(index as i32);
+                    }
+                }
+            });
+        });
+    if let Some(index) = picked {
+        selected.value = index;
+    }
+    Ok(picked.is_some())
+}
+
+/// The text typed during the frame, or an empty string. Nothing while a text field has the focus,
+/// so it is for shortcuts that are letters: typing the start of a name to jump to it.
+///
+/// Example::
+///
+///     typed = ""
+///     def update_func(ctx):
+///         global typed
+///         typed += typed_text()
+///         select_first_starting_with(typed)
+#[pyfunction]
+unsafe fn typed_text() -> PyResult<String> {
+    let ctx = current_ui(&UI)?.ctx().clone();
+    if ctx.text_edit_focused() {
+        return Ok(String::new());
+    }
+    Ok(ctx.input(|i| {
+        i.events
+            .iter()
+            .filter_map(|event| match event {
+                egui::Event::Text(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }))
+}
+
+/// Scrolls the scroll area the current ui is in, just enough to show a rectangle, e.g. the
+/// rect of the Response of the item that was selected with the keyboard.
+///
+/// Args:
+///     rect (tuple[float, float, float, float]): (left, top, right, bottom) in points, like
+///         Response.rect
+///
+/// Example::
+///
+///     response = interactive(tile)
+///     if tile_was_selected_by_key:
+///         scroll_to_rect(response.rect)
+#[pyfunction]
+unsafe fn scroll_to_rect(rect: (f32, f32, f32, f32)) -> PyResult<()> {
+    let rect = egui::Rect::from_min_max(egui::pos2(rect.0, rect.1), egui::pos2(rect.2, rect.3));
+    current_ui(&UI)?.scroll_to_rect(rect, None);
+    Ok(())
 }
 
 fn sized_text(text: &str, size: Option<f32>) -> egui::RichText {
@@ -695,7 +936,7 @@ fn parse_shortcut(shortcut: &str) -> PyResult<(egui::Modifiers, egui::Key)> {
 unsafe fn key_pressed(shortcut: &str, when_typing: bool) -> PyResult<bool> {
     let (modifiers, key) = parse_shortcut(shortcut)?;
     let ctx = current_ui(&UI)?.ctx().clone();
-    if !when_typing && ctx.egui_wants_keyboard_input() {
+    if !when_typing && ctx.text_edit_focused() {
         return Ok(false);
     }
     Ok(ctx.input(|i| i.key_pressed(key) && i.modifiers.matches_logically(modifiers)))
@@ -723,6 +964,14 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(is_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(is_visible, m)?)?;
     m.add_function(wrap_pyfunction!(ui_contains_pointer, m)?)?;
+    m.add_function(wrap_pyfunction!(interactive, m)?)?;
+    m.add_function(wrap_pyfunction!(segmented_control, m)?)?;
+    m.add_function(wrap_pyfunction!(pointer_pos, m)?)?;
+    m.add_function(wrap_pyfunction!(pointer_pressed, m)?)?;
+    m.add_function(wrap_pyfunction!(typed_text, m)?)?;
+    m.add_function(wrap_pyfunction!(modifiers, m)?)?;
+    m.add_function(wrap_pyfunction!(draw_rect, m)?)?;
+    m.add_function(wrap_pyfunction!(scroll_to_rect, m)?)?;
     m.add_function(wrap_pyfunction!(pixels_per_point, m)?)?;
     m.add_function(wrap_pyfunction!(menu_image_button, m)?)?;
     m.add_function(wrap_pyfunction!(menu_image_text_button, m)?)?;
