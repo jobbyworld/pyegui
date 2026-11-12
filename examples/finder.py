@@ -1208,10 +1208,27 @@ def ancestors_menu():
         horizontal(row)
 
 
+VIEW_WIDTH, PANES_BUTTON = 116, 34  # what the buttons of the right side of the toolbar take
+SEARCH_WIDTH, SEARCH_MIN = 240, 90  # the search field: its widest, and the least worth showing
+
+
+def panes_menu():
+    """the panes of the dock that were closed with their tab, to bring them back"""
+    closed = [title for title in PANES if title not in dock.titles]
+    if not closed:
+        weak("Tous les panneaux sont affichés")
+    for title in closed:
+        if button_clicked(f"Afficher {title}"):
+            dock.add_pane(DockPane(title, PANES[title], closable=True))
+    separator()
+    toggle_value(show_dock, "Dock")
+
+
 def toolbar():
     tint = icon_tint()
 
     def bar():
+        total = available_width()
         if MACOS and not show_sidebar.value:
             add_space(
                 64
@@ -1230,20 +1247,31 @@ def toolbar():
         )  # greyed out at the root
         add_space(6)
         menu_button(f"{place_name(current())}  ▾", ancestors_menu, size=14)
-        add_space(max(available_width() - 690, 8))
+        # the right side: the view, the search, the hidden panes. The search shrinks with the window and
+        # disappears when it would be too small
+        left = 64 * (MACOS and not show_sidebar.value) + 174 + 7 * len(place_name(current()))
+        room = total - left - VIEW_WIDTH - PANES_BUTTON - 3 * 8
+        search_width = min(room, SEARCH_WIDTH)
+        show_search = search_width >= SEARCH_MIN
+        show_view = room >= 0 or total - left >= VIEW_WIDTH + PANES_BUTTON + 16  # then the view goes too
+        used = PANES_BUTTON + 8 + (VIEW_WIDTH + 8 if show_view else 0)
+        used += search_width + 8 if show_search else 0
+        add_space(max(total - left - used, 8))
+        if show_view:
+            segmented_control(
+                view,
+                [(svg("tree"), None), (svg("list"), None), (svg("grid"), None)],
+                size=16,
+                tint=tint,
+            )
+        if show_search:
 
-        def tag_button():
-            if image_button_clicked(svg("tag"), size=16, tint=tint):
-                open_tag_picker()
+            def search_field():
+                set_width(search_width)
+                text_edit_singleline(search, hint_text="Search")
 
-        add_enabled(has_selection(), tag_button)  # greyed out with nothing selected
-        segmented_control(
-            view,
-            [(svg("tree"), None), (svg("list"), None), (svg("grid"), None)],
-            size=16,
-            tint=tint,
-        )
-        text_edit_singleline(search, hint_text="Search")
+            vertical(search_field)
+        menu_image_button(svg("panes"), panes_menu, size=18, tint=tint)
 
     horizontal(bar)
 
