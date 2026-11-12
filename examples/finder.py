@@ -112,7 +112,8 @@ ICONS_DIR = (
 )  # white SVG icons, tinted to the theme
 
 EDGE = (1, (127, 127, 127, 60))  # the one outline of every box: the same width and color
-MARGIN = 4  # around every box of the window: the gap between two boxes is twice that
+GAP = 8  # between two boxes, and (with the 8 points the window already leaves) around the window
+H = GAP // 2  # each box gives half of the gap on the sides that face another box
 TREE, LIST, ICONS = 0, 1, 2  # the order of the segmented control of the toolbar
 LIGHT, DARK, SYSTEM = 0, 1, 2
 NO_GLASS, PARTIAL, FULL = 0, 1, 2
@@ -2105,7 +2106,7 @@ dock = Dock(
     id="inspector",
     tab_bar_height=26,
     pane_margin=8,
-    gap_width=2 * MARGIN,  # a gap between the panes, as wide as between the other boxes
+    gap_width=GAP,  # a gap between the panes, as wide as between the other boxes
     pane_stroke=EDGE,
     active_tab_stroke=EDGE,
     inactive_tab_stroke=EDGE,
@@ -2142,7 +2143,7 @@ def update_func(ctx):
         default_size=215,
         min_size=200,
         inner_margin=12,
-        outer_margin=MARGIN,
+        outer_margin=(0, 0, H, 0),
         show_separator_line=False,
         rounding=12,
         stroke=zone_stroke("sidebar", edge),
@@ -2151,7 +2152,7 @@ def update_func(ctx):
         "toolbar",
         toolbar,
         inner_margin=8,
-        outer_margin=MARGIN,
+        outer_margin=(H, 0, 0, H),
         show_separator_line=False,
         rounding=12,
         stroke=edge,
@@ -2160,7 +2161,7 @@ def update_func(ctx):
         "path",
         path_bar,
         inner_margin=8,
-        outer_margin=MARGIN,
+        outer_margin=(H, H, 0, 0),
         show_separator_line=False,
         rounding=12,
         stroke=edge,
@@ -2168,7 +2169,7 @@ def update_func(ctx):
     # the panes of the dock, or the files alone when the dock is hidden
     frame(
         lambda: dock_area(dock) if show_dock.value else central_ui(),
-        outer_margin=MARGIN,  # the same as the bars: the panes line up with them
+        outer_margin=(H, H, 0, H),  # the same as the bars: the panes line up with them
     )
     if renaming.value:
         rename_dialog()

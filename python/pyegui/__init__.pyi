@@ -191,7 +191,7 @@ class Group:
         stroke: Stroke = ...,
         rounding: float = ...,
         inner_margin: float = ...,
-        outer_margin: float = ...,
+        outer_margin: float | tuple[float, float, float, float] = ...,
         shadow: Shadow = ...,
     ) -> None: ...
     def __enter__(self) -> None: ...
@@ -577,7 +577,7 @@ def group(
     stroke: Stroke = ...,
     rounding: float = ...,
     inner_margin: float = ...,
-    outer_margin: float = ...,
+    outer_margin: float | tuple[float, float, float, float] = ...,
     shadow: Shadow = ...,
 ) -> None: ...
 def scope(update_func: Callable[[], Any]) -> None: ...
@@ -605,7 +605,7 @@ def frame(
     stroke: Stroke = ...,
     rounding: float = ...,
     inner_margin: float = ...,
-    outer_margin: float = ...,
+    outer_margin: float | tuple[float, float, float, float] = ...,
     shadow: Shadow = ...,
 ) -> None: ...
 
@@ -626,7 +626,7 @@ def left_panel(
     stroke: Stroke = ...,
     rounding: float = ...,
     inner_margin: float = ...,
-    outer_margin: float = ...,
+    outer_margin: float | tuple[float, float, float, float] = ...,
     shadow: Shadow = ...,
 ) -> None: ...
 def right_panel(
@@ -644,7 +644,7 @@ def right_panel(
     stroke: Stroke = ...,
     rounding: float = ...,
     inner_margin: float = ...,
-    outer_margin: float = ...,
+    outer_margin: float | tuple[float, float, float, float] = ...,
     shadow: Shadow = ...,
 ) -> None: ...
 def top_panel(
@@ -662,7 +662,7 @@ def top_panel(
     stroke: Stroke = ...,
     rounding: float = ...,
     inner_margin: float = ...,
-    outer_margin: float = ...,
+    outer_margin: float | tuple[float, float, float, float] = ...,
     shadow: Shadow = ...,
 ) -> None: ...
 def bottom_panel(
@@ -680,7 +680,7 @@ def bottom_panel(
     stroke: Stroke = ...,
     rounding: float = ...,
     inner_margin: float = ...,
-    outer_margin: float = ...,
+    outer_margin: float | tuple[float, float, float, float] = ...,
     shadow: Shadow = ...,
 ) -> None: ...
 def window(
@@ -704,7 +704,7 @@ def window(
     stroke: Stroke = ...,
     rounding: float = ...,
     inner_margin: float = ...,
-    outer_margin: float = ...,
+    outer_margin: float | tuple[float, float, float, float] = ...,
     shadow: Shadow = ...,
 ) -> None: ...
 def modal(
@@ -716,7 +716,7 @@ def modal(
     stroke: Stroke = ...,
     rounding: float = ...,
     inner_margin: float = ...,
-    outer_margin: float = ...,
+    outer_margin: float | tuple[float, float, float, float] = ...,
     shadow: Shadow = ...,
 ) -> bool:
     """A modal dialog. Returns True when the user wants to close it (escape or a click outside)."""
