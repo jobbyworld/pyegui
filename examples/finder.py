@@ -216,6 +216,7 @@ ZONES = ["sidebar", "content", "dock"]  # F6 goes through them, left to right
 focus_zone = Str("content")  # the part of the window the keyboard acts on, see keyboard()
 show_dock = Bool(True)  # the dock around the files: Actions, Preview, Notes and Tags
 folded = set()  # categories of the Actions panel folded shut
+tags_folded = set()  # ids of the tags of the sidebar whose children are hidden
 renaming = Str("")  # path being renamed, or ""
 new_name = Str("")
 palette_open = Bool(False)  # the action palette: a searchable list of the actions below
@@ -582,6 +583,7 @@ def snapshot():
         "show_sidebar": show_sidebar.value,
         "show_dock": show_dock.value,
         "folded": sorted(folded),
+        "tags_folded": sorted(tags_folded),
         "folder": str(current()),
         "tree_open": sorted(str(p) for p in open_folders()),
         "dock": dock.save(),  # the panes still open, their tabs and sizes
@@ -601,6 +603,7 @@ def restore(saved):
     show_sidebar.value = saved.get("show_sidebar", show_sidebar.value)
     show_dock.value = saved.get("show_dock", show_dock.value)
     folded.update(saved.get("folded", []))
+    tags_folded.update(i for i in saved.get("tags_folded", []) if isinstance(i, int))
     tree_to_open.update(Path(p) for p in saved.get("tree_open", []) if isinstance(p, str))
     layout = saved.get("dock")
     if layout and not has_pane(layout, CENTRAL):
@@ -1155,10 +1158,24 @@ def sidebar_content():
             tag_manager_open.value = True
 
     horizontal(tags_title)
-    for tag in tag_data()["all"]:
+    all_tags = tag_data()["all"]
+    with_children = {t["parent"] for t in all_tags}
+    hidden_below = None  # depth of the folded tag whose children are being skipped
+    for tag in all_tags:
+        if hidden_below is not None:
+            if tag["depth"] > hidden_below:
+                continue
+            hidden_below = None
+        if tag["id"] in tags_folded and tag["id"] in with_children:
+            hidden_below = tag["depth"]
 
         def row(tag=tag):
             add_space(12 * tag["depth"])
+            if tag["id"] in with_children:  # a disclosure arrow, like the folders of the tree
+                if selectable_label_clicked(False, "▸" if tag["id"] in tags_folded else "▾"):
+                    tags_folded.symmetric_difference_update({tag["id"]})
+            else:
+                add_space(34)
             colored_label(hex_color(tag["color"]) + (255,), "●")
             if selectable_label_clicked(tag_filter.value == tag["id"], tag["name"]):
                 tag_filter.value = tag["id"]
