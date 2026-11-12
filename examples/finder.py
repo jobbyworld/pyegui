@@ -1219,7 +1219,25 @@ def ancestors_menu():
         horizontal(row)
 
 
-VIEW_WIDTH, PANES_BUTTON = 116, 34  # what the buttons of the right side of the toolbar take
+widths = {"view": 130, "panes": 60, "count": 110, "dock": 50}  # what the right side of the bars takes: measured as drawn
+
+
+def measure(key, draw, last=False):
+    """draws something in a row and remembers the width it took, with its spacing. The room left in a
+    row is never negative, so a width is only learned when there was room: if the thing did not fit,
+    it is given a little more room at the next frame"""
+    before = available_width()
+    draw()
+    if last:
+        add_space(-8)  # takes back the spacing a row adds after its last thing
+    after = available_width()
+    taken = before - after if after > 0.5 else before + 8
+    if abs(taken - widths[key]) > 0.5:
+        widths[key] = taken
+        context[0].request_repaint()  # the next frame is laid out with the new width
+
+
+SLACK = 1  # room kept in a row, to see that what is at its right grew
 SEARCH_WIDTH, SEARCH_MIN = 240, 90  # the search field: its widest, and the least worth showing
 
 
@@ -1239,7 +1257,6 @@ def toolbar():
     tint = icon_tint()
 
     def bar():
-        total = available_width()
         if MACOS and not show_sidebar.value:
             add_space(
                 64
@@ -1259,21 +1276,24 @@ def toolbar():
         add_space(6)
         menu_button(f"{place_name(current())}  ▾", ancestors_menu, size=14)
         # the right side: the view, the search, the hidden panes. The search shrinks with the window and
-        # disappears when it would be too small
-        left = 64 * (MACOS and not show_sidebar.value) + 174 + 7 * len(place_name(current()))
-        room = total - left - VIEW_WIDTH - PANES_BUTTON - 3 * 8
-        search_width = min(room, SEARCH_WIDTH)
+        # disappears when it would be too small. What each part takes is what it took the last time it
+        # was drawn, so the right edge does not depend on fonts or on the length of a name
+        left_over = available_width()
+        view_w, panes_w = widths["view"], widths["panes"]
+        search_width = min(left_over - view_w - panes_w - 8 - SLACK, SEARCH_WIDTH)
         show_search = search_width >= SEARCH_MIN
-        show_view = room >= 0 or total - left >= VIEW_WIDTH + PANES_BUTTON + 16  # then the view goes too
-        used = PANES_BUTTON + 8 + (VIEW_WIDTH + 8 if show_view else 0)
-        used += search_width + 8 if show_search else 0
-        add_space(max(total - left - used, 8))
+        show_view = left_over >= view_w + panes_w
+        used = panes_w + (view_w if show_view else 0) + (search_width + 8 if show_search else 0)
+        add_space(max(left_over - used - SLACK, 4))
         if show_view:
-            segmented_control(
-                view,
-                [(svg("tree"), None), (svg("list"), None), (svg("grid"), None)],
-                size=16,
-                tint=tint,
+            measure(
+                "view",
+                lambda: segmented_control(
+                    view,
+                    [(svg("tree"), None), (svg("list"), None), (svg("grid"), None)],
+                    size=16,
+                    tint=tint,
+                ),
             )
         if show_search:
 
@@ -1282,7 +1302,7 @@ def toolbar():
                 text_edit_singleline(search, hint_text="Search")
 
             vertical(search_field)
-        menu_image_button(svg("panes"), panes_menu, size=18, tint=tint)
+        measure("panes", lambda: menu_image_button(svg("panes"), panes_menu, size=18, tint=tint), last=True)
 
     horizontal(bar)
 
@@ -2084,14 +2104,22 @@ def path_bar():
             if link_clicked(place_name(part) if i == 0 else part.name):
                 go(part)
 
-        add_space(max(available_width() - 93, 8))
         count = len(visible_entries())
-        weak(f"{count} item{'s' if count != 1 else ''}")
-        add_space(4)
-        if image_button_clicked(
-            svg("dock"), size=16, tint=icon_tint(), selected=show_dock.value
-        ):
-            show_dock.value = not show_dock.value
+        text = f"{count} item{'s' if count != 1 else ''}"
+        with_text = available_width() >= widths["count"] + SLACK  # the count goes first when narrow
+        key = "count" if with_text else "dock"
+        add_space(max(available_width() - widths[key] - SLACK, 4))
+
+        def right():
+            if with_text:
+                weak(text)
+                add_space(4)
+            if image_button_clicked(
+                svg("dock"), size=16, tint=icon_tint(), selected=show_dock.value
+            ):
+                show_dock.value = not show_dock.value
+
+        measure(key, right, last=True)
 
     horizontal(crumbs)
 
@@ -2227,7 +2255,9 @@ def update_func(ctx):
     )
     # the panes of the dock, or the files alone when the dock is hidden
     frame(
-        lambda: dock_area(dock) if show_dock.value else central_ui(),
+        lambda: dock_area(dock)
+        if show_dock.value
+        else frame(central_ui, stroke=EDGE, rounding=6),  # what the dock draws around its panes
         outer_margin=(H, H, 0, H),  # the same as the bars: the panes line up with them
     )
     if renaming.value:
