@@ -7,6 +7,12 @@ __pycache__/
 
 # C extensions
 *.so
+*.pyd
+*.pdb
+
+# compiled extension built in-place by `maturin develop` in the mixed python/rust layout
+/python/pyegui/pyegui.pyd
+/python/pyegui/pyegui.pdb
 
 # swp files
 *.swp

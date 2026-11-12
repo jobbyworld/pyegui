@@ -23,6 +23,7 @@ classifiers = [
 dynamic = ["version"]
 [tool.maturin]
 features = ["pyo3/extension-module"]
+python-source = "python"
 
 [project.urls]
 Homepage = "https://github.com/GachiLord/pyegui"
