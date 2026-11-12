@@ -1170,16 +1170,16 @@ def sidebar_content():
             hidden_below = tag["depth"]
 
         def row(tag=tag):
-            add_space(12 * tag["depth"])
-            if tag["id"] in with_children:  # a disclosure arrow, like the folders of the tree
-                if selectable_label_clicked(False, "▸" if tag["id"] in tags_folded else "▾"):
-                    tags_folded.symmetric_difference_update({tag["id"]})
-            else:
-                add_space(34)
+            add_space(8 * tag["depth"])
             colored_label(hex_color(tag["color"]) + (255,), "●")
+            add_space(-5)  # the name close to its dot
             if selectable_label_clicked(tag_filter.value == tag["id"], tag["name"]):
                 tag_filter.value = tag["id"]
                 deselect()
+            if tag["id"] in with_children:  # the disclosure arrow, at the right edge
+                add_space(max(available_width() - 40, 0))
+                if selectable_label_clicked(False, "▸" if tag["id"] in tags_folded else "▾"):
+                    tags_folded.symmetric_difference_update({tag["id"]})
 
         horizontal(row)
 
