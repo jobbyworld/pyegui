@@ -735,7 +735,7 @@ def tag_header():
         colored_label(hex_color(tag["color"]) + (255,), "●")
         strong(tag["name"])
         weak(f"{len(listing_here())} élément(s) avec ce tag ou ses sous-tags")
-        if small_button_clicked("✕"):
+        if image_button_clicked(svg("close"), size=12, tint=icon_tint()):  # an icon: the glyph ✕ is missing in some fonts
             tag_filter.value = 0
 
     horizontal(line)
