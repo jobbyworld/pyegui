@@ -601,7 +601,6 @@ def toolbar():
             tint=tint,
         )
         text_edit_singleline(search, hint_text="Search")
-        menu_image_button(svg("gear"), settings_menu, size=18, tint=tint)
 
     horizontal(bar)
 
@@ -1169,6 +1168,8 @@ def rename_dialog():
 
 
 def path_bar():
+    tint = icon_tint()
+
     def crumbs():
         toggle_value(show_sidebar, "◧")
         add_space(4)
@@ -1183,11 +1184,13 @@ def path_bar():
             if link_clicked(place_name(part) if i == 0 else part.name):
                 go(part)
 
-        add_space(max(available_width() - 150, 8))
+        add_space(max(available_width() - 190, 8))
         count = len(visible_entries())
         weak(f"{count} item{'s' if count != 1 else ''}")
         add_space(4)
         toggle_value(show_dock, "◨")
+        add_space(4)
+        menu_image_button(svg("gear"), settings_menu, size=18, tint=tint)
 
     horizontal(crumbs)
 
