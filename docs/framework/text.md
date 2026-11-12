@@ -13,7 +13,7 @@ heading("hello")
 ```
 
 
-## `label(text, size=None, truncate=False)`
+## `label(text, size=None, truncate=False, selectable=None)`
 
 Show some text.
 
@@ -22,6 +22,7 @@ Show some text.
 - `text` (str): the text
 - `size` (float): font size of this text only. Default is the size of the body text
 - `truncate` (bool): keep the text on one line and end it with … when it is too long for the width, instead of wrapping it. Default is False
+- `selectable` (bool): whether the user can select the text to copy it. Default is True. Set it to False when the label is inside an interactive() area, otherwise clicking the text starts a text selection instead of reaching the click of the area around it
 
 **Example:**
 

@@ -85,6 +85,12 @@ class Context:
     def set_font(self, source: str) -> None: ...
     def open_url(self, url: str) -> None: ...
     def copy_text(self, text: str) -> None: ...
+    def load_state(self) -> Any:
+        """The state saved by the previous run with save_state(), or None."""
+        ...
+    def save_state(self, state: Any) -> None:
+        """Remembers any value json can write for the next run (needs persist_id in run_native)."""
+        ...
     def set_style(
         self,
         *,
@@ -286,6 +292,12 @@ class Dock:
     ) -> None: ...
     def add_pane(self, pane: DockPane) -> None: ...
     def set_active(self, title: str) -> bool: ...
+    def save(self) -> dict[str, Any] | None:
+        """The layout (open panes, tabs, splits, sizes) as plain values, for ctx.save_state()."""
+        ...
+    def load(self, layout: dict[str, Any], panes: list[DockPane] | None = None) -> bool:
+        """Restores what save() returned. False, leaving the dock as it is, if it cannot be applied."""
+        ...
 
 def dock_area(dock: Dock) -> None:
     """Shows a Dock, filling the available space."""
@@ -327,7 +339,12 @@ class TreeView:
     def set_open(self, id: int, open: bool) -> None: ...
     def is_open(self, id: int) -> bool: ...
 
-def tree_view(tree: TreeView, nodes: list[TreeNode], scroll_to: int | None = None) -> None:
+def tree_view(
+    tree: TreeView,
+    nodes: list[TreeNode],
+    scroll_to: int | None = None,
+    context_menu: Callable[[list[int]], Any] | None = None,
+) -> None:
     """Shows a tree of nodes. Directories can be opened and nodes selected, with keyboard navigation."""
     ...
 
@@ -439,6 +456,7 @@ def run_native(
     icon_path: str = ...,
     backdrop: str | None = ...,
     fullsize_content: bool | None = ...,
+    persist_id: str | None = ...,
 ) -> None:
     """Creates a window and runs update_func. This is an entrypoint for your GUI application."""
     ...
@@ -528,7 +546,7 @@ def menu_image_text_button(
 ) -> None: ...
 def file_icon(path: str, size: float = 32.0) -> str | None:
     """The native icon of a file or folder (as the file manager of the platform shows it), for
-    image(). Returns None when the platform has no icon to give (only macOS gives icons for now):
+    image(). Returns None when the platform has no icon to give (macOS and Windows give icons, Linux does not):
     draw your own then."""
     ...
 

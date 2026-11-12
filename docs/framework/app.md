@@ -1,6 +1,6 @@
 # Application, window and context
 
-`run_native` opens the window and calls your update function once per frame. The update function of the top level receives the `Context`, which holds what is global to the app: the theme, the fonts, the clipboard, opening URLs. The styling methods of the context are in [styling.md](styling.md).
+`run_native` opens the window and calls your update function once per frame. The update function of the top level receives the `Context`, which holds what is global to the app: the theme, the fonts, the clipboard, opening URLs, the state saved between two runs (`persist_id`, `save_state`, `load_state`). The styling methods of the context are in [styling.md](styling.md).
 
 ## `run_native(app_name, update_func, **kwargs)`
 
@@ -28,6 +28,10 @@ This is an entrypoint for your GUI application.
 - "vibrancy" (macOS), "liquid_glass" and the more see-through "liquid_glass_clear" (macOS 26).
 - The Backdrop class has a constant for each of them, like Backdrop.MICA.
 - Ignored with a warning on other platforms
+- `persist_id` (str): a name that is unique to the app, e.g. "mycompany.finder". The position and
+- size of the window, what egui remembers (scroll positions, collapsed sections) and the state
+- given to ctx.save_state() are saved on disk under this name and come back at the next run.
+- Nothing is saved without it
 - `fullsize_content` (bool): macOS: the content fills the window under a transparent title bar,
 - keeping the window buttons at the top left. Leave about 28 points free at the top of the
 - first panel. Ignored on other platforms
@@ -65,7 +69,47 @@ run_native("My app", update_func)
 
 
 - `Context.copy_text(text)` (method): Copy the given text to the system clipboard.
-- `Context.open_url(url)` (method): Open an URL in a browser.
+- `Context.load_state()` (method): Returns the state saved by the previous run with save_state(), or None the first time (or
+
+  without persist_id in run_native). Call it on the first frame, before drawing.
+
+  **Example:**
+
+  ```python
+  def update_func(ctx):
+      if not started:
+          saved = ctx.load_state() or {}
+          theme.value = saved.get("theme", 0)
+          started = True
+  ```
+
+- `Context.open_url(url)` (method): Opens an URL with whatever the OS has registered for it: the browser for a http(s)
+
+  address, or an installed application for its own scheme, e.g. "claude://..." for Claude
+  Desktop.
+
+  **Args**
+
+  - `url` (str): the address to open
+
+  **Example:**
+
+  ```python
+  ctx.open_url("https://example.com")
+  ```
+
+- `Context.save_state(state)` (method): Remembers the state of the app, any value json can write (dict, list, str, numbers, bool,
+
+  None), to give it back to load_state() at the next run. It is written to disk every 30
+  seconds and when the window closes, only if run_native has a persist_id. The last call
+  wins: call it every frame with the whole state, it is cheap, or only when it changes.
+
+  **Example:**
+
+  ```python
+  ctx.save_state({"theme": theme.value, "folder": str(current_folder)})
+  ```
+
 
 ## `Backdrop`
 
@@ -97,7 +141,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.ACRYLIC_DARK` (attribute): str(object='') -> str
@@ -109,7 +153,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.ACRYLIC_LIGHT` (attribute): str(object='') -> str
@@ -121,7 +165,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.BLUR` (attribute): str(object='') -> str
@@ -133,7 +177,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.LIQUID_GLASS` (attribute): str(object='') -> str
@@ -145,7 +189,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.LIQUID_GLASS_CLEAR` (attribute): str(object='') -> str
@@ -157,7 +201,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.MICA` (attribute): str(object='') -> str
@@ -169,7 +213,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.MICA_DARK` (attribute): str(object='') -> str
@@ -181,7 +225,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.MICA_LIGHT` (attribute): str(object='') -> str
@@ -193,7 +237,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.TABBED` (attribute): str(object='') -> str
@@ -205,7 +249,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.TABBED_DARK` (attribute): str(object='') -> str
@@ -217,7 +261,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.TABBED_LIGHT` (attribute): str(object='') -> str
@@ -229,7 +273,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.VIBRANCY` (attribute): str(object='') -> str
@@ -241,7 +285,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 

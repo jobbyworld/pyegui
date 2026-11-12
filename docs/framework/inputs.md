@@ -287,6 +287,11 @@ label(f"{math.degrees(angle.value):.0f}°")
 
 Show singleline text field and update the text
 
+**Keyword args**
+
+- `hint_text` (str): grey text shown when the field is empty
+- `request_focus` (bool): give the field the keyboard focus this frame, for example to let the user type into it right as it appears, like a search field in a popup. Default is False
+
 **Example:**
 
 ```python

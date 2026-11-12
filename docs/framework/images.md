@@ -60,7 +60,8 @@ if image_and_text_clicked("https://picsum.photos/480", "click me"):
 Returns the native icon of a file or folder, as the file manager of the platform shows it,
 to draw with image(). Returns None when the platform has no icon to give: draw your own then.
 
-For now only macOS gives icons, the ones of the Finder.
+macOS gives the icons of the Finder and Windows the ones of the Explorer (the shell, so the
+icons of the file types installed on the machine, thumbnails excluded). Linux gives none.
 
 **Args**
 

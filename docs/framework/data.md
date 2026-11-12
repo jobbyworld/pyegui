@@ -64,7 +64,7 @@ def update_func(ctx):
 ```
 
 
-## `tree_view(tree, nodes, scroll_to=None)`
+## `tree_view(tree, nodes, scroll_to=None, context_menu=None)`
 
 Shows a tree of nodes. Directories can be opened and nodes selected, with keyboard navigation.
 
@@ -73,6 +73,7 @@ Shows a tree of nodes. Directories can be opened and nodes selected, with keyboa
 - `tree` (TreeView): the state of the tree
 - `nodes` (list[TreeNode]): the nodes
 - `scroll_to` (int): id of a node to scroll to, just enough to show it. Give it only during the frame the tree has to scroll. The tree has to be the first thing of a scroll area
+- `context_menu` (callable): called with the list of ids concerned when a node is right-clicked, inside a menu: the selected nodes if the node clicked is one of them, else only the node clicked. Build the menu in it, or call close_menu() to act without a menu
 
 **Example:**
 
@@ -85,6 +86,8 @@ nodes = [
 
 def update_func(ctx):
     tree_view(tree, nodes)
+    # a menu on right click
+    tree_view(tree, nodes, context_menu=lambda ids: button_clicked(f"{len(ids)} selected"))
 ```
 
 

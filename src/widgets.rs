@@ -790,7 +790,7 @@ unsafe fn segmented_control(
 #[pyfunction]
 unsafe fn typed_text() -> PyResult<String> {
     let ctx = current_ui(&UI)?.ctx().clone();
-    if ctx.egui_wants_keyboard_input() {
+    if ctx.text_edit_focused() {
         return Ok(String::new());
     }
     Ok(ctx.input(|i| {
@@ -922,7 +922,7 @@ fn parse_shortcut(shortcut: &str) -> PyResult<(egui::Modifiers, egui::Key)> {
 unsafe fn key_pressed(shortcut: &str, when_typing: bool) -> PyResult<bool> {
     let (modifiers, key) = parse_shortcut(shortcut)?;
     let ctx = current_ui(&UI)?.ctx().clone();
-    if !when_typing && ctx.egui_wants_keyboard_input() {
+    if !when_typing && ctx.text_edit_focused() {
         return Ok(false);
     }
     Ok(ctx.input(|i| i.key_pressed(key) && i.modifiers.matches_logically(modifiers)))

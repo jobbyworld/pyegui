@@ -23,7 +23,7 @@ THEMES = [
     ("app", "Application, window and context",
      "`run_native` opens the window and calls your update function once per frame. The update "
      "function of the top level receives the `Context`, which holds what is global to the app: "
-     "the theme, the fonts, the clipboard, opening URLs. The styling methods of the context are "
+     "the theme, the fonts, the clipboard, opening URLs, the state saved between two runs (`persist_id`, `save_state`, `load_state`). The styling methods of the context are "
      "in [styling.md](styling.md).",
      ["run_native", "Context", "Backdrop", "pixels_per_point"]),
     ("values", "Values that widgets edit",
@@ -219,7 +219,7 @@ def main():
     if missing:
         sys.exit(f"names in no theme: {sorted(missing)}")
     uncovered = [f"Context.{m}" for m in members(pyegui.Context)
-                 if f"Context.{m}" not in placed and m not in ("copy_text", "open_url")]
+                 if f"Context.{m}" not in placed and m not in ("copy_text", "open_url", "load_state", "save_state")]
     if uncovered:
         sys.exit(f"members of Context in no theme: {uncovered}")
     (OUT / "README.md").write_text("\n".join(index) + "\n")

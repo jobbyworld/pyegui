@@ -2,7 +2,7 @@ use eframe::egui;
 use egui_ltreeview::{Action, DirPosition, NodeBuilder, TreeViewBuilder, TreeViewState};
 use pyo3::prelude::*;
 
-use crate::{current_ui, UI};
+use crate::{current_ui, run_nested_call, UI};
 
 /// A node of a tree view. It is a directory if children is a list, even an empty one, and a leaf otherwise.
 ///
@@ -221,6 +221,10 @@ fn add_nodes(
 ///     scroll_to (int): id of a node to scroll to, just enough to show it. Give it only during
 ///         the frame the tree has to scroll. The tree has to be the first thing of a scroll area
 ///
+///     context_menu (callable): called with the list of ids concerned when a node is right-clicked,
+///         inside a menu: the selected nodes if the node clicked is one of them, else only the
+///         node clicked. Build the menu in it, or call close_menu() to act without a menu
+///
 /// Example::
 ///
 ///     tree = TreeView("files")
@@ -231,13 +235,16 @@ fn add_nodes(
 ///
 ///     def update_func(ctx):
 ///         tree_view(tree, nodes)
+///         # a menu on right click
+///         tree_view(tree, nodes, context_menu=lambda ids: button_clicked(f"{len(ids)} selected"))
 #[pyfunction]
-#[pyo3(signature = (tree, nodes, scroll_to=None))]
+#[pyo3(signature = (tree, nodes, scroll_to=None, context_menu=None))]
 unsafe fn tree_view(
     py: Python<'_>,
     tree: &mut TreeView,
     nodes: Vec<Py<TreeNode>>,
     scroll_to: Option<i64>,
+    context_menu: Option<Bound<'_, PyAny>>,
 ) -> PyResult<()> {
     let ui = current_ui(&UI)?;
     if let Some(id) = scroll_to {
@@ -250,12 +257,20 @@ unsafe fn tree_view(
     }
     let id = ui.make_persistent_id(&tree.id);
 
-    let (_, actions) = egui_ltreeview::TreeView::new(id)
+    let mut menu_result = Ok(());
+    let mut view = egui_ltreeview::TreeView::new(id)
         .allow_multi_selection(tree.multi_select)
-        .allow_drag_and_drop(tree.drag_and_drop)
-        .show_state(ui, &mut tree.state, |builder| {
-            add_nodes(py, builder, &nodes, tree.default_open, tree.activatable_dirs)
+        .allow_drag_and_drop(tree.drag_and_drop);
+    if let Some(menu_fun) = &context_menu {
+        // the menu is drawn in its own ui: the Python function runs on top of the ui stack
+        view = view.fallback_context_menu(|menu_ui, ids| {
+            menu_result = run_nested_call(menu_ui, menu_fun, (ids.clone(),));
         });
+    }
+    let (_, actions) = view.show_state(ui, &mut tree.state, |builder| {
+        add_nodes(py, builder, &nodes, tree.default_open, tree.activatable_dirs)
+    });
+    menu_result?;
 
     tree.activated.clear();
     tree.moved = None;

@@ -13,6 +13,17 @@ python3 -m venv .venv && .venv/bin/pip install maturin
 .venv/bin/python examples/finder.py     # any file of examples/
 ```
 
+Launchers to start and pin an app (the Finder example by default; any script, name and icon can be
+given, see `--help`):
+
+```bash
+python scripts/make_shortcut_windows.py   # Windows: Start menu shortcut (--desktop too), needs pywin32
+python scripts/make_app_macos.py          # macOS: ~/Applications/Finder.app, drag it to the Dock
+```
+
+On Windows the app has to set the same AppUserModelID as the shortcut (see the end of
+`examples/finder.py`), or the taskbar groups its window under Python's icon.
+
 `make develop` is the same without `--release`. Wheels are built by CI (Windows and macOS only)
 and attached to the GitHub Release of a `v*` tag.
 
@@ -75,7 +86,7 @@ Index of all files: [docs/framework/README.md](docs/framework/README.md).
 |---|---|
 | `hello_world.py` | the smallest app |
 | `widget_gallery.py`, `demo.py` | most widgets, plots |
-| `finder.py` | a mini Finder: sidebar, toolbar, list/icon/tree views, preview, and a right-hand **Dock** with an **Actions** pane (collapsible categories, per-selection enabled state, shortcuts, rename modal, copy/cut/paste), multi-selection in the 3 views (Cmd/Shift click, Cmd+A) and a rubber band in the icon view, path bar; panes can be closed, moved by their tab, and brought back from the gear menu |
+| `finder.py` | a mini Finder: sidebar, toolbar, list/icon/tree views, preview, and a right-hand **Dock** with an **Actions** pane (collapsible categories, per-selection enabled state, shortcuts, rename modal, copy/cut/paste), multi-selection in the 3 views (Cmd/Shift click, Cmd+A) and a rubber band in the icon view, path bar; panes can be closed, moved by their tab, and brought back from the gear menu; the window, theme, view, folder, dock layout and open tree folders are kept between runs (`persist_id`, `ctx.save_state`, `dock.save`) |
 | `app.py` | "Atelier": sidebar, toolbar, tabs and status bar in a glass style |
 | `explorer.py` | file explorer in a glass style with a native backdrop, files open in tabs |
 | `fileviwer.py` | file browsing with `scandir` |

@@ -32,6 +32,10 @@ static mut APP_MUTEX: Mutex<()> = Mutex::new(());
 static mut CENTRAL: Option<Box<CentralPanelState>> = None;
 // backdrop requested by Context.set_backdrop, applied on the next frame
 static PENDING_BACKDROP: Mutex<Option<String>> = Mutex::new(None);
+// the state of the app as JSON: what was saved by the last run, and what the next save writes
+static LOADED_STATE: Mutex<Option<String>> = Mutex::new(None);
+static PENDING_STATE: Mutex<Option<String>> = Mutex::new(None);
+const STATE_KEY: &str = "pyegui_state";
 
 struct CentralPanelState {
     panel_ui: egui::Ui,
@@ -130,9 +134,56 @@ impl Context {
         Ok(())
     }
 
-    /// Open an URL in a browser.
+    /// Returns the state saved by the previous run with save_state(), or None the first time (or
+    /// without persist_id in run_native). Call it on the first frame, before drawing.
+    ///
+    /// Example::
+    ///
+    ///     def update_func(ctx):
+    ///         if not started:
+    ///             saved = ctx.load_state() or {}
+    ///             theme.value = saved.get("theme", 0)
+    ///             started = True
+    fn load_state(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let text = LOADED_STATE.lock().ok().and_then(|s| s.clone());
+        let Some(text) = text else { return Ok(None) };
+        match py.import("json")?.call_method1("loads", (text,)) {
+            Ok(state) => Ok(Some(state.unbind())),
+            Err(err) => {
+                log::warn!("Cannot read the saved state: {}", err);
+                Ok(None)
+            }
+        }
+    }
+
+    /// Remembers the state of the app, any value json can write (dict, list, str, numbers, bool,
+    /// None), to give it back to load_state() at the next run. It is written to disk every 30
+    /// seconds and when the window closes, only if run_native has a persist_id. The last call
+    /// wins: call it every frame with the whole state, it is cheap, or only when it changes.
+    ///
+    /// Example::
+    ///
+    ///     ctx.save_state({"theme": theme.value, "folder": str(current_folder)})
+    fn save_state(&self, py: Python<'_>, state: Bound<'_, PyAny>) -> PyResult<()> {
+        let text: String = py.import("json")?.call_method1("dumps", (state,))?.extract()?;
+        if let Ok(mut pending) = PENDING_STATE.lock() {
+            *pending = Some(text);
+        }
+        Ok(())
+    }
+
+    /// Opens an URL with whatever the OS has registered for it: the browser for a http(s)
+    /// address, or an installed application for its own scheme, e.g. "claude://..." for Claude
+    /// Desktop.
+    ///
+    /// Args:
+    ///     url (str): the address to open
+    ///
+    /// Example::
+    ///
+    ///     ctx.open_url("https://example.com")
     fn open_url(&self, url: &str) {
-        self.0.open_url(egui::OpenUrl::new_tab(url));
+        open_url_native(url);
     }
 
     /// Copy the given text to the system clipboard.
@@ -783,9 +834,20 @@ fn default_fonts() -> FontDefinitions {
 struct PyeguiApp<'py> {
     update_func: Bound<'py, PyAny>,
     transparent: bool,
+    persist: bool,
 }
 
 impl eframe::App for PyeguiApp<'_> {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        if let Some(state) = PENDING_STATE.lock().ok().and_then(|mut s| s.take()) {
+            storage.set_string(STATE_KEY, state);
+        }
+    }
+
+    fn persist_egui_memory(&self) -> bool {
+        self.persist
+    }
+
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         if self.transparent {
             // let the backdrop effect or the desktop show through
@@ -880,6 +942,11 @@ impl eframe::App for PyeguiApp<'_> {
 ///     "vibrancy" (macOS), "liquid_glass" and the more see-through "liquid_glass_clear" (macOS 26).
 ///     The Backdrop class has a constant for each of them, like Backdrop.MICA.
 ///     Ignored with a warning on other platforms
+///
+///     persist_id (str): a name that is unique to the app, e.g. "mycompany.finder". The position and
+///     size of the window, what egui remembers (scroll positions, collapsed sections) and the state
+///     given to ctx.save_state() are saved on disk under this name and come back at the next run.
+///     Nothing is saved without it
 ///
 ///     fullsize_content (bool): macOS: the content fills the window under a transparent title bar,
 ///     keeping the window buttons at the top left. Leave about 28 points free at the top of the
@@ -991,8 +1058,22 @@ unsafe fn run_native(
         }
     }
 
+    let persist_id = kwarg::<String>(kwargs, "persist_id")?;
+    let persist = persist_id.is_some();
+    if let Some(id) = &persist_id {
+        // the folder of the saved state is named after the app id
+        viewport = viewport.with_app_id(id.clone());
+    }
+    if let Ok(mut loaded) = LOADED_STATE.lock() {
+        *loaded = None;
+    }
+    if let Ok(mut pending) = PENDING_STATE.lock() {
+        *pending = None;
+    }
+
     let options = eframe::NativeOptions {
         viewport,
+        persist_window: persist,
         // the wgpu surface often has no transparent alpha mode, OpenGL does
         renderer: if transparent {
             eframe::Renderer::Glow
@@ -1011,6 +1092,17 @@ unsafe fn run_native(
             egui_extras::install_image_loaders(&cc.egui_ctx);
             cc.egui_ctx.set_fonts(app_fonts(false));
 
+            if persist {
+                let saved = cc.storage.and_then(|storage| storage.get_string(STATE_KEY));
+                if let Ok(mut loaded) = LOADED_STATE.lock() {
+                    *loaded = saved.clone();
+                }
+                // what was saved stays saved until the app saves something new
+                if let Ok(mut pending) = PENDING_STATE.lock() {
+                    *pending = saved;
+                }
+            }
+
             if let Some(backdrop) = &backdrop {
                 if let Err(err) = apply_backdrop(cc, backdrop) {
                     log::warn!("Cannot apply backdrop '{}': {}", backdrop, err);
@@ -1020,6 +1112,7 @@ unsafe fn run_native(
             Ok(Box::new(PyeguiApp {
                 update_func: update_func,
                 transparent,
+                persist,
             }))
         }),
     );
@@ -1222,6 +1315,47 @@ fn set_dark_mode(window: &impl raw_window_handle::HasWindowHandle, dark: bool) -
 #[cfg(not(target_os = "windows"))]
 fn set_dark_mode(_window: &impl raw_window_handle::HasWindowHandle, _dark: bool) -> Result<(), String> {
     Err("not supported on this platform".to_string())
+}
+
+/// Opens an URL with whatever the OS has registered for it: the default browser for a http(s)
+/// address, or an installed application for its own scheme, e.g. "claude://...". eframe's native
+/// backends don't act on egui's Context::open_url (only the web one does), so this shells out
+/// directly instead.
+#[cfg(target_os = "windows")]
+fn open_url_native(url: &str) {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let to_wide = |s: &str| -> Vec<u16> { OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect() };
+    let operation = to_wide("open");
+    let file = to_wide(url);
+    // passed directly to the OS, not through a shell, so no quoting/injection concern
+    unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            operation.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn open_url_native(url: &str) {
+    if let Err(e) = std::process::Command::new("open").arg(url).spawn() {
+        eprintln!("Cannot open '{}': {}", url, e);
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn open_url_native(url: &str) {
+    if let Err(e) = std::process::Command::new("xdg-open").arg(url).spawn() {
+        eprintln!("Cannot open '{}': {}", url, e);
+    }
 }
 
 // helpers

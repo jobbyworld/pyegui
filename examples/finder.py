@@ -12,6 +12,7 @@ Space or Cmd+P to open the action palette (search and run an action for the curr
     python finder.py [folder]
 """
 
+import os
 import shutil
 import subprocess
 import sys
@@ -91,6 +92,10 @@ BACKDROP = {"win32": Backdrop.ACRYLIC, "darwin": Backdrop.LIQUID_GLASS}.get(
     sys.platform
 )
 MACOS = sys.platform == "darwin"
+# the id the taskbar groups the windows of the app by: scripts/make_shortcut_windows.py gives the
+# same one to the shortcut, so a pinned Finder opens its window under its own icon
+APP_USER_MODEL_ID = "pyegui.Finder"
+APP_ICON = Path(__file__).resolve().parent / "app_icon" / "finder_256.png"
 HOME = Path.home()
 ICONS_DIR = (
     Path(__file__).resolve().parent / "icons"
@@ -195,6 +200,7 @@ file_clipboard = {"paths": [], "cut": False}
 theme = Int(SYSTEM)
 glass = Int(PARTIAL)
 accent_name = Str("Blue")
+pill_tabs = Bool(False)
 icons_per_row = Int(1)
 started = Bool(False)
 context = []  # the Context, kept on the first frame
@@ -203,6 +209,7 @@ listing_cache = {}  # folder -> entries, read once
 tree = TreeView("tree", multi_select=True, default_open=False, activatable_dirs=True)
 tree_ids = {}  # path -> id of the tree node
 tree_paths = {}  # id -> path
+tree_to_open = set()  # folders that were open last run: opened as their node is first built
 
 
 # files
@@ -400,6 +407,8 @@ def keyboard():
         open_palette()
     if key_pressed("Cmd+ArrowUp"):
         go(current().parent)
+    if not MACOS and key_pressed("Backspace"):  # the classic Windows Explorer shortcut
+        go(current().parent)
     if key_pressed("Cmd+OpenBracket"):
         back()
     if key_pressed("Cmd+CloseBracket"):
@@ -471,6 +480,51 @@ def apply_style():
         )
     else:
         ctx.set_accent(ACCENTS[accent_name.value])
+    dock.set_style(tab_style="pill" if pill_tabs.value else "classic")
+
+
+def open_folders():
+    """the folders open in the tree view, including the ones of the last run not shown yet"""
+    shown = {path for path, node_id in tree_ids.items() if tree.is_open(node_id)}
+    return shown | (tree_to_open - set(tree_ids))
+
+
+def snapshot():
+    """what the next run starts from: the choices of the user, not the selection"""
+    return {
+        "theme": theme.value,
+        "glass": glass.value,
+        "accent": accent_name.value,
+        "pill_tabs": pill_tabs.value,
+        "view": view.value,
+        "show_sidebar": show_sidebar.value,
+        "show_dock": show_dock.value,
+        "folded": sorted(folded),
+        "folder": str(current()),
+        "tree_open": sorted(str(p) for p in open_folders()),
+        "dock": dock.save(),  # the panes still open, their tabs and sizes
+    }
+
+
+def restore(saved):
+    """the reverse of snapshot(); a value that is missing or no longer valid keeps its default"""
+    if not isinstance(saved, dict):
+        return
+    theme.value = saved.get("theme", theme.value)
+    glass.value = saved.get("glass", glass.value)
+    if saved.get("accent") in ACCENTS:
+        accent_name.value = saved["accent"]
+    pill_tabs.value = saved.get("pill_tabs", pill_tabs.value)
+    view.value = saved.get("view", view.value)
+    show_sidebar.value = saved.get("show_sidebar", show_sidebar.value)
+    show_dock.value = saved.get("show_dock", show_dock.value)
+    folded.update(saved.get("folded", []))
+    tree_to_open.update(Path(p) for p in saved.get("tree_open", []) if isinstance(p, str))
+    if saved.get("dock"):
+        dock.load(saved["dock"])  # a layout that no longer fits is ignored
+    folder = Path(saved.get("folder", ""))
+    if len(sys.argv) < 2 and folder.is_dir():  # a folder given on the command line wins
+        history[:] = [folder]
 
 
 def set_theme(value):
@@ -485,6 +539,11 @@ def set_glass(value):
 
 def set_accent_name(name):
     accent_name.value = name
+    apply_style()
+
+
+def set_tab_style(value):
+    pill_tabs.value = value
     apply_style()
 
 
@@ -779,6 +838,8 @@ def tree_node(item):
     if path not in tree_ids:
         tree_ids[path] = len(tree_ids)
         tree_paths[tree_ids[path]] = path
+        if path in tree_to_open:  # ids change at every run, so the folders are kept by path
+            tree.set_open(tree_ids[path], True)
     node_id = tree_ids[path]
     # the icon of the Finder, or an emoji where the platform gives none
     icon_uri = file_icon(str(path), 16)
@@ -790,6 +851,16 @@ def tree_node(item):
         [tree_node(child) for child in listing(path)] if tree.is_open(node_id) else []
     )
     return TreeNode(node_id, text, children, icon=icon_uri)
+
+
+tree_menu = {"ids": None}  # nodes right-clicked this frame, applied once tree_view returns
+
+
+def tree_context_menu(ids):
+    """a right click on a row of the tree opens the actions panel, like in the other views"""
+    close_menu()  # the panel replaces the menu
+    tree_menu["ids"] = ids  # tree is borrowed by tree_view here: it is updated afterwards
+    open_palette()
 
 
 def tree_view_ui():
@@ -808,7 +879,12 @@ def tree_view_ui():
             scroll_to=tree_ids.get(Path(scroll_target.value))
             if scroll_target.value
             else None,
+            context_menu=tree_context_menu,
         )
+        if tree_menu["ids"] is not None:
+            ids, tree_menu["ids"] = tree_menu["ids"], None
+            if not all(i in tree.selected for i in ids):
+                tree.selected = [i for i in ids if i in tree_paths]
         tree_picked.clear()
         tree_picked.update(str(tree_paths[i]) for i in tree.selected)
         if tree_picked != picked:
@@ -1075,6 +1151,11 @@ def one_selected():
     return len(chosen()) == 1
 
 
+def reload_app():
+    """restarts the whole process in place, so edits made to this script take effect"""
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+
+
 # category, label, icon, shortcut, enabled, run. "Cmd" is the command key on macOS and ctrl elsewhere
 ACTIONS = [
     ("Ouvrir", "Ouvrir", "open", "Cmd+ArrowDown", has_selection, action_open),
@@ -1157,6 +1238,8 @@ ACTIONS = [
     ("Affichage", "Vitre partielle", "gear", None, lambda: True, lambda: set_glass(PARTIAL)),
     ("Affichage", "Vitre complète", "gear", None, lambda: True, lambda: set_glass(FULL)),
     ("Affichage", "Mode plat (sans vitre)", "gear", None, lambda: True, lambda: set_glass(NO_GLASS)),
+    ("Affichage", "Onglets classiques", "gear", None, lambda: True, lambda: set_tab_style(False)),
+    ("Affichage", "Onglets en pilule", "gear", None, lambda: True, lambda: set_tab_style(True)),
     ("Affichage", "Vue arborescence", "tree", None, lambda: True, lambda: set_view(TREE)),
     ("Affichage", "Vue liste", "list", None, lambda: True, lambda: set_view(LIST)),
     ("Affichage", "Vue icônes", "grid", None, lambda: True, lambda: set_view(ICONS)),
@@ -1176,6 +1259,7 @@ ACTIONS = [
             "Orange": "orange",
         }.items()
     ],
+    ("Système", "Recharger l'application", "refresh", "Cmd+R", lambda: True, reload_app),
 ]
 
 
@@ -1213,10 +1297,13 @@ def palette_ui():
         return
     palette_index.value = min(palette_index.value, len(actions) - 1)
 
+    moved_by_key = False
     if key_pressed("ArrowDown", when_typing=True):
         palette_index.value = min(palette_index.value + 1, len(actions) - 1)
+        moved_by_key = True
     if key_pressed("ArrowUp", when_typing=True):
         palette_index.value = max(palette_index.value - 1, 0)
+        moved_by_key = True
     if key_pressed("Enter", when_typing=True):
         run_palette_action(actions[palette_index.value])
 
@@ -1242,6 +1329,8 @@ def palette_ui():
             response = interactive(row)
             if i == palette_index.value:
                 draw_rect(response.rect, fill=accent + "40", rounding=6)
+                if moved_by_key:
+                    scroll_to_rect(response.rect)
             elif response.hovered:
                 draw_rect(response.rect, fill=(127, 127, 127, 30), rounding=6)
             if response.hovered:
@@ -1371,6 +1460,7 @@ dock = Dock(
 def update_func(ctx):
     if not started.value:
         context.append(ctx)
+        restore(ctx.load_state())
         apply_style()
         started.value = True
 
@@ -1421,9 +1511,14 @@ def update_func(ctx):
         rename_dialog()
     if palette_open.value:
         action_palette()
+    ctx.save_state(snapshot())  # written to disk by pyegui, see persist_id below
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
     run_native(
         "Finder",
         update_func,
@@ -1431,4 +1526,6 @@ if __name__ == "__main__":
         inner_height=720,
         backdrop=BACKDROP,
         fullsize_content=True,
+        icon_path=str(APP_ICON),
+        persist_id=APP_USER_MODEL_ID,  # the window and the choices come back at the next run
     )

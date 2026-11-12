@@ -196,3 +196,12 @@ Next: the presets of 3.
 * ~~mermaid diagrams in ```mermaid code blocks~~ (mermaid-svg, chosen over mermaid-rs-renderer,
   ferrigura and merman: complete diagrams, correct ER notation, dark theme, only thiserror as
   dependency; ferrigura and merman output css or html labels that resvg does not draw)
+
+## To decide
+
+* Icon view of `examples/finder.py` on Windows: a large gap between the icon and its name. The
+  shell icons (folders above all) have about 8 px of transparent margin in the bitmap, so the
+  56 point square of `image(..., size=56)` is not filled, plus the normal item spacing of the label.
+  Options: crop the transparent margins of the PNG in `native_icon_png` (`src/icons.rs`, fixes it for
+  every user of `file_icon`, but the icons may change scale a little), or tighten the spacing
+  around the icon in the example only.

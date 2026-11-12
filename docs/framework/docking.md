@@ -87,7 +87,42 @@ dock = Dock(root, glass=True, inactive_tab_fill="#ec489933", tab_bar_height=30)
 
 - `Dock.active_title` (attribute): Title of the active pane: the visible pane of the first tabs, or None
 - `Dock.add_pane(pane)` (method): Adds a pane to the first tabs of the dock, or to the root container, and makes it the active tab
+- `Dock.load(layout, panes=None)` (method): Restores a layout given by save(). Returns True if the layout was applied, and False,
+
+  leaving the dock as it is, if it is empty, damaged or from an unrelated dock: an old
+  saved state never raises.
+
+  The panes are found by title among the ones of the dock. A pane saved in the layout but
+  that does not exist any more is left out. A pane that was closed when the layout was saved
+  is not in it, so it is closed again; to be able to open it, give it in panes: the layout
+  can then also bring back a pane that is not in the dock yet.
+
+  **Args**
+
+  - `layout` (dict): what save() returned
+  - `panes` (list[DockPane]): more panes the layout can use, for the ones that are not in the dock now
+
+  **Usage:**
+
+  ```python
+  saved = ctx.load_state() or {}
+  if "dock" in saved:
+      dock.load(saved["dock"], panes=all_panes)
+  ```
+
 - `Dock.reset_style()` (method): Goes back to the default look of the dock
+- `Dock.save()` (method): Returns the layout of the dock as plain Python values (dicts, lists, strings, numbers): which
+
+  panes are open, how they are grouped in tabs and splits, the active tab of each group and the
+  size of each part. It is made to be given to ctx.save_state() and later to load(). Returns
+  None if called inside a pane of the same dock.
+
+  **Usage:**
+
+  ```python
+  ctx.save_state({"dock": dock.save()})
+  ```
+
 - `Dock.set_active(title)` (method): Makes the first pane with this title the active tab. Returns False if there is no such pane
 
 
