@@ -1260,7 +1260,7 @@ def toolbar():
         menu_button(f"{place_name(current())}  ▾", ancestors_menu, size=14)
         # the right side: the view, the search, the hidden panes. The search shrinks with the window and
         # disappears when it would be too small
-        left = 64 * (MACOS and not show_sidebar.value) + 174 + 7 * len(place_name(current()))
+        left = 64 * (MACOS and not show_sidebar.value) + 194 + 7 * len(place_name(current()))
         room = total - left - VIEW_WIDTH - PANES_BUTTON - 3 * 8
         search_width = min(room, SEARCH_WIDTH)
         show_search = search_width >= SEARCH_MIN
@@ -2084,9 +2084,11 @@ def path_bar():
             if link_clicked(place_name(part) if i == 0 else part.name):
                 go(part)
 
-        add_space(max(available_width() - 93, 8))
         count = len(visible_entries())
-        weak(f"{count} item{'s' if count != 1 else ''}")
+        text = f"{count} item{'s' if count != 1 else ''}"
+        # what is left of the row: the text (about 7 points a character) and the dock button
+        add_space(max(available_width() - 4 - 7 * len(text) - 36, 8))
+        weak(text)
         add_space(4)
         if image_button_clicked(
             svg("dock"), size=16, tint=icon_tint(), selected=show_dock.value
@@ -2227,7 +2229,9 @@ def update_func(ctx):
     )
     # the panes of the dock, or the files alone when the dock is hidden
     frame(
-        lambda: dock_area(dock) if show_dock.value else central_ui(),
+        lambda: dock_area(dock)
+        if show_dock.value
+        else frame(central_ui, stroke=EDGE, rounding=6),  # what the dock draws around its panes
         outer_margin=(H, H, 0, H),  # the same as the bars: the panes line up with them
     )
     if renaming.value:
