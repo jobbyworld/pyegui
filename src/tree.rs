@@ -84,6 +84,8 @@ pub(crate) struct TreeView {
     state: TreeViewState<i64>,
     activated: Vec<i64>,
     moved: Option<(Vec<i64>, i64, &'static str, Option<i64>)>,
+    focus: Option<bool>,
+    keep_focus: bool,
 }
 
 #[pymethods]
@@ -106,6 +108,8 @@ impl TreeView {
             state: TreeViewState::default(),
             activated: vec![],
             moved: None,
+            focus: None,
+            keep_focus: false,
         }
     }
 
@@ -134,6 +138,28 @@ impl TreeView {
     #[getter]
     fn moved(&self) -> Option<(Vec<i64>, i64, &'static str, Option<i64>)> {
         self.moved.clone()
+    }
+
+    /// Gives the keyboard focus to the tree (True, the default) or takes it away (False) at the
+    /// next tree_view. With the focus the arrows, Enter and the other keys work without a click,
+    /// so an app that manages its own focus can hand it to the tree, or to another part of the
+    /// window
+    #[pyo3(signature = (focused=true))]
+    fn focus(&mut self, focused: bool) {
+        self.focus = Some(focused);
+    }
+
+    /// If True, the tree takes back the keyboard focus at every tree_view when another widget
+    /// holds it, except a text field being edited. For an app where the tree is the part of the
+    /// window the keyboard acts on: a click on a button or a blank area does not cut the arrows
+    #[getter]
+    fn get_keep_focus(&self) -> bool {
+        self.keep_focus
+    }
+
+    #[setter]
+    fn set_keep_focus(&mut self, keep: bool) {
+        self.keep_focus = keep;
     }
 
     /// Opens or closes a directory
@@ -256,6 +282,14 @@ unsafe fn tree_view(
         }
     }
     let id = ui.make_persistent_id(&tree.id);
+    match tree.focus.take() {
+        Some(true) => ui.memory_mut(|m| m.request_focus(id)),
+        Some(false) => ui.memory_mut(|m| m.surrender_focus(id)),
+        None if tree.keep_focus && !ui.ctx().text_edit_focused() => {
+            ui.memory_mut(|m| m.request_focus(id))
+        }
+        None => {}
+    }
 
     let mut menu_result = Ok(());
     let mut view = egui_ltreeview::TreeView::new(id)

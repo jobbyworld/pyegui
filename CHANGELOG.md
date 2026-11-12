@@ -8,6 +8,9 @@
 
 - `scripts/make_shortcut_windows.py` and `scripts/make_app_macos.py`: launchers to start and pin an app (the Finder example by default) on the taskbar or the Dock
 - `tree_view(..., context_menu=f)`: `f(ids)` is called on a right click on a node
+- `tree.focus(focused=True)` and `tree.keep_focus`: give the keyboard focus to a `TreeView` (once, or at every frame unless a text field is being edited), or take it away, so an app can manage the focus of its zones
+- `ctx.request_repaint(after=0.0)`: asks for another call of `update_func`, to run an animation
+- `pointer_pressed()`: True in the frame the primary mouse button went down, to know which zone was clicked
 - `file_icon(path, size)`: also gives the icons of the Windows Explorer (via `IShellItemImageFactory`)
 
 ## 0.6.0 (2026-11-11)

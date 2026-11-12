@@ -60,6 +60,7 @@ from pyegui import (
     modal,
     modifiers,
     pointer_pos,
+    pointer_pressed,
     radio_clicked,
     radio_value,
     right_panel,
@@ -83,6 +84,7 @@ from pyegui import (
     top_panel,
     tree_view,
     typed_text,
+    ui_contains_pointer,
     vertical,
     vertical_centered,
     weak,
@@ -189,6 +191,8 @@ scroll_target = Str("")  # path of the item the view has to scroll to this frame
 view = Int(LIST)
 search = Str("")
 show_sidebar = Bool(True)
+ZONES = ["sidebar", "content", "dock"]  # F6 goes through them, left to right
+focus_zone = Str("content")  # the part of the window the keyboard acts on, see keyboard()
 show_dock = Bool(True)  # the dock on the right: Actions and Preview
 folded = set()  # categories of the Actions panel folded shut
 renaming = Str("")  # path being renamed, or ""
@@ -402,13 +406,37 @@ def type_to_select():
             return
 
 
+def cycle_zone(step):
+    zones = [z for z in ZONES if (z != "sidebar" or show_sidebar.value) and (z != "dock" or show_dock.value)]
+    index = zones.index(focus_zone.value) if focus_zone.value in zones else zones.index("content")
+    focus_zone.value = zones[(index + step) % len(zones)]
+
+
+def sidebar_keys():
+    """the keyboard of the sidebar: arrows go through the places and open them as they go, like the
+    sidebar of the Finder; Enter or Right gives the focus to the content"""
+    places = [path for _, _, path in favorites() + locations()]
+    here = places.index(current()) if current() in places else -1
+    if key_pressed("ArrowDown") and places:
+        go(places[min(here + 1, len(places) - 1)])
+    if key_pressed("ArrowUp") and places:
+        go(places[max(here - 1, 0)])
+    if key_pressed("Enter") or key_pressed("ArrowRight"):
+        focus_zone.value = "content"
+
+
 def keyboard():
     if palette_open.value or renaming.value:
         # those modals have their own Escape-closes-on-click-outside handling (see modal());
         # Escape uses when_typing=True below to work while a field has focus, so without this
         # guard it would also clear the background search/selection at the same time
         return
-    type_to_select()
+    if key_pressed("F6"):
+        cycle_zone(1)
+    if key_pressed("Shift+F6"):
+        cycle_zone(-1)
+    if focus_zone.value == "content":
+        type_to_select()
     if key_pressed("Space") and not typed["text"]:  # not the space of an active type-to-select
         open_palette()
     if key_pressed("Cmd+P"):
@@ -422,6 +450,12 @@ def keyboard():
     if key_pressed("Escape", when_typing=True):
         search.value = ""
         deselect()
+        focus_zone.value = "content"  # back to the list, even from the search field
+    if focus_zone.value == "sidebar":
+        sidebar_keys()
+        return
+    if focus_zone.value == "dock":
+        return  # the panes of the dock have no keyboard of their own yet
     if key_pressed("Cmd+A"):
         picked.update(str(e["path"]) for e in visible_entries())
         selected.value = selected.value or next(iter(picked), "")
@@ -586,6 +620,23 @@ def settings_menu():
 # sidebar
 
 
+def favorites():
+    entries = [
+        ("home", HOME.name, HOME),
+        ("desktop", "Desktop", HOME / "Desktop"),
+        ("document", "Documents", HOME / "Documents"),
+        ("download", "Downloads", HOME / "Downloads"),
+        ("folder", "pyegui", Path(__file__).resolve().parent.parent),
+        ("folder", "Developpement", Path(r"C:\developpement")),
+        ("folder", "Tech", Path(r"C:\Users\Joachim\tech")),
+    ]
+    return [e for e in entries if e[2].is_dir()]
+
+
+def locations():
+    return [("drive", place_name(drive), drive) for drive in drives() if drive.is_dir()]
+
+
 def sidebar():
     if MACOS:
         add_space(26)  # the window buttons are over the sidebar
@@ -609,18 +660,13 @@ def sidebar():
             go(path)
 
     weak("Favorites")
-    place("home", HOME.name, HOME)
-    place("desktop", "Desktop", HOME / "Desktop")
-    place("document", "Documents", HOME / "Documents")
-    place("download", "Downloads", HOME / "Downloads")
-    place("folder", "pyegui", Path(__file__).resolve().parent.parent)
-    place("folder", "Developpement", r"C:\developpement")
-    place("folder", "Tech", r"C:\Users\Joachim\tech")
+    for icon_name, name, path in favorites():
+        place(icon_name, name, path)
 
     add_space(12)
     weak("Locations")
-    for drive in drives():
-        place("drive", place_name(drive), drive)
+    for icon_name, name, path in locations():
+        place(icon_name, name, path)
     add_space(12)
     weak("Tags")
     for name, color in TAGS:
@@ -869,7 +915,24 @@ def tree_context_menu(ids):
     open_palette()
 
 
+def seed_tree_selection():
+    """the tree view moves from the selected node, so with none (at the start, after entering a
+    folder, after Escape) the first arrow selects the first or the last item, like the other views.
+    The tree is left without focus for that frame, or it would also move by one"""
+    if picked or focus_zone.value != "content" or palette_open.value or renaming.value:
+        return
+    down, up = key_pressed("ArrowDown"), key_pressed("ArrowUp")
+    entries = visible_entries()
+    if (down or up) and entries:
+        item = entries[0 if down else -1]
+        select(item)
+        scroll_target.value = str(item["path"])
+        tree.focus(False)
+
+
 def tree_view_ui():
+    seed_tree_selection()
+
     def nodes():
         query = search.value.lower()
         nodes_ = [
@@ -908,10 +971,22 @@ def tree_view_ui():
     scroll_area_both(nodes)
 
 
+def focus_tree():
+    """the tree view keeps the egui focus while the content is the focused zone: a click on a
+    button or a blank area, or a widget that grabs the focus, must not cut the arrows. A text field
+    being edited (the search) keeps it, and so does a dialog"""
+    popup = palette_open.value or renaming.value
+    in_content = focus_zone.value == "content" and not popup
+    tree.keep_focus = in_content
+    if focus_zone.value != "content":
+        tree.focus(False)
+
+
 def content():
     if not listing(current()) or (search.value and not visible_entries()):
         weak("No items" if not search.value else f"No items match “{search.value}”")
         return
+    focus_tree()
     [tree_view_ui, list_view, icon_view][view.value]()
     scroll_target.value = ""  # scrolled once, the user can scroll away
 
@@ -1279,6 +1354,9 @@ def action_keys():
 # action palette: a searchable popup of the actions above, opened with right click, Space or Cmd+P
 
 
+palette_pointer = {"pos": None}  # the pointer position of the previous frame of the palette
+
+
 def palette_actions():
     query = palette_query.value.lower()
     return [a for a in ACTIONS if a[4]() and query in a[1].lower()]
@@ -1304,6 +1382,9 @@ def palette_ui():
     palette_index.value = min(palette_index.value, len(actions) - 1)
 
     moved_by_key = False
+    pointer = pointer_pos()
+    pointer_moved = pointer != palette_pointer["pos"]  # a still mouse must not fight the keyboard
+    palette_pointer["pos"] = pointer
     if key_pressed("ArrowDown", when_typing=True):
         palette_index.value = min(palette_index.value + 1, len(actions) - 1)
         moved_by_key = True
@@ -1339,7 +1420,7 @@ def palette_ui():
                     scroll_to_rect(response.rect)
             elif response.hovered:
                 draw_rect(response.rect, fill=(127, 127, 127, 30), rounding=6)
-            if response.hovered:
+            if response.hovered and pointer_moved:
                 palette_index.value = i  # the mouse takes over the highlight from the keyboard
             if response.clicked:
                 run_palette_action(action)
@@ -1463,6 +1544,38 @@ dock = Dock(
 )
 
 
+def in_zone(zone, ui):
+    """a click anywhere in the part of the window moves the keyboard focus there"""
+
+    def run():
+        if pointer_pressed() and ui_contains_pointer():
+            focus_zone.value = zone
+        ui()
+
+    return run
+
+
+FOCUS_HOLD, FOCUS_FADE = 0.6, 0.4  # seconds the outline stays, then takes to fade out
+focus_outline = {"zone": None, "since": 0.0}
+
+
+def zone_stroke(zone, otherwise):
+    """the outline of the focused zone in the accent color: it shows where the keyboard acts when
+    the focus moves, then fades out"""
+    if focus_zone.value != focus_outline["zone"]:  # the focus just moved
+        focus_outline.update(zone=focus_zone.value, since=time.monotonic())
+    if focus_zone.value != zone:
+        return otherwise
+    age = time.monotonic() - focus_outline["since"]
+    alpha = min(max(1 - (age - FOCUS_HOLD) / FOCUS_FADE, 0.0), 1.0)
+    if alpha == 0:
+        return otherwise
+    context[0].request_repaint()  # the fade runs without any other event
+    color = ACCENTS[accent_name.value]
+    r, g, b = (int(color[i : i + 2], 16) for i in (1, 3, 5))
+    return (2, (r, g, b, round(255 * alpha)))
+
+
 def update_func(ctx):
     if not started.value:
         context.append(ctx)
@@ -1478,14 +1591,14 @@ def update_func(ctx):
     )  # a hairline so the rounded corner reads against the content
     left_panel(
         "sidebar",
-        sidebar,
+        in_zone("sidebar", sidebar),
         expanded=show_sidebar,
         default_size=215,
         min_size=200,
         inner_margin=12,
         show_separator_line=False,
         rounding=12,
-        stroke=edge,
+        stroke=zone_stroke("sidebar", edge),
     )
     top_panel(
         "toolbar",
@@ -1505,14 +1618,19 @@ def update_func(ctx):
     )
     right_panel(
         "dock",
-        lambda: dock_area(dock),
+        in_zone("dock", lambda: dock_area(dock)),
         expanded=show_dock,
         default_size=300,
         min_size=220,
         inner_margin=6,
         show_separator_line=False,
+        stroke=zone_stroke("dock", (0, (0, 0, 0, 0))),
     )
-    frame(content, inner_margin=16)
+    frame(
+        in_zone("content", content),
+        inner_margin=16,
+        stroke=zone_stroke("content", (0, (0, 0, 0, 0))),
+    )
     if renaming.value:
         rename_dialog()
     if palette_open.value:

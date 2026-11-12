@@ -653,6 +653,20 @@ unsafe fn pointer_pos() -> PyResult<Option<(f32, f32)>> {
     Ok(ctx.input(|i| i.pointer.latest_pos()).map(|p| (p.x, p.y)))
 }
 
+/// True during the frame in which the primary mouse button went down, wherever the mouse is.
+/// With ui_contains_pointer it tells which part of the window was clicked, even when the click
+/// lands on no widget, to move the keyboard focus there.
+///
+/// Example::
+///
+///     if pointer_pressed() and ui_contains_pointer():
+///         focused_zone.value = "sidebar"
+#[pyfunction]
+unsafe fn pointer_pressed() -> PyResult<bool> {
+    let ctx = current_ui(&UI)?.ctx().clone();
+    Ok(ctx.input(|i| i.pointer.primary_pressed()))
+}
+
 /// The modifier keys held during the frame, as a dict with the keys shift, command and alt.
 /// command is the command key on macOS and ctrl elsewhere.
 ///
@@ -953,6 +967,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(interactive, m)?)?;
     m.add_function(wrap_pyfunction!(segmented_control, m)?)?;
     m.add_function(wrap_pyfunction!(pointer_pos, m)?)?;
+    m.add_function(wrap_pyfunction!(pointer_pressed, m)?)?;
     m.add_function(wrap_pyfunction!(typed_text, m)?)?;
     m.add_function(wrap_pyfunction!(modifiers, m)?)?;
     m.add_function(wrap_pyfunction!(draw_rect, m)?)?;

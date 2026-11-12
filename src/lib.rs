@@ -334,6 +334,25 @@ impl Context {
         Ok(())
     }
 
+    /// Asks for another call of update_func, for an animation: the app is otherwise drawn again
+    /// only when something happens (mouse, keys, a timer of its own).
+    ///
+    /// Args:
+    ///     after (float): wait this many seconds first. Default is 0, as soon as possible
+    ///
+    /// Example::
+    ///
+    ///     if time.monotonic() - started < 1.0:  # a fade of one second
+    ///         ctx.request_repaint()
+    #[pyo3(signature = (after=0.0))]
+    fn request_repaint(&self, after: f64) {
+        if after > 0.0 {
+            self.0.request_repaint_after(std::time::Duration::from_secs_f64(after));
+        } else {
+            self.0.request_repaint();
+        }
+    }
+
     /// Changes the backdrop effect behind the window, for example to follow the theme.
     ///
     /// The window must have been created with a backdrop: run_native(..., backdrop=Backdrop.MICA).
