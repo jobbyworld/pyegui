@@ -479,7 +479,7 @@ impl Float {
 ///
 /// Usage::
 ///
-///     color_rgb = RGB(69, 69, 69)
+///     color_rgb = RGB(0.27, 0.27, 0.27)
 ///     color_edit_button_rgb(color_rgb)
 #[pyclass]
 struct RGB {
@@ -2243,7 +2243,7 @@ unsafe fn spinner() -> PyResult<()> {
 ///
 /// Example::
 ///
-///     color = RGB(69, 69, 69)
+///     color = RGB(0.27, 0.27, 0.27)
 ///     # inside udpate_func
 ///     color_edit_button_rgb(color)
 ///     heading(f"r:{color.r} g:{color.g} b:{color.b}")

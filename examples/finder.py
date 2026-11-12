@@ -21,6 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
+from finder_tags import TagStore, key as tag_key
+
 from pyegui import (
     Backdrop,
     Bool,
@@ -28,6 +30,7 @@ from pyegui import (
     DockContainer,
     DockPane,
     Int,
+    RGB,
     Str,
     TreeNode,
     TreeView,
@@ -39,7 +42,9 @@ from pyegui import (
     button_clicked,
     close_menu,
     code,
+    color_edit_button_rgb,
     colored_label,
+    combo_box,
     columns,
     dock_area,
     draw_rect,
@@ -68,6 +73,7 @@ from pyegui import (
     scroll_area_both,
     scroll_area_vertical,
     scroll_to_rect,
+    selectable_label_clicked,
     segmented_control,
     selectable_label_response,
     separator,
@@ -76,8 +82,10 @@ from pyegui import (
     set_min_width,
     set_width,
     small,
+    small_button_clicked,
     strong,
     table_ui,
+    text_edit_multiline,
     text_edit_singleline,
     toggle_value,
     tooltip,
@@ -168,15 +176,25 @@ KINDS = {
     ".lock": "Lock file",
     ".zip": "ZIP archive",
 }
-TAGS = [
-    ("Red", "#ef4444"),
-    ("Orange", "#f97316"),
-    ("Green", "#22c55e"),
-    ("Blue", "#3b82f6"),
-    ("Purple", "#a855f7"),
-]
+NEW_TAG_COLORS = ["#ef4444", "#f97316", "#22c55e", "#3b82f6", "#a855f7", "#eab308", "#14b8a6"]
 
 # state
+
+tags = TagStore()  # the tags and what they are put on, in a SQLite file, see finder_tags.py
+tag_filter = Int(0)  # id of the tag whose items are shown instead of a folder, or 0
+tag_manager_open = Bool(False)  # the window to create, rename, recolor, move and delete tags
+tag_picker_open = Bool(False)  # the window to put tags on the selected items
+tag_edit = {"id": 0, "loaded": 0}  # the tag edited in the manager, and the one the fields hold
+tag_name = Str("")
+tag_color = RGB(0.0, 0.0, 0.0)  # channels between 0 and 1
+tag_parent = Int(0)
+tag_cache = {"version": -1, "own": {}, "effective": {}, "all": [], "by_id": {}, "noted": set()}
+tags_query = Str("")  # the search or creation field of the Tags pane
+tag_query = Str("")  # what is typed in the window to tag the selection
+tag_index = Int(0)  # the highlighted row of that window
+tag_picker_state = {"query": "", "pointer": None, "just_opened": False}
+note_text = Str("")  # the text of the Notes pane, for the item it holds
+note_of = {"path": ""}  # the item the Notes pane holds
 
 start = Path(sys.argv[1]).expanduser().resolve() if len(sys.argv) > 1 else HOME
 history = [start]
@@ -264,9 +282,22 @@ def listing(folder):
     return listing_cache[folder]
 
 
+def listing_here():
+    """what the content shows: the folder, or the items of the tag chosen in the sidebar"""
+    if not tag_filter.value:
+        return listing(current())
+    key = ("tag", tag_filter.value, tags.version)
+    if key not in listing_cache:
+        entries = [e for e in (entry(Path(p)) for p in tags.tagged_with(tag_filter.value)) if e]
+        for old in [k for k in listing_cache if isinstance(k, tuple)]:
+            del listing_cache[old]  # the views of the tag in its former states
+        listing_cache[key] = sorted(entries, key=lambda e: (not e["is_dir"], e["name"].lower()))
+    return listing_cache[key]
+
+
 def visible_entries():
     query = search.value.lower()
-    return [e for e in listing(current()) if query in e["name"].lower()]
+    return [e for e in listing_here() if query in e["name"].lower()]
 
 
 def selected_entry():
@@ -307,6 +338,7 @@ def icon(item, size):
 
 def go(folder):
     folder = Path(folder)
+    tag_filter.value = 0  # leaving a tag view
     if folder == current() or not folder.is_dir():
         return
     del history[position.value + 1 :]
@@ -314,6 +346,7 @@ def go(folder):
     position.value = len(history) - 1
     deselect()
     search.value = ""
+    tags.opened(folder)
 
 
 def back():
@@ -341,6 +374,7 @@ def open_item(item):
         go(item["path"])
     else:
         context[0].open_url(item["path"].as_uri())  # with the app of the file
+        tags.opened(item["path"])  # remembered in the base
 
 
 def select(item):
@@ -406,6 +440,11 @@ def type_to_select():
             return
 
 
+def popup_open():
+    """a dialog is open: it has its own keyboard"""
+    return bool(palette_open.value or renaming.value or tag_picker_open.value or tag_manager_open.value)
+
+
 def cycle_zone(step):
     zones = [z for z in ZONES if (z != "sidebar" or show_sidebar.value) and (z != "dock" or show_dock.value)]
     index = zones.index(focus_zone.value) if focus_zone.value in zones else zones.index("content")
@@ -426,7 +465,7 @@ def sidebar_keys():
 
 
 def keyboard():
-    if palette_open.value or renaming.value:
+    if popup_open():
         # those modals have their own Escape-closes-on-click-outside handling (see modal());
         # Escape uses when_typing=True below to work while a field has focus, so without this
         # guard it would also clear the background search/selection at the same time
@@ -620,6 +659,430 @@ def settings_menu():
 # sidebar
 
 
+# tags
+
+
+def tag_data():
+    """the tags, read again only when they changed: the content asks at every frame"""
+    if tag_cache["version"] != tags.version:
+        tag_cache.update(
+            version=tags.version, own={}, effective={}, all=tags.all(), noted=tags.noted()
+        )
+        tag_cache["by_id"] = {t["id"]: t for t in tag_cache["all"]}
+    return tag_cache
+
+
+def tags_of(path):
+    """the tags of an item, as [(tag, how)]: own first, then those of its folders, then parents"""
+    data = tag_data()
+    key = str(path)
+    if key not in data["effective"]:
+        found = tags.effective(path)
+        order = {"own": 0, "folder": 1, "parent": 2}
+        data["effective"][key] = sorted(
+            ((data["by_id"][t], how) for t, how in found.items() if t in data["by_id"]),
+            key=lambda pair: (order[pair[1]], pair[0]["name"].lower()),
+        )
+    return data["effective"][key]
+
+
+DOT_WIDTH = 14  # what a dot takes with its spacing, to right-align them
+
+
+def tag_dots(item, right=False):
+    """a dot of the color of each tag of the item; paler when the tag is inherited. With
+    right=True they are pushed to the right edge of the space left in the row"""
+    found = tags_of(item["path"])
+    if right and found:
+        add_space(max(available_width() - DOT_WIDTH * len(found) - 14, 4))
+    for tag, how in found:
+        r, g, b = hex_color(tag["color"])
+        colored_label((r, g, b, 255 if how == "own" else 110), "●")
+
+
+def has_note(item):
+    return tag_key(item["path"]) in tag_data()["noted"]
+
+
+def notes_panel():
+    """the note of the selected item: written as it is typed"""
+    path = selected.value
+    if not path or not Path(path).exists():
+        weak("Sélectionne un fichier ou un dossier pour écrire une note")
+        note_of["path"] = ""
+        return
+    if note_of["path"] != path:  # another item: the field takes its note
+        note_of["path"] = path
+        note_text.value = tags.note(path)
+    strong(Path(path).name)
+    weak(str(Path(path).parent))
+    add_space(4)
+    set_min_height(max(available_height() - 20, 80))
+    text_edit_multiline(note_text, hint_text="Note")
+    if note_text.value != tags.note(path):
+        tags.set_note(path, note_text.value)
+
+
+def hex_color(color):
+    return tuple(int(color[i : i + 2], 16) for i in (1, 3, 5))
+
+
+def to_hex(rgb):
+    """the color of a color picker (RGB holds channels between 0 and 1) as "#rrggbb" """
+    return "#{:02x}{:02x}{:02x}".format(*(min(max(round(c * 255), 0), 255) for c in (rgb.r, rgb.g, rgb.b)))
+
+
+def tag_header():
+    """above a tag view: which tag it is, and the way back to the folder"""
+    tag = tag_data()["by_id"].get(tag_filter.value)
+    if not tag_filter.value:
+        return
+    if not tag:  # the tag was deleted
+        tag_filter.value = 0
+        return
+
+    def line():
+        colored_label(hex_color(tag["color"]) + (255,), "●")
+        strong(tag["name"])
+        weak(f"{len(listing_here())} élément(s) avec ce tag ou ses sous-tags")
+        if small_button_clicked("✕"):
+            tag_filter.value = 0
+
+    horizontal(line)
+    separator()
+
+
+def toggle_tags(paths, tag_id):
+    """the tag is on all of the items → off them; otherwise → on all of them"""
+    if all(tag_id in tags.own(p) for p in paths):
+        for p in paths:
+            tags.untag(p, tag_id)
+    else:
+        for p in paths:
+            tags.tag(p, tag_id)
+
+
+def tag_path(tag):
+    """the names from the top level tag down to this one"""
+    by_id = tag_data()["by_id"]
+    names = []
+    while tag in by_id:
+        names.append(by_id[tag]["name"])
+        tag = by_id[tag]["parent"]
+    return names[::-1]
+
+
+def split_tag_path(text):
+    """"Work/ Invoice" -> ["Work", "Invoice"]: the "/" separate the levels of the tree of tags"""
+    return [part.strip() for part in text.split("/") if part.strip()]
+
+
+def find_tag(parts):
+    """the tag at this path from the top level, or None"""
+    parent = None
+    for part in parts:
+        siblings = [
+            t for t in tag_data()["all"] if t["parent"] == parent and t["name"].lower() == part.lower()
+        ]
+        if not siblings:
+            return None
+        parent = siblings[0]["id"]
+    return parent
+
+
+def create_tag_path(parts):
+    """the tag at this path, made with the levels above it that do not exist yet"""
+    parent = None
+    for i, part in enumerate(parts):
+        existing = find_tag(parts[: i + 1])
+        if existing is None:
+            color = NEW_TAG_COLORS[len(tag_data()["all"]) % len(NEW_TAG_COLORS)]
+            existing = tags.create(part, color, parent)
+        parent = existing
+    return parent
+
+
+def matching_tags(parts):
+    """the tags found by what was typed: each typed level is a part of the name of the matching
+    level, the last typed one against the tag itself ("w/inv" finds Work/Invoice)"""
+    found = []
+    for tag in tag_data()["all"]:
+        names = [n.lower() for n in tag_path(tag["id"])]
+        if len(parts) <= len(names) and all(
+            part.lower() in name for part, name in zip(parts, names[len(names) - len(parts) :])
+        ):
+            found.append(tag)
+    return found
+
+
+def can_create_tag(parts):
+    """a tag is offered for creation when the typed path does not exist; a single name that
+    already exists somewhere in the tree is found, not offered again"""
+    if not parts or find_tag(parts) is not None:
+        return False
+    return len(parts) > 1 or not any(t["name"].lower() == parts[0].lower() for t in tag_data()["all"])
+
+
+def tag_picker_ui():
+    paths = chosen()
+    set_width(440)
+    names = ", ".join(p.name for p in paths[:3]) + (" …" if len(paths) > 3 else "")
+    weak(f"Taguer « {names} »")
+    text_edit_singleline(tag_query, hint_text="Chercher ou créer un tag", request_focus=True)
+    parts = split_tag_path(tag_query.value)
+    rows = [("tag", t) for t in (matching_tags(parts) if parts else tag_data()["all"])]
+    if can_create_tag(parts):
+        rows.append(("create", parts))
+    if tag_query.value != tag_picker_state["query"]:  # a new search starts at its first row
+        tag_picker_state["query"] = tag_query.value
+        tag_index.value = 0
+    tag_index.value = min(tag_index.value, max(len(rows) - 1, 0))
+
+    moved_by_key = False
+    if key_pressed("ArrowDown", when_typing=True):
+        tag_index.value = min(tag_index.value + 1, len(rows) - 1)
+        moved_by_key = True
+    if key_pressed("ArrowUp", when_typing=True):
+        tag_index.value = max(tag_index.value - 1, 0)
+        moved_by_key = True
+
+    def activate(row):
+        kind, value = row
+        if kind == "create":
+            leaf = create_tag_path(value)
+            for p in paths:
+                tags.tag(p, leaf)
+            tag_query.value = ""
+        else:
+            toggle_tags(paths, value["id"])
+
+    just_opened, tag_picker_state["just_opened"] = tag_picker_state["just_opened"], False
+    if rows and key_pressed("Enter", when_typing=True) and not just_opened:
+        activate(rows[tag_index.value])
+
+    add_space(4)
+    owned = [tags.own(p) for p in paths]
+    accent = ACCENTS[accent_name.value]
+    row_width = available_width() - 14  # measured here, inside the scroll area it is unreliable
+
+    def list_ui():
+        for i, (kind, value) in enumerate(rows):
+
+            def row(kind=kind, value=value):
+                def line():
+                    set_width(row_width)  # the highlight covers the whole row, not just the text
+                    if kind == "create":
+                        label(f"+ Créer le tag « {' / '.join(value)} »", selectable=False)
+                        return
+                    on = sum(value["id"] in o for o in owned)
+                    names = tag_path(value["id"])
+                    colored_label(hex_color(value["color"]) + (255,), "●")
+                    mark = "✓" if on == len(paths) else "–" if on else ""
+
+                    def mark_column():
+                        set_min_width(12)  # the names stay aligned whether or not they are checked
+                        label(mark, selectable=False)
+
+                    vertical(mark_column)
+                    label(" / ".join(names), selectable=False)
+                    if len(paths) == 1 and any(
+                        t["id"] == value["id"] and how != "own" for t, how in tags_of(paths[0])
+                    ):
+                        weak("hérité")
+
+                horizontal(line)
+
+            response = interactive(row)
+            if i == tag_index.value:
+                draw_rect(response.rect, fill=accent + "40", rounding=6)
+                if moved_by_key:
+                    scroll_to_rect(response.rect)
+            elif response.hovered:
+                draw_rect(response.rect, fill=(127, 127, 127, 30), rounding=6)
+            if response.hovered and pointer_pos() != tag_picker_state["pointer"]:
+                tag_index.value = i  # the mouse takes over the highlight when it moves
+            if response.clicked:
+                activate((kind, value))
+        tag_picker_state["pointer"] = pointer_pos()
+
+    if not rows:
+        weak("Aucun tag : tape un nom pour en créer un")
+    def bounded():
+        # set_max_height measures from the top of its own ui, so it needs a fresh one here
+        set_max_height(300)
+        scroll_area_vertical(list_ui)
+
+    vertical(bounded)
+    add_space(6)
+
+    def footer():
+        if button_clicked("Gérer les tags…"):
+            tag_picker_open.value = False
+            tag_manager_open.value = True
+        weak("Entrée : ajouter ou retirer · Parent/Enfant crée un chemin")
+
+    horizontal(footer)
+
+
+def dialog_fill():
+    """the background of a dialog: nearly opaque, so what is behind does not show through the text"""
+    return (30, 31, 36, 245) if context[0].is_dark_theme else (248, 248, 250, 245)
+
+
+def tags_panel():
+    """the dock pane of the tags: a field to search or create a tag, then the tree of tags, each
+    with the state for the selected items: on (all of them have it), off (none) or mixed (some
+    have it, they diverge)"""
+    paths = chosen()
+    data = tag_data()
+    text_edit_singleline(tags_query, hint_text="Chercher ou créer un tag")
+    parts = split_tag_path(tags_query.value)
+    searching = bool(parts)
+    shown = matching_tags(parts) if searching else data["all"]
+    creating = can_create_tag(parts)
+    if paths:
+        weak(paths[0].name if len(paths) == 1 else f"{len(paths)} éléments sélectionnés")
+    else:
+        weak("Sélectionne des éléments pour les taguer")
+    add_space(4)
+
+    def create():
+        leaf = create_tag_path(parts)
+        for p in paths:
+            tags.tag(p, leaf)
+        tags_query.value = ""
+
+    if key_pressed("Enter", when_typing=True) and searching:
+        if shown:
+            if paths:
+                toggle_tags(paths, shown[0]["id"])
+        elif creating:
+            create()
+
+    owned = [tags.own(p) for p in paths]
+    accent = ACCENTS[accent_name.value]
+    tint = icon_tint()
+    for tag in shown:
+        on = sum(tag["id"] in o for o in owned)
+        state = "off" if not paths or on == 0 else "on" if on == len(paths) else "mixed"
+        inherited = len(paths) == 1 and any(
+            t["id"] == tag["id"] and how != "own" for t, how in tags_of(paths[0])
+        )
+
+        def row(tag=tag, state=state, inherited=inherited):
+            add_space(0 if searching else 14 * tag["depth"])
+            clicked = image_button_clicked(
+                svg(f"checkbox-{state}"),
+                size=16,
+                tint=tint if state == "off" else accent,
+                frame=False,
+            )
+            if paths and clicked:
+                toggle_tags(paths, tag["id"])
+            colored_label(hex_color(tag["color"]) + (255,), "●")
+            name = " / ".join(tag_path(tag["id"])) if searching else tag["name"]
+            if selectable_label_clicked(False, name) and paths:
+                toggle_tags(paths, tag["id"])
+            if inherited:
+                weak("hérité")
+
+        horizontal(row)
+    if not shown and not creating:
+        weak("Aucun tag : tape un nom pour en créer un" if not searching else "Aucun tag trouvé")
+    if creating and button_clicked(f"+ Créer le tag « {' / '.join(parts)} »"):
+        create()
+    add_space(8)
+    if button_clicked("Gérer les tags…"):
+        tag_manager_open.value = True
+
+
+def tag_picker():
+    if not chosen():
+        tag_picker_open.value = False
+    elif modal("tag-picker", tag_picker_ui, rounding=12, inner_margin=14, fill=dialog_fill()):
+        tag_picker_open.value = False
+
+
+def new_tag(parent):
+    color = NEW_TAG_COLORS[len(tag_data()["all"]) % len(NEW_TAG_COLORS)]
+    tag_edit["id"] = tags.create("Nouveau tag", color, parent or None)
+    return tag_edit["id"]
+
+
+def tag_manager_ui():
+    set_width(380)
+    data = tag_data()
+    strong("Tags")
+    weak("Un tag s'applique à un élément et à son contenu, et ajoute ses tags parents.")
+    add_space(4)
+
+    def tree():
+        for tag in data["all"]:
+
+            def row(tag=tag):
+                add_space(14 * tag["depth"])
+                colored_label(hex_color(tag["color"]) + (255,), "●")
+                if selectable_label_clicked(tag_edit["id"] == tag["id"], tag["name"]):
+                    tag_edit["id"] = tag["id"]
+
+            horizontal(row)
+
+    def bounded():
+        # set_max_height measures from the top of its own ui, so it needs a fresh one here
+        set_max_height(220)
+        scroll_area_vertical(tree)
+
+    vertical(bounded)
+    add_space(4)
+    separator()
+    tag = data["by_id"].get(tag_edit["id"])
+    if tag is None:
+        tag_edit["id"] = 0
+    elif tag_edit["loaded"] != tag["id"]:  # the fields take the values of the chosen tag
+        tag_edit["loaded"] = tag["id"]
+        tag_name.value = tag["name"]
+        tag_color.r, tag_color.g, tag_color.b = (c / 255 for c in hex_color(tag["color"]))
+        tag_parent.value = tag["parent"] or 0
+    if tag:
+
+        def edit():
+            text_edit_singleline(tag_name, hint_text="Nom")
+            color_edit_button_rgb(tag_color)
+
+        horizontal(edit)
+        under = [t for t in data["all"] if t["id"] not in tags.subtree(tag["id"])]
+        combo_box(
+            tag_parent,
+            [0] + [t["id"] for t in under],
+            ["(racine)"] + ["  " * t["depth"] + t["name"] for t in under],
+            "Parent",
+        )
+        if tag_name.value.strip() and tag_name.value != tag["name"]:
+            tags.rename(tag["id"], tag_name.value.strip())
+        if to_hex(tag_color) != tag["color"]:
+            tags.recolor(tag["id"], to_hex(tag_color))
+        if (tag_parent.value or None) != tag["parent"]:
+            tags.move(tag["id"], tag_parent.value or None)
+
+    def buttons():
+        if button_clicked("Nouveau tag"):
+            new_tag(0)
+        if tag and button_clicked("Nouveau sous-tag"):
+            new_tag(tag["id"])
+        if tag and button_clicked("Supprimer"):
+            tags.delete(tag["id"])
+            tag_edit["id"] = 0
+            if tag_filter.value == tag["id"]:
+                tag_filter.value = 0
+
+    horizontal(buttons)
+
+
+def tag_manager():
+    if modal("tag-manager", tag_manager_ui, rounding=12, inner_margin=14, fill=dialog_fill()):
+        tag_manager_open.value = False
+
+
 def favorites():
     entries = [
         ("home", HOME.name, HOME),
@@ -668,14 +1131,24 @@ def sidebar():
     for icon_name, name, path in locations():
         place(icon_name, name, path)
     add_space(12)
-    weak("Tags")
-    for name, color in TAGS:
 
-        def tag(name=name, color=color):
-            colored_label(color, "●")
-            label(name)
+    def tags_title():
+        weak("Tags")
+        add_space(max(available_width() - 40, 4))
+        if small_button_clicked("⚙"):
+            tag_manager_open.value = True
 
-        horizontal(tag)
+    horizontal(tags_title)
+    for tag in tag_data()["all"]:
+
+        def row(tag=tag):
+            add_space(12 * tag["depth"])
+            colored_label(hex_color(tag["color"]) + (255,), "●")
+            if selectable_label_clicked(tag_filter.value == tag["id"], tag["name"]):
+                tag_filter.value = tag["id"]
+                deselect()
+
+        horizontal(row)
 
 
 # toolbar
@@ -750,7 +1223,13 @@ def toolbar():
         )  # greyed out at the root
         add_space(6)
         menu_button(f"{place_name(current())}  ▾", ancestors_menu, size=14)
-        add_space(max(available_width() - 640, 8))
+        add_space(max(available_width() - 690, 8))
+
+        def tag_button():
+            if image_button_clicked(svg("tag"), size=16, tint=tint):
+                open_tag_picker()
+
+        add_enabled(has_selection(), tag_button)  # greyed out with nothing selected
         segmented_control(
             view,
             [(svg("tree"), None), (svg("list"), None), (svg("grid"), None)],
@@ -781,11 +1260,15 @@ def list_view():
                     ),
                     entries,
                 )
+                tag_dots(item, right=True)
 
             horizontal(name)
         elif col == 1:
-            weak(item["modified"])
+            if has_note(item):
+                image(svg("note"), size=14, tint=icon_tint())
         elif col == 2:
+            weak(item["modified"])
+        elif col == 3:
             weak(item["size"])
         else:
             weak(item["kind"])
@@ -793,11 +1276,11 @@ def list_view():
     paths = [str(e["path"]) for e in entries]
     row = paths.index(scroll_target.value) if scroll_target.value in paths else None
     table_ui(
-        ["Name", "Date Modified", "Size", "Kind"],
+        ["Name", "Notes", "Date Modified", "Size", "Kind"],
         len(entries),
         cell,
         id=f"list {current()}",
-        column_widths=[290, 165, 80, "remainder"],
+        column_widths=[290, 50, 165, 80, "remainder"],
         striped=True,
         scroll_to_row=row,
     )
@@ -825,6 +1308,7 @@ def icon_view():
                     icon(item, 56)
                     # not selectable, so the click reaches the tile instead of selecting the text
                     label(item["name"], truncate=True, selectable=False)
+                    horizontal(lambda item=item: tag_dots(item))
 
                 # the icon and the name are one target: a click anywhere on the tile selects it
                 response = interactive(lambda: vertical_centered(tile))
@@ -919,7 +1403,7 @@ def seed_tree_selection():
     """the tree view moves from the selected node, so with none (at the start, after entering a
     folder, after Escape) the first arrow selects the first or the last item, like the other views.
     The tree is left without focus for that frame, or it would also move by one"""
-    if picked or focus_zone.value != "content" or palette_open.value or renaming.value:
+    if picked or focus_zone.value != "content" or popup_open():
         return
     down, up = key_pressed("ArrowDown"), key_pressed("ArrowUp")
     entries = visible_entries()
@@ -936,7 +1420,7 @@ def tree_view_ui():
     def nodes():
         query = search.value.lower()
         nodes_ = [
-            tree_node(e) for e in listing(current()) if query in e["name"].lower()
+            tree_node(e) for e in listing_here() if query in e["name"].lower()
         ]
         if (
             picked != tree_picked
@@ -975,7 +1459,7 @@ def focus_tree():
     """the tree view keeps the egui focus while the content is the focused zone: a click on a
     button or a blank area, or a widget that grabs the focus, must not cut the arrows. A text field
     being edited (the search) keeps it, and so does a dialog"""
-    popup = palette_open.value or renaming.value
+    popup = popup_open()
     in_content = focus_zone.value == "content" and not popup
     tree.keep_focus = in_content
     if focus_zone.value != "content":
@@ -983,7 +1467,8 @@ def focus_tree():
 
 
 def content():
-    if not listing(current()) or (search.value and not visible_entries()):
+    tag_header()
+    if not listing_here() or (search.value and not visible_entries()):
         weak("No items" if not search.value else f"No items match “{search.value}”")
         return
     focus_tree()
@@ -1224,6 +1709,13 @@ def open_in_claude(mode):
     )
 
 
+def open_tag_picker():
+    tag_query.value = ""
+    tag_index.value = 0
+    tag_picker_state["just_opened"] = True  # the Enter that chose the action must not tag a row
+    tag_picker_open.value = True
+
+
 def has_selection():
     return bool(chosen())
 
@@ -1276,6 +1768,7 @@ ACTIONS = [
         one_selected,
         lambda: start_rename(Path(selected.value)),
     ),
+    ("Édition", "Taguer…", "tag", "Cmd+T", has_selection, open_tag_picker),
     ("Édition", "Copier", "copy", "Cmd+C", has_selection, lambda: copy_to_clipboard(False)),
     ("Édition", "Couper", "cut", "Cmd+X", has_selection, lambda: copy_to_clipboard(True)),
     ("Édition", "Coller", "paste", "Cmd+V", lambda: bool(file_clipboard["paths"]), paste),
@@ -1488,6 +1981,7 @@ def rename_dialog():
             if new_name.value != path.name:
                 try:
                     path.rename(path.with_name(new_name.value))
+                    tags.moved(path, path.with_name(new_name.value))
                     select_path(path.with_name(new_name.value))
                     refresh(path.parent)
                 except OSError:
@@ -1533,6 +2027,8 @@ def path_bar():
 PANES = {
     "Actions": lambda: scroll_area_vertical(actions_panel),
     "Preview": lambda: scroll_area_vertical(preview),
+    "Notes": notes_panel,
+    "Tags": lambda: scroll_area_vertical(tags_panel),
 }
 dock = Dock(
     DockContainer(
@@ -1635,6 +2131,10 @@ def update_func(ctx):
         rename_dialog()
     if palette_open.value:
         action_palette()
+    if tag_picker_open.value:
+        tag_picker()
+    if tag_manager_open.value:
+        tag_manager()
     ctx.save_state(snapshot())  # written to disk by pyegui, see persist_id below
 
 

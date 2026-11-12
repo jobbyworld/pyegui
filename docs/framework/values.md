@@ -105,7 +105,7 @@ Rgb color picker
 **Usage:**
 
 ```python
-color_rgb = RGB(69, 69, 69)
+color_rgb = RGB(0.27, 0.27, 0.27)
 color_edit_button_rgb(color_rgb)
 ```
 
