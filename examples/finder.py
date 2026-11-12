@@ -640,32 +640,6 @@ def set_view(value):
     view.value = value
 
 
-def settings_menu():
-    before = (theme.value, glass.value, accent_name.value)
-    toggle_value(show_sidebar, "Sidebar")
-    toggle_value(show_dock, "Dock")
-    for title, ui in PANES.items():  # a pane closed with its tab comes back from here
-        if title not in dock.titles and button_clicked(f"Show {title}"):
-            dock.add_pane(DockPane(title, ui, closable=True))
-    separator()
-    small("THEME")
-    radio_value(theme, LIGHT, "Light")
-    radio_value(theme, DARK, "Dark")
-    radio_value(theme, SYSTEM, "System")
-    separator()
-    small("GLASS")
-    radio_value(glass, PARTIAL, "Partial")
-    radio_value(glass, FULL, "Full")
-    radio_value(glass, NO_GLASS, "Off")
-    separator()
-    small("ACCENT")
-    for accent in ACCENTS:
-        if radio_clicked(accent_name.value == accent, accent):
-            accent_name.value = accent
-    if (theme.value, glass.value, accent_name.value) != before:
-        apply_style()
-
-
 # sidebar
 
 
@@ -1867,6 +1841,17 @@ ACTIONS = [
             "Orange": "orange",
         }.items()
     ],
+    *[
+        (
+            "Affichage",
+            f"Afficher le panneau {title}",
+            "gear",
+            None,
+            lambda title=title: title not in dock.titles,
+            lambda title=title: dock.add_pane(DockPane(title, PANES[title], closable=True)),
+        )
+        for title in ("Actions", "Preview", "Notes", "Tags")  # PANES is defined further down
+    ],
     ("Système", "Recharger l'application", "refresh", "Cmd+R", lambda: True, reload_app),
 ]
 
@@ -2030,8 +2015,6 @@ def rename_dialog():
 
 
 def path_bar():
-    tint = icon_tint()
-
     def crumbs():
         toggle_value(show_sidebar, "◧")
         add_space(4)
@@ -2051,8 +2034,6 @@ def path_bar():
         weak(f"{count} item{'s' if count != 1 else ''}")
         add_space(4)
         toggle_value(show_dock, "◨")
-        add_space(4)
-        menu_image_button(svg("gear"), settings_menu, size=18, tint=tint)
 
     horizontal(crumbs)
 
