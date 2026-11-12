@@ -670,7 +670,12 @@ def tags_of(path):
     return data["effective"][key]
 
 
-DOT_WIDTH = 14  # what a dot takes with its spacing, to right-align them
+def dot(color, size=10):
+    """a dot of a color, a tinted SVG so that it does not depend on the fonts"""
+    image(svg("dot"), size=size, tint=color)
+
+
+DOT_WIDTH = 18  # what a dot takes with its spacing, to right-align them
 
 
 def tag_dots(item, right=False):
@@ -681,7 +686,7 @@ def tag_dots(item, right=False):
         add_space(max(available_width() - DOT_WIDTH * len(found) - 14, 4))
     for tag, how in found:
         r, g, b = hex_color(tag["color"])
-        colored_label((r, g, b, 255 if how == "own" else 110), "●")
+        dot((r, g, b, 255 if how == "own" else 110))
 
 
 def tag_badges(path):
@@ -732,7 +737,7 @@ def tag_header():
         return
 
     def line():
-        colored_label(hex_color(tag["color"]) + (255,), "●")
+        dot(hex_color(tag["color"]) + (255,))
         strong(tag["name"])
         weak(f"{len(listing_here())} élément(s) avec ce tag ou ses sous-tags")
         if image_button_clicked(svg("close"), size=12, tint=icon_tint()):  # an icon: the glyph ✕ is missing in some fonts
@@ -866,7 +871,7 @@ def tag_picker_ui():
                         return
                     on = sum(value["id"] in o for o in owned)
                     names = tag_path(value["id"])
-                    colored_label(hex_color(value["color"]) + (255,), "●")
+                    dot(hex_color(value["color"]) + (255,))
                     mark = "✓" if on == len(paths) else "–" if on else ""
 
                     def mark_column():
@@ -969,7 +974,7 @@ def tags_panel():
             )
             if paths and clicked:
                 toggle_tags(paths, tag["id"])
-            colored_label(hex_color(tag["color"]) + (255,), "●")
+            dot(hex_color(tag["color"]) + (255,))
             name = " / ".join(tag_path(tag["id"])) if searching else tag["name"]
             if selectable_label_clicked(False, name) and paths:
                 toggle_tags(paths, tag["id"])
@@ -1011,7 +1016,7 @@ def tag_manager_ui():
 
             def row(tag=tag):
                 add_space(14 * tag["depth"])
-                colored_label(hex_color(tag["color"]) + (255,), "●")
+                dot(hex_color(tag["color"]) + (255,))
                 if selectable_label_clicked(tag_edit["id"] == tag["id"], tag["name"]):
                     tag_edit["id"] = tag["id"]
 
@@ -1128,7 +1133,7 @@ def sidebar_content():
     def tags_title():
         weak("Tags")
         add_space(max(available_width() - 40, 4))
-        if small_button_clicked("⚙"):
+        if image_button_clicked(svg("gear"), size=14, tint=icon_tint()):
             tag_manager_open.value = True
 
     horizontal(tags_title)
@@ -1144,15 +1149,21 @@ def sidebar_content():
             hidden_below = tag["depth"]
 
         def row(tag=tag):
-            add_space(12 + 8 * tag["depth"])  # the dot under the icons of the places
-            colored_label(hex_color(tag["color"]) + (255,), "●")
-            add_space(-13)  # the name in line with the names of the places
+            add_space(13 + 8 * tag["depth"])  # the dot under the icons of the places
+            dot(hex_color(tag["color"]) + (255,))
+            add_space(-10)  # the name in line with the names of the places
             if selectable_label_clicked(tag_filter.value == tag["id"], tag["name"]):
                 tag_filter.value = tag["id"]
                 deselect()
             if tag["id"] in with_children:  # the disclosure arrow, at the right edge
                 add_space(max(available_width() - 40, 0))
-                if selectable_label_clicked(False, "▸" if tag["id"] in tags_folded else "▾"):
+                folded_now = tag["id"] in tags_folded
+                if image_button_clicked(
+                    svg("chevron-right" if folded_now else "chevron-down"),
+                    size=10,
+                    tint=icon_tint(),
+                    frame=False,
+                ):
                     tags_folded.symmetric_difference_update({tag["id"]})
 
         horizontal(row)
@@ -2044,7 +2055,10 @@ def rename_dialog():
 
 def path_bar():
     def crumbs():
-        toggle_value(show_sidebar, "◧")
+        if image_button_clicked(
+            svg("sidebar"), size=16, tint=icon_tint(), selected=show_sidebar.value
+        ):
+            show_sidebar.value = not show_sidebar.value
         add_space(4)
 
         anchor = Path(current().anchor)
@@ -2053,7 +2067,7 @@ def path_bar():
         parts = [anchor] + ancestors + ([current()] if current() != anchor else [])
         for i, part in enumerate(parts):
             if i:
-                weak("›")
+                image(svg("chevron-right"), size=10, tint=icon_tint())
             if link_clicked(place_name(part) if i == 0 else part.name):
                 go(part)
 
@@ -2061,7 +2075,10 @@ def path_bar():
         count = len(visible_entries())
         weak(f"{count} item{'s' if count != 1 else ''}")
         add_space(4)
-        toggle_value(show_dock, "◨")
+        if image_button_clicked(
+            svg("dock"), size=16, tint=icon_tint(), selected=show_dock.value
+        ):
+            show_dock.value = not show_dock.value
 
     horizontal(crumbs)
 
