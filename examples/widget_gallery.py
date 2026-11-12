@@ -12,7 +12,7 @@ checkbox_value = Bool(False)
 color = Int(RED)
 color_rgb = RGB(69, 69, 69)
 date = Date(datetime.datetime.now())
-is_visible = Bool(True)
+visible = Bool(True)
 is_interactive = Bool(True)
 opacity_value = Float(1)
 color_rgba = RGBA(0.23, 0.51, 0.96, 0.8)
@@ -114,16 +114,16 @@ def gallery():
 
   with Group():
     set_opacity(opacity_value.value)
-    if not is_visible.value:
+    if not visible.value:
       set_invisible()
     if not is_interactive.value:
       disable()
-      
+
     heading("This block may be hidden")
     button_clicked("Try to click me")
 
   with Layout(LayoutType.Horizontal):
-    checkbox(is_visible, "Visible")
+    checkbox(visible, "Visible")
     checkbox(is_interactive, "Interactive")
     slider_float(opacity_value, 0.0, 1.0, "Opacity")
 

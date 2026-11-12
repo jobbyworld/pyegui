@@ -1000,9 +1000,9 @@ def target_directory():
 
 
 def open_in_zed():
-    subprocess.Popen(
-        [*zed_command(), *map(str, targets())]
-    )  # without selection: the current folder
+    command = zed_command()
+    if command:
+        subprocess.Popen([*command, *map(str, targets())])  # without selection: the current folder
 
 
 def open_in_claude(mode):

@@ -129,9 +129,9 @@ def move_nodes(sources, target_id, position, position_id):
       continue
 
     # children returns a copy, so the lists are modified and assigned back
-    parent.children = [n for n in parent.children if n.id != source_id]
+    parent.children = [n for n in (parent.children or []) if n.id != source_id]
 
-    children = target.children
+    children = target.children or []
     if position == "first":
       index = 0
     elif position == "last":
