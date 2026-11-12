@@ -2103,6 +2103,7 @@ dock = Dock(
     id="inspector",
     tab_bar_height=26,
     pane_margin=8,
+    gap_width=8,  # a gap between the panes, so the files do not touch the other ones
 )
 default_layout = dock.save()
 default_layout["shares"] = [4.0, 1.0]  # the files take most of the width
