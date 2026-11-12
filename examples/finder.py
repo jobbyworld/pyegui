@@ -704,6 +704,12 @@ def tag_dots(item, right=False):
         colored_label((r, g, b, 255 if how == "own" else 110), "●")
 
 
+def tag_badges(path):
+    """the colors of the tags of an item for the tree view: pale when inherited"""
+    colors = [hex_color(tag["color"]) + (255 if how == "own" else 110,) for tag, how in tags_of(path)]
+    return colors[::-1]  # the row of the tree adds them from the right: the same order as the list view
+
+
 def has_note(item):
     return tag_key(item["path"]) in tag_data()["noted"]
 
@@ -1384,13 +1390,14 @@ def tree_node(item):
     # the icon of the Finder, or an emoji where the platform gives none
     icon_uri = file_icon(str(path), 16)
     text = item["name"] if icon_uri else f"{item['emoji']}  {item['name']}"
+    dots = tag_badges(path)
     if not item["is_dir"]:
-        return TreeNode(node_id, text, icon=icon_uri)
+        return TreeNode(node_id, text, icon=icon_uri, badges=dots)
     # the children of a folder are read only once it is opened
     children = (
         [tree_node(child) for child in listing(path)] if tree.is_open(node_id) else []
     )
-    return TreeNode(node_id, text, children, icon=icon_uri)
+    return TreeNode(node_id, text, children, icon=icon_uri, badges=dots)
 
 
 tree_menu = {"ids": None}  # nodes right-clicked this frame, applied once tree_view returns
@@ -2086,7 +2093,7 @@ dock = Dock(
     DockContainer(
         "horizontal",
         [
-            DockPane(CENTRAL, central_ui),
+            DockPane(CENTRAL, central_ui, hide_tab=True),  # no tab while the files are alone
             DockContainer(
                 "vertical",
                 [DockPane(title, ui, closable=True) for title, ui in PANES.items()],

@@ -64,16 +64,15 @@ with Response.rect.
 
 ## `pointer_pressed()`
 
-True during the frame in which the primary mouse button went down, wherever the mouse is. With
-`ui_contains_pointer()` it tells which part of the window was clicked, even when the click lands on
-no widget, to move the keyboard focus there.
+True during the frame in which the primary mouse button went down, wherever the mouse is.
+With ui_contains_pointer it tells which part of the window was clicked, even when the click
+lands on no widget, to move the keyboard focus there.
 
 **Example:**
 
 ```python
-def sidebar_ui():
-    if pointer_pressed() and ui_contains_pointer():
-        focused_zone.value = "sidebar"
+if pointer_pressed() and ui_contains_pointer():
+    focused_zone.value = "sidebar"
 ```
 
 

@@ -220,8 +220,9 @@ class DockPane:
     title: str
     update_func: Callable[[], Any]
     closable: bool
+    hide_tab: bool
     def __init__(
-        self, title: str, update_func: Callable[[], Any], closable: bool = False
+        self, title: str, update_func: Callable[[], Any], closable: bool = False, hide_tab: bool = False
     ) -> None: ...
 
 class DockContainer:
@@ -315,12 +316,14 @@ class TreeNode:
     label: str
     children: list[TreeNode] | None
     icon: str | None
+    badges: list[tuple[int, int, int, int]] | None
     def __init__(
         self,
         id: int,
         label: str,
         children: list[TreeNode] | None = None,
         icon: str | None = None,
+        badges: list[tuple[int, int, int, int]] | None = None,
     ) -> None: ...
 
 class TreeView:
