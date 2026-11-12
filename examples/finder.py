@@ -111,6 +111,7 @@ ICONS_DIR = (
     Path(__file__).resolve().parent / "icons"
 )  # white SVG icons, tinted to the theme
 
+EDGE = (1, (127, 127, 127, 60))  # the one outline of every box: the same width and color
 MARGIN = 4  # around every box of the window: the gap between two boxes is twice that
 TREE, LIST, ICONS = 0, 1, 2  # the order of the segmented control of the toolbar
 LIGHT, DARK, SYSTEM = 0, 1, 2
@@ -2064,7 +2065,7 @@ def zone_stroke(zone, otherwise):
     context[0].request_repaint()  # the fade runs without any other event
     color = ACCENTS[accent_name.value]
     r, g, b = (int(color[i : i + 2], 16) for i in (1, 3, 5))
-    return (2, (r, g, b, round(255 * alpha)))
+    return (EDGE[0], (r, g, b, round(255 * alpha)))
 
 
 # the dock fills the middle of the window: the files are one of its panes (that cannot be closed), the
@@ -2079,7 +2080,7 @@ def zone_pane(zone, ui, margin=0):
         in_zone(zone, ui),
         inner_margin=margin,
         rounding=6,
-        stroke=zone_stroke(zone, (0, (0, 0, 0, 0))),
+        stroke=zone_stroke(zone, (EDGE[0], (0, 0, 0, 0))),
     )
 
 
@@ -2105,6 +2106,9 @@ dock = Dock(
     tab_bar_height=26,
     pane_margin=8,
     gap_width=2 * MARGIN,  # a gap between the panes, as wide as between the other boxes
+    pane_stroke=EDGE,
+    active_tab_stroke=EDGE,
+    inactive_tab_stroke=EDGE,
     resize_stroke=(1, (0, 0, 0, 0)),  # the gap stays empty: no grey band, the panes still resize
 )
 default_layout = dock.save()
@@ -2130,10 +2134,7 @@ def update_func(ctx):
 
     keyboard()
     action_keys()
-    edge = (
-        1,
-        (127, 127, 127, 60),
-    )  # a hairline so the rounded corner reads against the content
+    edge = EDGE
     left_panel(
         "sidebar",
         in_zone("sidebar", sidebar),
