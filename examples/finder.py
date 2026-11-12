@@ -3,10 +3,11 @@
 Sidebar with favorites, toolbar with back / forward, list, icon and tree views, search, a preview
 panel and a path bar. The icons are the ones of the Finder on macOS.
 
-Mouse: click to select, double click to open (folders here, files with their app). In the tree
-view, the arrow of a folder shows its contents in the tree.
+Mouse: click to select, double click to open (folders here, files with their app). Right-click
+opens the action palette. In the tree view, the arrow of a folder shows its contents in the tree.
 Keyboard: arrows to select, Enter or Cmd+Down to open, Cmd+Up for the parent folder,
-Cmd+[ and Cmd+] to go back and forward, Escape to clear the search and the selection.
+Cmd+[ and Cmd+] to go back and forward, Escape to clear the search and the selection,
+Space or Cmd+P to open the action palette (search and run an action for the current selection).
 
     python finder.py [folder]
 """
@@ -43,6 +44,7 @@ from pyegui import (
     draw_rect,
     end_row,
     file_icon,
+    frame,
     grid,
     horizontal,
     image,
@@ -67,8 +69,10 @@ from pyegui import (
     segmented_control,
     selectable_label_response,
     separator,
+    set_max_height,
     set_min_height,
     set_min_width,
+    set_width,
     small,
     strong,
     table_ui,
@@ -78,6 +82,7 @@ from pyegui import (
     top_panel,
     tree_view,
     typed_text,
+    vertical,
     vertical_centered,
     weak,
 )
@@ -183,6 +188,9 @@ show_dock = Bool(True)  # the dock on the right: Actions and Preview
 folded = set()  # categories of the Actions panel folded shut
 renaming = Str("")  # path being renamed, or ""
 new_name = Str("")
+palette_open = Bool(False)  # the action palette: a searchable list of the actions below
+palette_query = Str("")
+palette_index = Int(0)  # the highlighted action, moved by the keyboard or the mouse
 file_clipboard = {"paths": [], "cut": False}
 theme = Int(SYSTEM)
 glass = Int(PARTIAL)
@@ -345,11 +353,21 @@ def pick(item, entries):
         select(item)
 
 
+def open_palette():
+    palette_query.value = ""
+    palette_index.value = 0
+    palette_open.value = True
+
+
 def handle(item, response, entries):
     if response.clicked:
         pick(item, entries)
     if response.double_clicked:
         open_item(item)
+    if response.secondary_clicked:
+        if str(item["path"]) not in picked:
+            select(item)
+        open_palette()
 
 
 def type_to_select():
@@ -370,7 +388,16 @@ def type_to_select():
 
 
 def keyboard():
+    if palette_open.value or renaming.value:
+        # those modals have their own Escape-closes-on-click-outside handling (see modal());
+        # Escape uses when_typing=True below to work while a field has focus, so without this
+        # guard it would also clear the background search/selection at the same time
+        return
     type_to_select()
+    if key_pressed("Space") and not typed["text"]:  # not the space of an active type-to-select
+        open_palette()
+    if key_pressed("Cmd+P"):
+        open_palette()
     if key_pressed("Cmd+ArrowUp"):
         go(current().parent)
     if key_pressed("Cmd+OpenBracket"):
@@ -444,6 +471,25 @@ def apply_style():
         )
     else:
         ctx.set_accent(ACCENTS[accent_name.value])
+
+
+def set_theme(value):
+    theme.value = value
+    apply_style()
+
+
+def set_glass(value):
+    glass.value = value
+    apply_style()
+
+
+def set_accent_name(name):
+    accent_name.value = name
+    apply_style()
+
+
+def set_view(value):
+    view.value = value
 
 
 def settings_menu():
@@ -697,6 +743,8 @@ def icon_view():
         response = interactive(background, drag=True)
         if response.clicked and not any(modifiers().values()):
             deselect()
+        if response.secondary_clicked:
+            open_palette()
         rubber_band(response, tiles, accent)
 
     scroll_area_vertical(area)
@@ -933,6 +981,14 @@ def reveal():
     path = targets()[0]
     if MACOS:
         subprocess.run(["open", "-R", str(path)])
+    elif sys.platform == "win32":
+        # open_url() hands file:// URIs to the default browser on Windows, not Explorer
+        if path.is_dir():
+            subprocess.run(["explorer", str(path)])
+        else:
+            # /select, and the path must be a single command line, not a list of argv:
+            # Explorer only understands the quoted path right after the comma
+            subprocess.run(f'explorer /select,"{path}"')
     else:
         context[0].open_url((path if path.is_dir() else path.parent).as_uri())
 
@@ -1021,25 +1077,25 @@ def one_selected():
 
 # category, label, icon, shortcut, enabled, run. "Cmd" is the command key on macOS and ctrl elsewhere
 ACTIONS = [
-    ("Open", "Open", "open", "Cmd+ArrowDown", has_selection, action_open),
+    ("Ouvrir", "Ouvrir", "open", "Cmd+ArrowDown", has_selection, action_open),
     (
-        "Open",
-        "Show Parent Folder",
+        "Ouvrir",
+        "Afficher le dossier parent",
         "folder-up",
         None,
         lambda: one_selected() and Path(selected.value).parent != current(),
         show_parent,
     ),
     *(
-        [("Open", "Open with Zed", "zed", "Cmd+Shift+Z", lambda: True, open_in_zed)]
+        [("Ouvrir", "Ouvrir avec Zed", "zed", "Cmd+Shift+Z", lambda: True, open_in_zed)]
         if zed_command()
         else []
     ),
     *(
         [
             (
-                "Open",
-                f"Open with Claude ({label})",
+                "Ouvrir",
+                f"Ouvrir avec Claude ({label})",
                 "claude",
                 None,
                 lambda: True,
@@ -1051,50 +1107,75 @@ ACTIONS = [
         else []
     ),
     (
-        "Edit",
-        "Rename",
+        "Édition",
+        "Renommer",
         "rename",
         "F2",
         one_selected,
         lambda: start_rename(Path(selected.value)),
     ),
-    ("Edit", "Copy", "copy", "Cmd+C", has_selection, lambda: copy_to_clipboard(False)),
-    ("Edit", "Cut", "cut", "Cmd+X", has_selection, lambda: copy_to_clipboard(True)),
-    ("Edit", "Paste", "paste", "Cmd+V", lambda: bool(file_clipboard["paths"]), paste),
-    ("Edit", "Duplicate", "duplicate", "Cmd+D", has_selection, duplicate),
+    ("Édition", "Copier", "copy", "Cmd+C", has_selection, lambda: copy_to_clipboard(False)),
+    ("Édition", "Couper", "cut", "Cmd+X", has_selection, lambda: copy_to_clipboard(True)),
+    ("Édition", "Coller", "paste", "Cmd+V", lambda: bool(file_clipboard["paths"]), paste),
+    ("Édition", "Dupliquer", "duplicate", "Cmd+D", has_selection, duplicate),
     (
-        "Edit",
-        "Group into Folder",
+        "Édition",
+        "Regrouper dans un dossier",
         "group",
         "Ctrl+Cmd+N" if MACOS else "Cmd+Alt+N",
         can_group,
         group,
     ),
-    ("Edit", "New Folder", "folder-plus", "Cmd+Shift+N", lambda: True, new_folder),
+    ("Édition", "Nouveau dossier", "folder-plus", "Cmd+Shift+N", lambda: True, new_folder),
     (
-        "Edit",
-        "Move to Trash",
+        "Édition",
+        "Mettre à la corbeille",
         "trash",
         "Cmd+Backspace",
         lambda: MACOS and has_selection(),
         trash,
     ),
     (
-        "Tools",
-        "Copy Path",
+        "Outils",
+        "Copier le chemin",
         "copy",
         "Cmd+Alt+C",
         lambda: True,
         lambda: context[0].copy_text("\n".join(map(str, targets()))),
     ),
     (
-        "Tools",
-        "Reveal in Finder" if MACOS else "Reveal in File Manager",
+        "Outils",
+        "Afficher dans le Finder" if MACOS else "Afficher dans l'explorateur",
         "reveal",
         None,
         lambda: True,
         reveal,
     ),
+    ("Affichage", "Thème clair", "gear", None, lambda: True, lambda: set_theme(LIGHT)),
+    ("Affichage", "Thème sombre", "gear", None, lambda: True, lambda: set_theme(DARK)),
+    ("Affichage", "Thème système", "gear", None, lambda: True, lambda: set_theme(SYSTEM)),
+    ("Affichage", "Vitre partielle", "gear", None, lambda: True, lambda: set_glass(PARTIAL)),
+    ("Affichage", "Vitre complète", "gear", None, lambda: True, lambda: set_glass(FULL)),
+    ("Affichage", "Mode plat (sans vitre)", "gear", None, lambda: True, lambda: set_glass(NO_GLASS)),
+    ("Affichage", "Vue arborescence", "tree", None, lambda: True, lambda: set_view(TREE)),
+    ("Affichage", "Vue liste", "list", None, lambda: True, lambda: set_view(LIST)),
+    ("Affichage", "Vue icônes", "grid", None, lambda: True, lambda: set_view(ICONS)),
+    *[
+        (
+            "Affichage",
+            f"Accent {label}",
+            "gear",
+            None,
+            lambda: True,
+            lambda name=name: set_accent_name(name),
+        )
+        for name, label in {
+            "Blue": "bleu",
+            "Violet": "violet",
+            "Green": "vert",
+            "Orange": "orange",
+        }.items()
+    ],
 ]
 
 
@@ -1103,6 +1184,83 @@ def action_keys():
         if shortcut and enabled() and key_pressed(shortcut):
             run()
             return
+
+
+# action palette: a searchable popup of the actions above, opened with right click, Space or Cmd+P
+
+
+def palette_actions():
+    query = palette_query.value.lower()
+    return [a for a in ACTIONS if a[4]() and query in a[1].lower()]
+
+
+def run_palette_action(action):
+    palette_open.value = False
+    action[5]()
+
+
+def palette_ui():
+    tint = icon_tint()
+    accent = ACCENTS[accent_name.value]
+
+    set_width(460)  # a fixed width, so available_width() stays bounded inside this auto-sized modal
+    row_width = available_width()  # measured once here: inside the scroll area below it is unreliable
+    text_edit_singleline(palette_query, hint_text="Search an action…", request_focus=True)
+    actions = palette_actions()
+    if not actions:
+        add_space(4)
+        weak("No matching action")
+        return
+    palette_index.value = min(palette_index.value, len(actions) - 1)
+
+    if key_pressed("ArrowDown", when_typing=True):
+        palette_index.value = min(palette_index.value + 1, len(actions) - 1)
+    if key_pressed("ArrowUp", when_typing=True):
+        palette_index.value = max(palette_index.value - 1, 0)
+    if key_pressed("Enter", when_typing=True):
+        run_palette_action(actions[palette_index.value])
+
+    add_space(4)
+
+    def rows():
+        for i, action in enumerate(actions):
+            _, text, icon_name, shortcut, _, _ = action
+
+            def row(icon_name=icon_name, text=text, shortcut=shortcut):
+                def line():
+                    # a hard cap, not just a floor: the row must not grow past it, otherwise
+                    # available_width() below keeps changing and the shortcut lands off-screen
+                    set_width(row_width)
+                    image(svg(icon_name), size=16, tint=tint)
+                    label(text, selectable=False)
+                    add_space(max(available_width() - (124 if shortcut else 8), 8))
+                    if shortcut:
+                        weak(shortcut)
+
+                horizontal(line)
+
+            response = interactive(row)
+            if i == palette_index.value:
+                draw_rect(response.rect, fill=accent + "40", rounding=6)
+            elif response.hovered:
+                draw_rect(response.rect, fill=(127, 127, 127, 30), rounding=6)
+            if response.hovered:
+                palette_index.value = i  # the mouse takes over the highlight from the keyboard
+            if response.clicked:
+                run_palette_action(action)
+
+    def bounded():
+        # set_max_height measures from the top of its own ui, so it needs a fresh one here,
+        # not the ui the search field already advanced the cursor in
+        set_max_height(320)
+        scroll_area_vertical(rows)
+
+    vertical(bounded)
+
+
+def action_palette():
+    if modal("palette", palette_ui, rounding=12):
+        palette_open.value = False
 
 
 def actions_panel():
@@ -1258,9 +1416,11 @@ def update_func(ctx):
         inner_margin=6,
         show_separator_line=False,
     )
-    content()
+    frame(content, inner_margin=16)
     if renaming.value:
         rename_dialog()
+    if palette_open.value:
+        action_palette()
 
 
 if __name__ == "__main__":

@@ -1509,6 +1509,13 @@ unsafe fn code_editor(
 
 /// Show singleline text field and update the text
 ///
+/// Keyword args:
+///
+///     hint_text (str): grey text shown when the field is empty
+///
+///     request_focus (bool): give the field the keyboard focus this frame, for example to let the
+///         user type into it right as it appears, like a search field in a popup. Default is False
+///
 /// Example::
 ///
 ///     text = Str("editable")
@@ -1520,14 +1527,21 @@ unsafe fn text_edit_singleline(text: &mut Str, kwargs: Option<&Bound<'_, PyDict>
     let ui = current_ui(&UI)?;
 
     let mut w = egui::TextEdit::singleline(&mut text.value);
+    let mut request_focus = false;
 
     if let Some(kwargs) = kwargs {
         if let Some(hint_text) = kwargs.get_item("hint_text")? {
             w = w.hint_text(hint_text.cast::<PyString>()?.extract::<String>()?);
         }
+        if let Some(focus) = kwarg::<bool>(Some(kwargs), "request_focus")? {
+            request_focus = focus;
+        }
     }
 
-    ui.add(w);
+    let response = ui.add(w);
+    if request_focus {
+        response.request_focus();
+    }
     Ok(())
 }
 
