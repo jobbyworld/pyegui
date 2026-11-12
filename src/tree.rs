@@ -17,6 +17,9 @@ use crate::{current_ui, run_nested_call, UI};
 ///
 ///     icon (str): uri of an image shown before the label, like for image(), e.g. from file_icon
 ///
+///     badges (list[tuple]): colors (r, g, b, a) of dots drawn at the right end of the row, e.g.
+///         the tags of a file
+///
 /// Usage::
 ///
 ///     nodes = [
@@ -33,18 +36,27 @@ pub(crate) struct TreeNode {
     children: Option<Vec<Py<TreeNode>>>,
     #[pyo3(get, set)]
     icon: Option<String>,
+    #[pyo3(get, set)]
+    badges: Option<Vec<(u8, u8, u8, u8)>>,
 }
 
 #[pymethods]
 impl TreeNode {
     #[new]
-    #[pyo3(signature = (id, label, children=None, icon=None))]
-    fn new(id: i64, label: String, children: Option<Vec<Py<TreeNode>>>, icon: Option<String>) -> Self {
+    #[pyo3(signature = (id, label, children=None, icon=None, badges=None))]
+    fn new(
+        id: i64,
+        label: String,
+        children: Option<Vec<Py<TreeNode>>>,
+        icon: Option<String>,
+        badges: Option<Vec<(u8, u8, u8, u8)>>,
+    ) -> Self {
         TreeNode {
             id,
             label,
             children,
             icon,
+            badges,
         }
     }
 }
@@ -186,6 +198,19 @@ fn with_icon<'a>(config: NodeBuilder<'a, i64>, icon: Option<String>) -> NodeBuil
     }
 }
 
+/// Draws the badges of the node as dots at the right end of its row
+fn with_badges<'a>(config: NodeBuilder<'a, i64>, badges: Option<Vec<(u8, u8, u8, u8)>>) -> NodeBuilder<'a, i64> {
+    match badges {
+        Some(colors) if !colors.is_empty() => config.accessory(move |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for (r, g, b, a) in &colors {
+                ui.colored_label(egui::Color32::from_rgba_unmultiplied(*r, *g, *b, *a), "●");
+            }
+        }),
+        _ => config,
+    }
+}
+
 /// The position of a node among the rows shown: the children of the closed directories are not
 fn row_index(py: Python<'_>, tree: &TreeView, nodes: &[Py<TreeNode>], id: i64, row: &mut usize) -> Option<usize> {
     for node in nodes {
@@ -217,20 +242,26 @@ fn add_nodes(
 
         match &node.children {
             Some(children) => {
-                builder.node(with_icon(
-                    NodeBuilder::dir(node.id)
-                        .default_open(default_open)
-                        .activatable(activatable_dirs)
-                        .label(node.label.as_str()),
-                    node.icon.clone(),
+                builder.node(with_badges(
+                    with_icon(
+                        NodeBuilder::dir(node.id)
+                            .default_open(default_open)
+                            .activatable(activatable_dirs)
+                            .label(node.label.as_str()),
+                        node.icon.clone(),
+                    ),
+                    node.badges.clone(),
                 ));
                 add_nodes(py, builder, children, default_open, activatable_dirs);
                 builder.close_dir();
             }
             None => {
-                builder.node(with_icon(
-                    NodeBuilder::leaf(node.id).label(node.label.as_str()),
-                    node.icon.clone(),
+                builder.node(with_badges(
+                    with_icon(
+                        NodeBuilder::leaf(node.id).label(node.label.as_str()),
+                        node.icon.clone(),
+                    ),
+                    node.badges.clone(),
                 ));
             }
         }

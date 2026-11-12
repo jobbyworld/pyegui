@@ -22,6 +22,9 @@ use crate::{current_ui, kwarg, run_nested_call, run_nested_update_func, UI};
 ///
 ///     closable (bool): show a close button on the tab. Default is False
 ///
+///     hide_tab (bool): hide the tab bar while the pane is alone in its tabs, like hide_single_tab_bar
+///         but for this pane only. The tab is back as soon as another pane joins it. Default is False
+///
 /// Usage::
 ///
 ///     DockPane("Editor", editor_ui, closable=True)
@@ -33,17 +36,20 @@ pub(crate) struct DockPane {
     update_func: Py<PyAny>,
     #[pyo3(get, set)]
     closable: bool,
+    #[pyo3(get, set)]
+    hide_tab: bool,
 }
 
 #[pymethods]
 impl DockPane {
     #[new]
-    #[pyo3(signature = (title, update_func, closable=false))]
-    fn new(title: String, update_func: Py<PyAny>, closable: bool) -> Self {
+    #[pyo3(signature = (title, update_func, closable=false, hide_tab=false))]
+    fn new(title: String, update_func: Py<PyAny>, closable: bool, hide_tab: bool) -> Self {
         DockPane {
             title,
             update_func,
             closable,
+            hide_tab,
         }
     }
 }
@@ -78,6 +84,7 @@ struct Pane {
     title: String,
     update_func: Py<PyAny>,
     closable: bool,
+    hide_tab: bool,
 }
 
 impl Pane {
@@ -86,6 +93,7 @@ impl Pane {
             title: self.title.clone(),
             update_func: self.update_func.clone_ref(py),
             closable: self.closable,
+            hide_tab: self.hide_tab,
         }
     }
 
@@ -94,6 +102,7 @@ impl Pane {
             title: pane.title.clone(),
             update_func: pane.update_func.clone_ref(py),
             closable: pane.closable,
+            hide_tab: pane.hide_tab,
         }
     }
 }
@@ -990,6 +999,8 @@ struct Behavior<'py> {
     actions: TabBarActions,
     /// Panes drawn this frame
     panes: std::collections::HashSet<TileId>,
+    /// Panes whose tab bar is hidden while they are alone in their tabs
+    hidden_alone: std::collections::HashSet<TileId>,
     /// Rect of the tab of the active panes, where their outline is open
     active_tabs: std::collections::HashMap<TileId, egui::Rect>,
 }
@@ -1253,6 +1264,9 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
     }
 
     fn is_tab_bar_visible(&self, _tile_id: TileId, tabs: &egui_tiles::Tabs) -> bool {
+        if tabs.children.len() == 1 && self.hidden_alone.contains(&tabs.children[0]) {
+            return false;
+        }
         !self.style.hide_single_tab_bar || tabs.children.len() > 1
     }
 
@@ -1389,6 +1403,12 @@ unsafe fn dock_area(py: Python<'_>, dock: Py<Dock>) -> PyResult<()> {
         (tree, dock.style.clone(), dock.callbacks.clone_ref(py))
     };
 
+    let hidden_alone = tree
+        .tiles
+        .iter()
+        .filter(|(_, tile)| matches!(tile, Tile::Pane(pane) if pane.hide_tab))
+        .map(|(id, _)| *id)
+        .collect();
     let actions = TabBarActions::default();
     let mut behavior = Behavior {
         py,
@@ -1397,6 +1417,7 @@ unsafe fn dock_area(py: Python<'_>, dock: Py<Dock>) -> PyResult<()> {
         callbacks,
         actions: actions.clone(),
         panes: Default::default(),
+        hidden_alone,
         active_tabs: Default::default(),
     };
     tree.ui(&mut behavior, ui);

@@ -272,7 +272,7 @@ A frame around the contents, with a custom background, border, rounding, margins
 - `fill` (color): background color. Colors are (r, g, b), (r, g, b, a) or "#rrggbb[aa]"
 - `stroke` (tuple[float, color]): border width and color
 - `rounding` (float): corner radius
-- inner_margin (float), outer_margin (float): space inside and outside the border
+- inner_margin (float), outer_margin (float or (left, top, right, bottom)): space inside and outside the border
 - `shadow` (False | tuple[int, color] | tuple[int, int, int, int, color]): (blur, color) or (offset_x, offset_y, blur, spread, color)
 
 **Example:**

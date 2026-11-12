@@ -107,7 +107,18 @@ pub(crate) fn apply_frame_kwargs(mut frame: Frame, kwargs: Option<&Bound<'_, PyD
     if let Some(margin) = kwarg::<f32>(kwargs, "inner_margin")? {
         frame = frame.inner_margin(margin);
     }
-    if let Some(margin) = kwarg::<f32>(kwargs, "outer_margin")? {
+    if let Some(value) = kwargs.and_then(|k| k.get_item("outer_margin").ok().flatten()) {
+        // a float for the four sides, or (left, top, right, bottom)
+        let side = |v: f32| v.round().clamp(0.0, 127.0) as i8;
+        let margin = if let Ok(all) = value.extract::<f32>() {
+            egui::Margin::same(side(all))
+        } else if let Ok((left, top, right, bottom)) = value.extract::<(f32, f32, f32, f32)>() {
+            egui::Margin { left: side(left), right: side(right), top: side(top), bottom: side(bottom) }
+        } else {
+            return Err(PyTypeError::new_err(
+                "outer_margin must be a float or a tuple (left, top, right, bottom)",
+            ));
+        };
         frame = frame.outer_margin(margin);
     }
     if let Some(shadow) = kwarg_shadow(kwargs, "shadow")? {
@@ -126,7 +137,7 @@ pub(crate) fn apply_frame_kwargs(mut frame: Frame, kwargs: Option<&Bound<'_, PyD
 ///
 ///     rounding (float): corner radius
 ///
-///     inner_margin (float), outer_margin (float): space inside and outside the border
+///     inner_margin (float), outer_margin (float or (left, top, right, bottom)): space inside and outside the border
 ///
 ///     shadow (False | tuple[int, color] | tuple[int, int, int, int, color]): (blur, color) or (offset_x, offset_y, blur, spread, color)
 ///

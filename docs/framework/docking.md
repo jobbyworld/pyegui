@@ -165,6 +165,7 @@ A pane of a Dock, shown as a tab.
 - `title` (str): title of the tab
 - `update_func` (Callable[[], None]): draws the contents of the pane
 - `closable` (bool): show a close button on the tab. Default is False
+- `hide_tab` (bool): hide the tab bar while the pane is alone in its tabs, like hide_single_tab_bar but for this pane only. The tab is back as soon as another pane joins it. Default is False
 
 **Usage:**
 
@@ -174,6 +175,7 @@ DockPane("Editor", editor_ui, closable=True)
 
 
 - `DockPane.closable` (attribute)
+- `DockPane.hide_tab` (attribute)
 - `DockPane.title` (attribute)
 - `DockPane.update_func` (attribute)
 

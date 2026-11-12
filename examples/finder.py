@@ -111,6 +111,9 @@ ICONS_DIR = (
     Path(__file__).resolve().parent / "icons"
 )  # white SVG icons, tinted to the theme
 
+EDGE = (1, (127, 127, 127, 60))  # the one outline of every box: the same width and color
+GAP = 8  # between two boxes, and (with the 8 points the window already leaves) around the window
+H = GAP // 2  # each box gives half of the gap on the sides that face another box
 TREE, LIST, ICONS = 0, 1, 2  # the order of the segmented control of the toolbar
 LIGHT, DARK, SYSTEM = 0, 1, 2
 NO_GLASS, PARTIAL, FULL = 0, 1, 2
@@ -211,8 +214,9 @@ search = Str("")
 show_sidebar = Bool(True)
 ZONES = ["sidebar", "content", "dock"]  # F6 goes through them, left to right
 focus_zone = Str("content")  # the part of the window the keyboard acts on, see keyboard()
-show_dock = Bool(True)  # the dock on the right: Actions and Preview
+show_dock = Bool(True)  # the dock around the files: Actions, Preview, Notes and Tags
 folded = set()  # categories of the Actions panel folded shut
+tags_folded = set()  # ids of the tags of the sidebar whose children are hidden
 renaming = Str("")  # path being renamed, or ""
 new_name = Str("")
 palette_open = Bool(False)  # the action palette: a searchable list of the actions below
@@ -579,6 +583,7 @@ def snapshot():
         "show_sidebar": show_sidebar.value,
         "show_dock": show_dock.value,
         "folded": sorted(folded),
+        "tags_folded": sorted(tags_folded),
         "folder": str(current()),
         "tree_open": sorted(str(p) for p in open_folders()),
         "dock": dock.save(),  # the panes still open, their tabs and sizes
@@ -598,9 +603,14 @@ def restore(saved):
     show_sidebar.value = saved.get("show_sidebar", show_sidebar.value)
     show_dock.value = saved.get("show_dock", show_dock.value)
     folded.update(saved.get("folded", []))
+    tags_folded.update(i for i in saved.get("tags_folded", []) if isinstance(i, int))
     tree_to_open.update(Path(p) for p in saved.get("tree_open", []) if isinstance(p, str))
-    if saved.get("dock"):
-        dock.load(saved["dock"])  # a layout that no longer fits is ignored
+    layout = saved.get("dock")
+    if layout and not has_pane(layout, CENTRAL):
+        # saved before the files were a pane: what was on the right stays there
+        layout = {"kind": "horizontal", "shares": [4.0, 1.0], "children": [{"pane": CENTRAL}, layout]}
+    if layout:
+        dock.load(layout)  # a layout that no longer fits is ignored
     folder = Path(saved.get("folder", ""))
     if len(sys.argv) < 2 and folder.is_dir():  # a folder given on the command line wins
         history[:] = [folder]
@@ -628,32 +638,6 @@ def set_tab_style(value):
 
 def set_view(value):
     view.value = value
-
-
-def settings_menu():
-    before = (theme.value, glass.value, accent_name.value)
-    toggle_value(show_sidebar, "Sidebar")
-    toggle_value(show_dock, "Dock")
-    for title, ui in PANES.items():  # a pane closed with its tab comes back from here
-        if title not in dock.titles and button_clicked(f"Show {title}"):
-            dock.add_pane(DockPane(title, ui, closable=True))
-    separator()
-    small("THEME")
-    radio_value(theme, LIGHT, "Light")
-    radio_value(theme, DARK, "Dark")
-    radio_value(theme, SYSTEM, "System")
-    separator()
-    small("GLASS")
-    radio_value(glass, PARTIAL, "Partial")
-    radio_value(glass, FULL, "Full")
-    radio_value(glass, NO_GLASS, "Off")
-    separator()
-    small("ACCENT")
-    for accent in ACCENTS:
-        if radio_clicked(accent_name.value == accent, accent):
-            accent_name.value = accent
-    if (theme.value, glass.value, accent_name.value) != before:
-        apply_style()
 
 
 # sidebar
@@ -686,7 +670,12 @@ def tags_of(path):
     return data["effective"][key]
 
 
-DOT_WIDTH = 14  # what a dot takes with its spacing, to right-align them
+def dot(color, size=10):
+    """a dot of a color, a tinted SVG so that it does not depend on the fonts"""
+    image(svg("dot"), size=size, tint=color)
+
+
+DOT_WIDTH = 18  # what a dot takes with its spacing, to right-align them
 
 
 def tag_dots(item, right=False):
@@ -697,7 +686,13 @@ def tag_dots(item, right=False):
         add_space(max(available_width() - DOT_WIDTH * len(found) - 14, 4))
     for tag, how in found:
         r, g, b = hex_color(tag["color"])
-        colored_label((r, g, b, 255 if how == "own" else 110), "●")
+        dot((r, g, b, 255 if how == "own" else 110))
+
+
+def tag_badges(path):
+    """the colors of the tags of an item for the tree view: pale when inherited"""
+    colors = [hex_color(tag["color"]) + (255 if how == "own" else 110,) for tag, how in tags_of(path)]
+    return colors[::-1]  # the row of the tree adds them from the right: the same order as the list view
 
 
 def has_note(item):
@@ -742,10 +737,10 @@ def tag_header():
         return
 
     def line():
-        colored_label(hex_color(tag["color"]) + (255,), "●")
+        dot(hex_color(tag["color"]) + (255,))
         strong(tag["name"])
         weak(f"{len(listing_here())} élément(s) avec ce tag ou ses sous-tags")
-        if small_button_clicked("✕"):
+        if image_button_clicked(svg("close"), size=12, tint=icon_tint()):  # an icon: the glyph ✕ is missing in some fonts
             tag_filter.value = 0
 
     horizontal(line)
@@ -876,7 +871,7 @@ def tag_picker_ui():
                         return
                     on = sum(value["id"] in o for o in owned)
                     names = tag_path(value["id"])
-                    colored_label(hex_color(value["color"]) + (255,), "●")
+                    dot(hex_color(value["color"]) + (255,))
                     mark = "✓" if on == len(paths) else "–" if on else ""
 
                     def mark_column():
@@ -979,7 +974,7 @@ def tags_panel():
             )
             if paths and clicked:
                 toggle_tags(paths, tag["id"])
-            colored_label(hex_color(tag["color"]) + (255,), "●")
+            dot(hex_color(tag["color"]) + (255,))
             name = " / ".join(tag_path(tag["id"])) if searching else tag["name"]
             if selectable_label_clicked(False, name) and paths:
                 toggle_tags(paths, tag["id"])
@@ -1021,7 +1016,7 @@ def tag_manager_ui():
 
             def row(tag=tag):
                 add_space(14 * tag["depth"])
-                colored_label(hex_color(tag["color"]) + (255,), "●")
+                dot(hex_color(tag["color"]) + (255,))
                 if selectable_label_clicked(tag_edit["id"] == tag["id"], tag["name"]):
                     tag_edit["id"] = tag["id"]
 
@@ -1103,7 +1098,10 @@ def locations():
 def sidebar():
     if MACOS:
         add_space(26)  # the window buttons are over the sidebar
+    scroll_area_vertical(sidebar_content)  # many tags: the sidebar scrolls instead of overflowing
 
+
+def sidebar_content():
     accent = ACCENTS[accent_name.value]
 
     def place(icon_name, name, path):
@@ -1135,18 +1133,38 @@ def sidebar():
     def tags_title():
         weak("Tags")
         add_space(max(available_width() - 40, 4))
-        if small_button_clicked("⚙"):
+        if image_button_clicked(svg("gear"), size=14, tint=icon_tint()):
             tag_manager_open.value = True
 
     horizontal(tags_title)
-    for tag in tag_data()["all"]:
+    all_tags = tag_data()["all"]
+    with_children = {t["parent"] for t in all_tags}
+    hidden_below = None  # depth of the folded tag whose children are being skipped
+    for tag in all_tags:
+        if hidden_below is not None:
+            if tag["depth"] > hidden_below:
+                continue
+            hidden_below = None
+        if tag["id"] in tags_folded and tag["id"] in with_children:
+            hidden_below = tag["depth"]
 
         def row(tag=tag):
-            add_space(12 * tag["depth"])
-            colored_label(hex_color(tag["color"]) + (255,), "●")
+            add_space(13 + 8 * tag["depth"])  # the dot under the icons of the places
+            dot(hex_color(tag["color"]) + (255,))
+            add_space(-10)  # the name in line with the names of the places
             if selectable_label_clicked(tag_filter.value == tag["id"], tag["name"]):
                 tag_filter.value = tag["id"]
                 deselect()
+            if tag["id"] in with_children:  # the disclosure arrow, at the right edge
+                add_space(max(available_width() - 40, 0))
+                folded_now = tag["id"] in tags_folded
+                if image_button_clicked(
+                    svg("chevron-right" if folded_now else "chevron-down"),
+                    size=10,
+                    tint=icon_tint(),
+                    frame=False,
+                ):
+                    tags_folded.symmetric_difference_update({tag["id"]})
 
         horizontal(row)
 
@@ -1201,10 +1219,27 @@ def ancestors_menu():
         horizontal(row)
 
 
+VIEW_WIDTH, PANES_BUTTON = 116, 34  # what the buttons of the right side of the toolbar take
+SEARCH_WIDTH, SEARCH_MIN = 240, 90  # the search field: its widest, and the least worth showing
+
+
+def panes_menu():
+    """the panes of the dock that were closed with their tab, to bring them back"""
+    closed = [title for title in PANES if title not in dock.titles]
+    if not closed:
+        weak("Tous les panneaux sont affichés")
+    for title in closed:
+        if button_clicked(f"Afficher {title}"):
+            dock.add_pane(DockPane(title, PANES[title], closable=True))
+    separator()
+    toggle_value(show_dock, "Dock")
+
+
 def toolbar():
     tint = icon_tint()
 
     def bar():
+        total = available_width()
         if MACOS and not show_sidebar.value:
             add_space(
                 64
@@ -1223,20 +1258,31 @@ def toolbar():
         )  # greyed out at the root
         add_space(6)
         menu_button(f"{place_name(current())}  ▾", ancestors_menu, size=14)
-        add_space(max(available_width() - 690, 8))
+        # the right side: the view, the search, the hidden panes. The search shrinks with the window and
+        # disappears when it would be too small
+        left = 64 * (MACOS and not show_sidebar.value) + 174 + 7 * len(place_name(current()))
+        room = total - left - VIEW_WIDTH - PANES_BUTTON - 3 * 8
+        search_width = min(room, SEARCH_WIDTH)
+        show_search = search_width >= SEARCH_MIN
+        show_view = room >= 0 or total - left >= VIEW_WIDTH + PANES_BUTTON + 16  # then the view goes too
+        used = PANES_BUTTON + 8 + (VIEW_WIDTH + 8 if show_view else 0)
+        used += search_width + 8 if show_search else 0
+        add_space(max(total - left - used, 8))
+        if show_view:
+            segmented_control(
+                view,
+                [(svg("tree"), None), (svg("list"), None), (svg("grid"), None)],
+                size=16,
+                tint=tint,
+            )
+        if show_search:
 
-        def tag_button():
-            if image_button_clicked(svg("tag"), size=16, tint=tint):
-                open_tag_picker()
+            def search_field():
+                set_width(search_width)
+                text_edit_singleline(search, hint_text="Search")
 
-        add_enabled(has_selection(), tag_button)  # greyed out with nothing selected
-        segmented_control(
-            view,
-            [(svg("tree"), None), (svg("list"), None), (svg("grid"), None)],
-            size=16,
-            tint=tint,
-        )
-        text_edit_singleline(search, hint_text="Search")
+            vertical(search_field)
+        menu_image_button(svg("panes"), panes_menu, size=18, tint=tint)
 
     horizontal(bar)
 
@@ -1286,6 +1332,19 @@ def list_view():
     )
 
 
+TILE_DOT, TILE_DOT_GAP = 9, 3  # the dots of the tags over a tile of the icon view
+
+
+def draw_tag_dots(item, rect):
+    """the tags of an item as dots on the top left corner of its tile, from left to right"""
+    left, top, right, _ = rect
+    icon_left = (left + right) / 2 - 28  # the icon is 56 wide, in the middle of the tile
+    for i, (tag, how) in enumerate(tags_of(item["path"])):
+        x = icon_left + 2 + i * (TILE_DOT + TILE_DOT_GAP)
+        color = hex_color(tag["color"]) + (255 if how == "own" else 110,)
+        draw_rect((x, top + 4, x + TILE_DOT, top + 4 + TILE_DOT), fill=color, rounding=TILE_DOT / 2)
+
+
 def icon_view():
     entries = visible_entries()
     width, height = available_width(), available_height()
@@ -1308,7 +1367,6 @@ def icon_view():
                     icon(item, 56)
                     # not selectable, so the click reaches the tile instead of selecting the text
                     label(item["name"], truncate=True, selectable=False)
-                    horizontal(lambda item=item: tag_dots(item))
 
                 # the icon and the name are one target: a click anywhere on the tile selects it
                 response = interactive(lambda: vertical_centered(tile))
@@ -1322,6 +1380,7 @@ def icon_view():
                     )
                 elif response.hovered:
                     draw_rect(response.rect, fill=(127, 127, 127, 40), rounding=6)
+                draw_tag_dots(item, response.rect)
                 handle(item, response, entries)
                 if str(item["path"]) == scroll_target.value:
                     scroll_to_rect(response.rect)  # the whole tile comes into view
@@ -1380,13 +1439,14 @@ def tree_node(item):
     # the icon of the Finder, or an emoji where the platform gives none
     icon_uri = file_icon(str(path), 16)
     text = item["name"] if icon_uri else f"{item['emoji']}  {item['name']}"
+    dots = tag_badges(path)
     if not item["is_dir"]:
-        return TreeNode(node_id, text, icon=icon_uri)
+        return TreeNode(node_id, text, icon=icon_uri, badges=dots)
     # the children of a folder are read only once it is opened
     children = (
         [tree_node(child) for child in listing(path)] if tree.is_open(node_id) else []
     )
-    return TreeNode(node_id, text, children, icon=icon_uri)
+    return TreeNode(node_id, text, children, icon=icon_uri, badges=dots)
 
 
 tree_menu = {"ids": None}  # nodes right-clicked this frame, applied once tree_view returns
@@ -1833,6 +1893,17 @@ ACTIONS = [
             "Orange": "orange",
         }.items()
     ],
+    *[
+        (
+            "Affichage",
+            f"Afficher le panneau {title}",
+            "gear",
+            None,
+            lambda title=title: title not in dock.titles,
+            lambda title=title: dock.add_pane(DockPane(title, PANES[title], closable=True)),
+        )
+        for title in ("Actions", "Preview", "Notes", "Tags")  # PANES is defined further down
+    ],
     ("Système", "Recharger l'application", "refresh", "Cmd+R", lambda: True, reload_app),
 ]
 
@@ -1996,10 +2067,11 @@ def rename_dialog():
 
 
 def path_bar():
-    tint = icon_tint()
-
     def crumbs():
-        toggle_value(show_sidebar, "◧")
+        if image_button_clicked(
+            svg("sidebar"), size=16, tint=icon_tint(), selected=show_sidebar.value
+        ):
+            show_sidebar.value = not show_sidebar.value
         add_space(4)
 
         anchor = Path(current().anchor)
@@ -2008,36 +2080,20 @@ def path_bar():
         parts = [anchor] + ancestors + ([current()] if current() != anchor else [])
         for i, part in enumerate(parts):
             if i:
-                weak("›")
+                image(svg("chevron-right"), size=10, tint=icon_tint())
             if link_clicked(place_name(part) if i == 0 else part.name):
                 go(part)
 
-        add_space(max(available_width() - 190, 8))
+        add_space(max(available_width() - 93, 8))
         count = len(visible_entries())
         weak(f"{count} item{'s' if count != 1 else ''}")
         add_space(4)
-        toggle_value(show_dock, "◨")
-        add_space(4)
-        menu_image_button(svg("gear"), settings_menu, size=18, tint=tint)
+        if image_button_clicked(
+            svg("dock"), size=16, tint=icon_tint(), selected=show_dock.value
+        ):
+            show_dock.value = not show_dock.value
 
     horizontal(crumbs)
-
-
-# the dock on the right: panes the user can close, move by their tab, and drop on another side
-PANES = {
-    "Actions": lambda: scroll_area_vertical(actions_panel),
-    "Preview": lambda: scroll_area_vertical(preview),
-    "Notes": notes_panel,
-    "Tags": lambda: scroll_area_vertical(tags_panel),
-}
-dock = Dock(
-    DockContainer(
-        "vertical", [DockPane(title, ui, closable=True) for title, ui in PANES.items()]
-    ),
-    id="inspector",
-    tab_bar_height=26,
-    pane_margin=8,
-)
 
 
 def in_zone(zone, ui):
@@ -2069,7 +2125,64 @@ def zone_stroke(zone, otherwise):
     context[0].request_repaint()  # the fade runs without any other event
     color = ACCENTS[accent_name.value]
     r, g, b = (int(color[i : i + 2], 16) for i in (1, 3, 5))
-    return (2, (r, g, b, round(255 * alpha)))
+    return (EDGE[0], (r, g, b, round(255 * alpha)))
+
+
+# the dock fills the middle of the window: the files are one of its panes (that cannot be closed), the
+# others can be closed, moved by their tab and dropped on any side of the files or of each other
+CENTRAL = "Fichiers"
+
+
+def zone_pane(zone, ui, margin=0):
+    """a pane of the dock that is a zone of the keyboard focus: a click in it gives it the focus, and
+    its outline shows it when the focus moves"""
+    return lambda: frame(
+        in_zone(zone, ui),
+        inner_margin=margin,
+        rounding=6,
+        stroke=zone_stroke(zone, (EDGE[0], (0, 0, 0, 0))),
+    )
+
+
+PANES = {
+    "Actions": zone_pane("dock", lambda: scroll_area_vertical(actions_panel)),
+    "Preview": zone_pane("dock", lambda: scroll_area_vertical(preview)),
+    "Notes": zone_pane("dock", notes_panel),
+    "Tags": zone_pane("dock", lambda: scroll_area_vertical(tags_panel)),
+}
+central_ui = zone_pane("content", content, margin=8)
+dock = Dock(
+    DockContainer(
+        "horizontal",
+        [
+            DockPane(CENTRAL, central_ui, hide_tab=True),  # no tab while the files are alone
+            DockContainer(
+                "vertical",
+                [DockPane(title, ui, closable=True) for title, ui in PANES.items()],
+            ),
+        ],
+    ),
+    id="inspector",
+    tab_bar_height=26,
+    pane_margin=8,
+    gap_width=GAP,  # a gap between the panes, as wide as between the other boxes
+    pane_stroke=EDGE,
+    active_tab_stroke=EDGE,
+    inactive_tab_stroke=EDGE,
+    resize_stroke=(1, (0, 0, 0, 0)),  # the gap stays empty: no grey band, the panes still resize
+)
+default_layout = dock.save()
+default_layout["shares"] = [4.0, 1.0]  # the files take most of the width
+dock.load(default_layout)
+
+
+def has_pane(layout, title):
+    """is this pane in a layout saved by dock.save()"""
+    if not isinstance(layout, dict):
+        return False
+    return layout.get("pane") == title or any(
+        has_pane(child, title) for child in layout.get("children", [])
+    )
 
 
 def update_func(ctx):
@@ -2081,10 +2194,7 @@ def update_func(ctx):
 
     keyboard()
     action_keys()
-    edge = (
-        1,
-        (127, 127, 127, 60),
-    )  # a hairline so the rounded corner reads against the content
+    edge = EDGE
     left_panel(
         "sidebar",
         in_zone("sidebar", sidebar),
@@ -2092,6 +2202,7 @@ def update_func(ctx):
         default_size=215,
         min_size=200,
         inner_margin=12,
+        outer_margin=(0, 0, H, 0),
         show_separator_line=False,
         rounding=12,
         stroke=zone_stroke("sidebar", edge),
@@ -2100,6 +2211,7 @@ def update_func(ctx):
         "toolbar",
         toolbar,
         inner_margin=8,
+        outer_margin=(H, 0, 0, H),
         show_separator_line=False,
         rounding=12,
         stroke=edge,
@@ -2108,24 +2220,15 @@ def update_func(ctx):
         "path",
         path_bar,
         inner_margin=8,
+        outer_margin=(H, H, 0, 0),
         show_separator_line=False,
         rounding=12,
         stroke=edge,
     )
-    right_panel(
-        "dock",
-        in_zone("dock", lambda: dock_area(dock)),
-        expanded=show_dock,
-        default_size=300,
-        min_size=220,
-        inner_margin=6,
-        show_separator_line=False,
-        stroke=zone_stroke("dock", (0, (0, 0, 0, 0))),
-    )
+    # the panes of the dock, or the files alone when the dock is hidden
     frame(
-        in_zone("content", content),
-        inner_margin=16,
-        stroke=zone_stroke("content", (0, (0, 0, 0, 0))),
+        lambda: dock_area(dock) if show_dock.value else central_ui(),
+        outer_margin=(H, H, 0, H),  # the same as the bars: the panes line up with them
     )
     if renaming.value:
         rename_dialog()
