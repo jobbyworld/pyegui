@@ -111,6 +111,7 @@ ICONS_DIR = (
     Path(__file__).resolve().parent / "icons"
 )  # white SVG icons, tinted to the theme
 
+MARGIN = 4  # around every box of the window: the gap between two boxes is twice that
 TREE, LIST, ICONS = 0, 1, 2  # the order of the segmented control of the toolbar
 LIGHT, DARK, SYSTEM = 0, 1, 2
 NO_GLASS, PARTIAL, FULL = 0, 1, 2
@@ -2103,7 +2104,8 @@ dock = Dock(
     id="inspector",
     tab_bar_height=26,
     pane_margin=8,
-    gap_width=8,  # a gap between the panes, so the files do not touch the other ones
+    gap_width=2 * MARGIN,  # a gap between the panes, as wide as between the other boxes
+    resize_stroke=(1, (0, 0, 0, 0)),  # the gap stays empty: no grey band, the panes still resize
 )
 default_layout = dock.save()
 default_layout["shares"] = [4.0, 1.0]  # the files take most of the width
@@ -2139,6 +2141,7 @@ def update_func(ctx):
         default_size=215,
         min_size=200,
         inner_margin=12,
+        outer_margin=MARGIN,
         show_separator_line=False,
         rounding=12,
         stroke=zone_stroke("sidebar", edge),
@@ -2147,6 +2150,7 @@ def update_func(ctx):
         "toolbar",
         toolbar,
         inner_margin=8,
+        outer_margin=MARGIN,
         show_separator_line=False,
         rounding=12,
         stroke=edge,
@@ -2155,12 +2159,16 @@ def update_func(ctx):
         "path",
         path_bar,
         inner_margin=8,
+        outer_margin=MARGIN,
         show_separator_line=False,
         rounding=12,
         stroke=edge,
     )
     # the panes of the dock, or the files alone when the dock is hidden
-    frame(lambda: dock_area(dock) if show_dock.value else central_ui(), inner_margin=6)
+    frame(
+        lambda: dock_area(dock) if show_dock.value else central_ui(),
+        outer_margin=MARGIN,  # the same as the bars: the panes line up with them
+    )
     if renaming.value:
         rename_dialog()
     if palette_open.value:
