@@ -51,7 +51,7 @@ class Date:
     def __init__(self, value: datetime.date) -> None: ...
 
 class RGB:
-    """An rgb color picker value, channels 0-255. See color_edit_button_rgb."""
+    """An rgb color picker value, channels 0-1. See color_edit_button_rgb."""
 
     r: float
     g: float

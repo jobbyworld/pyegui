@@ -11,6 +11,7 @@
 - `tree.focus(focused=True)` and `tree.keep_focus`: give the keyboard focus to a `TreeView` (once, or at every frame unless a text field is being edited), or take it away, so an app can manage the focus of its zones
 - `ctx.request_repaint(after=0.0)`: asks for another call of `update_func`, to run an animation
 - `pointer_pressed()`: True in the frame the primary mouse button went down, to know which zone was clicked
+- docs: the channels of `RGB` (`color_edit_button_rgb`) are between 0 and 1, not 0 and 255
 - `file_icon(path, size)`: also gives the icons of the Windows Explorer (via `IShellItemImageFactory`)
 
 ## 0.6.0 (2026-11-11)

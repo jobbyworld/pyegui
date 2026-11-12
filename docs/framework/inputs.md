@@ -354,7 +354,7 @@ Shows a button with the given color. If the user clicks the button, a full color
 **Example:**
 
 ```python
-color = RGB(69, 69, 69)
+color = RGB(0.27, 0.27, 0.27)
 # inside udpate_func
 color_edit_button_rgb(color)
 heading(f"r:{color.r} g:{color.g} b:{color.b}")
