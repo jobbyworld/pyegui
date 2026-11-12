@@ -1116,7 +1116,10 @@ def locations():
 def sidebar():
     if MACOS:
         add_space(26)  # the window buttons are over the sidebar
+    scroll_area_vertical(sidebar_content)  # many tags: the sidebar scrolls instead of overflowing
 
+
+def sidebar_content():
     accent = ACCENTS[accent_name.value]
 
     def place(icon_name, name, path):
