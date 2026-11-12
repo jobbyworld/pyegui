@@ -5,7 +5,7 @@ panel and a path bar. The icons are the ones of the Finder on macOS.
 
 Mouse: click to select, double click to open (folders here, files with their app). In the tree
 view, the arrow of a folder shows its contents in the tree.
-Keyboard: arrows to select, Enter or Cmd+Down to open, Cmd+Up for the parent folder,
+Keyboard: arrows to select, Enter or Cmd+Down to open, Backspace or Cmd+Up for the parent folder,
 Cmd+[ and Cmd+] to go back and forward, Escape to clear the search and the selection.
 
     python finder.py [folder]
@@ -145,6 +145,14 @@ def back():
         selected.value = ""
 
 
+def up():
+    """go to the parent folder and select the folder we come from, like the Finder"""
+    child = current()
+    go(child.parent)
+    if current() != child:
+        selected.value = str(child)
+
+
 def forward():
     if position.value < len(history) - 1:
         position.value += 1
@@ -170,8 +178,8 @@ def handle(item, response):
 
 
 def keyboard():
-    if key_pressed("Cmd+ArrowUp"):
-        go(current().parent)
+    if key_pressed("Cmd+ArrowUp") or key_pressed("Backspace"):
+        up()
     if key_pressed("Cmd+OpenBracket"):
         back()
     if key_pressed("Cmd+CloseBracket"):
