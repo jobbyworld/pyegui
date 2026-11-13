@@ -28,6 +28,9 @@ use crate::{current_ui, kwarg, run_nested_call, run_nested_update_func, UI};
 /// Usage::
 ///
 ///     DockPane("Editor", editor_ui, closable=True)
+/// with layout rules, the share of the opacity of the sheet kept by the tabs that are not active
+const INACTIVE_SHEET: f32 = 0.45;
+
 #[pyclass]
 pub(crate) struct DockPane {
     #[pyo3(get, set)]
@@ -1131,6 +1134,8 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
                     .hovered_tab_fill
                     .unwrap_or(if self.style.pill {
                         ui.visuals().widgets.hovered.weak_bg_fill
+                    } else if let Some(rules) = crate::layout::dock_rules() {
+                        rules.sheet_fill(ui.visuals()).gamma_multiply(0.5 * (1.0 + INACTIVE_SHEET))
                     } else {
                         DockStyle::inactive_tint(ui.visuals(), true)
                     });
@@ -1149,7 +1154,9 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
                 );
             } else {
                 // the radius of the theme, set with ctx.set_style(rounding=...)
-                let radius = ui.visuals().widgets.inactive.corner_radius.nw;
+                let radius = crate::layout::dock_rules().map_or(ui.visuals().widgets.inactive.corner_radius.nw, |rules| {
+                    rules.rounding.round().clamp(0.0, 255.0) as u8
+                });
                 let corners = CornerRadius {
                     nw: radius,
                     ne: radius,
@@ -1329,11 +1336,15 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
             (true, true) => self.style.active_tab_fill.unwrap_or(visuals.selection.bg_fill),
             (false, true) => self.style.inactive_tab_fill.unwrap_or(Color32::TRANSPARENT),
             // classic: the active tab has the background of its pane, the others are tinted
-            (true, false) => self.style.active_tab_fill.unwrap_or(Color32::TRANSPARENT),
-            (false, false) => self
-                .style
-                .inactive_tab_fill
-                .unwrap_or(DockStyle::inactive_tint(visuals, false)),
+            // with layout rules: the sheet of the pane, and a fainter one for the others
+            (true, false) => self.style.active_tab_fill.unwrap_or_else(|| match crate::layout::dock_rules() {
+                Some(rules) => rules.sheet_fill(visuals),
+                None => Color32::TRANSPARENT,
+            }),
+            (false, false) => self.style.inactive_tab_fill.unwrap_or_else(|| match crate::layout::dock_rules() {
+                Some(rules) => rules.sheet_fill(visuals).gamma_multiply(INACTIVE_SHEET),
+                None => DockStyle::inactive_tint(visuals, false),
+            }),
         }
     }
 
