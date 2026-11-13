@@ -14,7 +14,7 @@ from pathlib import Path
 from pyegui import *
 
 FOLDER = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "docs" / "framework"
-GAP = 8  # around every box and between two of them: the central area already keeps 8 points on its four sides
+GAP = 8  # around the sidebar; the central area already keeps 8 points on its four sides
 
 files = sorted(FOLDER.glob("*.md"))
 current = Str(str(files[0]) if files else "")
@@ -33,6 +33,7 @@ def text():
 
 
 def sidebar():
+    set_min_height(available_height())  # the box is as tall as the panel
     if sys.platform == "darwin":
         add_space(26)  # the window buttons are over the sidebar
     weak(FOLDER.name)
@@ -125,16 +126,15 @@ def update_func(ctx):
         ctx.set_system_theme()
         started.value = True
 
+    # the panel keeps the color of the window all around its box: the margin is the inner margin of the
+    # panel, not an outer margin, which would show the background of the window
     left_panel(
         "sidebar",
-        sidebar,
-        default_size=200,
+        lambda: frame(sidebar, inner_margin=12, rounding=12, stroke=(1, (127, 127, 127, 60))),
+        default_size=200 + 2 * GAP,
         min_size=140,
-        inner_margin=12,
-        outer_margin=(GAP, GAP, 0, GAP),  # the dock has its own 8 points on the left
+        inner_margin=GAP,
         show_separator_line=False,
-        rounding=12,
-        stroke=(1, (127, 127, 127, 60)),
     )
     dock_area(dock)
 
