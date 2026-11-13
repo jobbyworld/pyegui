@@ -13,7 +13,7 @@ use eframe::egui::{self, Color32, Frame, Margin, Stroke};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
 
-use crate::style::kwarg_stroke;
+use crate::style::{kwarg_color, kwarg_stroke};
 use crate::{kwarg, panel_parent_ui, run_nested_update_func, with_bool_copy, Bool, UI};
 
 pub(crate) const REGIONS: [&str; 5] = ["sidebar", "central", "dock", "topbar", "bottombar"];
@@ -26,9 +26,12 @@ pub(crate) struct Tokens {
     outline: Option<Stroke>,
     opacity: Option<f32>,
     inner_margin: Option<f32>,
+    sheet: Option<Color32>,
 }
 
-const TOKEN_NAMES: [&str; 5] = ["gap", "rounding", "outline", "opacity", "inner_margin"];
+const TOKEN_NAMES: [&str; 6] = ["gap", "rounding", "outline", "opacity", "inner_margin", "sheet"];
+/// the key of the global rules that is not a token: what is seen between the boxes
+const BACKGROUND: &str = "background";
 
 impl Tokens {
     fn from_kwargs(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Tokens> {
@@ -38,6 +41,7 @@ impl Tokens {
             outline: kwarg_stroke(kwargs, "outline")?,
             opacity: kwarg::<f32>(kwargs, "opacity")?,
             inner_margin: kwarg::<f32>(kwargs, "inner_margin")?,
+            sheet: kwarg_color(kwargs, "sheet")?,
         })
     }
 
@@ -49,6 +53,7 @@ impl Tokens {
             outline: self.outline.or(other.outline),
             opacity: self.opacity.or(other.opacity),
             inner_margin: self.inner_margin.or(other.inner_margin),
+            sheet: self.sheet.or(other.sheet),
         }
     }
 }
@@ -58,6 +63,7 @@ struct Rules {
     /// the rules were given, or a region was drawn: the framework lays the window out
     active: bool,
     global: Tokens,
+    background: Option<Color32>,
     regions: HashMap<String, Tokens>,
 }
 
@@ -71,6 +77,20 @@ pub(crate) struct Resolved {
     pub outline: Stroke,
     pub opacity: f32,
     pub inner_margin: f32,
+    sheet: Option<Color32>,
+}
+
+impl Resolved {
+    /// The fill of the boxes of the region: the sheet color (the panel color by default) with the opacity
+    pub(crate) fn sheet_fill(&self, visuals: &egui::Visuals) -> Color32 {
+        self.sheet.unwrap_or(visuals.panel_fill).gamma_multiply(self.opacity)
+    }
+}
+
+/// What is seen between the boxes: the background of the rules (the panel color by default)
+pub(crate) fn background(visuals: &egui::Visuals) -> Color32 {
+    let rules = RULES.lock().unwrap_or_else(|e| e.into_inner());
+    rules.background.unwrap_or(visuals.panel_fill)
 }
 
 const DEFAULT_GAP: f32 = 8.0;
@@ -101,6 +121,7 @@ pub(crate) fn resolve(region: &str, call: &Tokens) -> Resolved {
         outline: tokens.outline.unwrap_or_else(default_outline),
         opacity: tokens.opacity.unwrap_or(1.0).clamp(0.0, 1.0),
         inner_margin: tokens.inner_margin.unwrap_or_else(|| default_inner_margin(region)),
+        sheet: tokens.sheet,
     }
 }
 
@@ -115,10 +136,10 @@ pub(crate) fn dock_rules() -> Option<Resolved> {
 pub(crate) fn set_rules(dict: &Bound<'_, PyDict>) -> PyResult<()> {
     for key in dict.keys() {
         let name: String = key.extract()?;
-        if !TOKEN_NAMES.contains(&name.as_str()) && !REGIONS.contains(&name.as_str()) {
+        if !TOKEN_NAMES.contains(&name.as_str()) && !REGIONS.contains(&name.as_str()) && name != BACKGROUND {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "unknown layout key '{}': the values are {:?} and the regions are {:?}",
-                name, TOKEN_NAMES, REGIONS
+                "unknown layout key '{}': the values are {:?}, '{}' and the regions are {:?}",
+                name, TOKEN_NAMES, BACKGROUND, REGIONS
             )));
         }
     }
@@ -131,7 +152,8 @@ pub(crate) fn set_rules(dict: &Bound<'_, PyDict>) -> PyResult<()> {
         }
     }
     let mut rules = RULES.lock().unwrap_or_else(|e| e.into_inner());
-    *rules = Rules { active: true, global, regions };
+    let background = kwarg_color(Some(dict), BACKGROUND)?;
+    *rules = Rules { active: true, global, background, regions };
     Ok(())
 }
 
@@ -201,7 +223,7 @@ pub(crate) fn central_frame(style: &egui::Style) -> Option<Frame> {
         return None;
     }
     let values = resolve("central", &Tokens::default());
-    let fill = style.visuals.panel_fill.gamma_multiply(values.opacity);
+    let fill = background(&style.visuals);
     Some(
         Frame::new()
             .inner_margin(margins(PLACED.load(Ordering::Relaxed), None, values.gap))
@@ -243,10 +265,10 @@ unsafe fn show_region_panel(
     PLACED.store(placed | side.flag(), Ordering::Relaxed);
 
     let ui = panel_parent_ui(&UI)?;
-    let fill = ui.style().visuals.panel_fill.gamma_multiply(values.opacity);
+    let fill = values.sheet_fill(&ui.style().visuals);
     // the margin is the inner margin of the panel, so that it keeps the color of the window
-    // the gap around the box is the background of the window: the opacity of the "central" region
-    let backdrop = ui.style().visuals.panel_fill.gamma_multiply(resolve("central", &Tokens::default()).opacity);
+    // the gap around the box shows the background of the rules
+    let backdrop = background(&ui.style().visuals);
     let panel_frame = Frame::new().inner_margin(margins(placed, Some(side), values.gap)).fill(backdrop);
     panel = panel.frame(panel_frame);
 
@@ -303,7 +325,7 @@ fn panel_id(kwargs: Option<&Bound<'_, PyDict>>, default: &str) -> PyResult<Strin
 ///
 ///     expanded (Bool): the panel is shown when expanded.value is True
 ///
-///     gap, rounding, outline, opacity, inner_margin: the layout rules of this region, see
+///     gap, rounding, outline, sheet, opacity, inner_margin: the layout rules of this region, see
 ///         Context.set_layout. They are looked up in the call, then in the rules of the sidebar,
 ///         then in the global rules
 ///

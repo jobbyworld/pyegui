@@ -133,6 +133,6 @@ if __name__ == "__main__":
         fullsize_content=True,
         backdrop=Backdrop.LIQUID_GLASS if sys.platform == "darwin" else Backdrop.ACRYLIC,
         # the same spacing and corners everywhere; the sidebar and the docks let the backdrop show through,
-        # the docks (the viewer included) are more opaque to stay readable, the central area itself is bare
-        layout=dict(gap=8, rounding=12, opacity=0.5, dock=dict(opacity=0.7), central=dict(opacity=0)),
+        # the docks (the viewer included) are more opaque to stay readable, nothing is drawn between the boxes
+        layout=dict(gap=8, rounding=12, opacity=0.5, dock=dict(opacity=0.7), background=(0, 0, 0, 0)),
     )

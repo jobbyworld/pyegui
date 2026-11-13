@@ -146,7 +146,14 @@ if __name__ == "__main__":
         inner_height=700,
         fullsize_content=True,
         backdrop=Backdrop.LIQUID_GLASS if sys.platform == "darwin" else Backdrop.ACRYLIC,
-        # the same spacing and corners everywhere; the boxes let the backdrop show through, the docks a bit
-        # less, and nothing is drawn behind the boxes
-        layout=dict(gap=8, rounding=12, opacity=0.5, dock=dict(opacity=0.7), central=dict(opacity=0)),
+        # the same spacing and corners everywhere; the background is what is seen between the boxes, the
+        # sheet what is seen inside them, and the docks are a bit more opaque to stay readable
+        layout=dict(
+            gap=8,
+            rounding=12,
+            background=(30, 30, 40, 110),  # seen between the boxes: a dark tint over the backdrop
+            sheet=(255, 255, 255),  # seen inside the boxes
+            opacity=0.55,
+            dock=dict(opacity=0.8),
+        ),
     )

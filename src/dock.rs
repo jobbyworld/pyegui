@@ -1054,7 +1054,7 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
 
         if let Some(rules) = crate::layout::dock_rules() {
             // the pane is a box of the rules: filled with the opacity of the region, with its corners
-            let fill = ui.visuals().panel_fill.gamma_multiply(rules.opacity);
+            let fill = rules.sheet_fill(ui.visuals());
             ui.painter().rect_filled(ui.max_rect(), rules.rounding, fill);
         }
         let result = egui::Frame::new()

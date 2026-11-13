@@ -12,7 +12,7 @@ with fullsize_content the room of the window buttons is kept at its top.
 - `id` (str): id of the panel. Default is "sidebar"
 - default_size (float), min_size (float), max_size (float), exact_size (float), resizable (bool): the width, see left_panel
 - `expanded` (Bool): the panel is shown when expanded.value is True
-- gap, rounding, outline, opacity, inner_margin: the layout rules of this region, see Context.set_layout. They are looked up in the call, then in the rules of the sidebar, then in the global rules
+- gap, rounding, outline, sheet, opacity, inner_margin: the layout rules of this region, see Context.set_layout. They are looked up in the call, then in the rules of the sidebar, then in the global rules
 
 **Example:**
 

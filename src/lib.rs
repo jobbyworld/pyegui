@@ -261,13 +261,20 @@ impl Context {
     ///     outline (tuple[float, color]): outline of the boxes and of the panes of the dock. Default is a
     ///     thin translucent grey
     ///
-    ///     opacity (float): from 0 to 1, how opaque the background of the boxes is. With a backdrop
-    ///     or a transparent window the rest shows through. Default is 1
+    ///     sheet (color): the background inside the boxes (the rounded rectangles). Default is the
+    ///     panel color of the theme
+    ///
+    ///     opacity (float): from 0 to 1, multiplies the opacity of the sheet. With a backdrop or a
+    ///     transparent window what is behind shows through. Default is 1
+    ///
+    ///     background (color): global only. What is seen between the boxes, in the gaps and around them.
+    ///     Default is the panel color of the theme; (0, 0, 0, 0) shows the backdrop of the window
     ///
     ///     inner_margin (float): space between the outline of a box and its content. Default is 12 for
     ///     the sidebar and 8 for the others
     ///
-    ///     sidebar, topbar, bottombar, central, dock (dict): the same values for one region only
+    ///     sidebar, topbar, bottombar, central, dock (dict): the same values (but background) for one
+    ///     region only
     ///
     /// A value is looked up in the call of the region (sidebar_panel(..., rounding=6)), then in the
     /// dict of the region, then in the global values, then in the defaults.
@@ -1476,7 +1483,7 @@ unsafe fn open_central_panel(ui_stack: &mut Vec<*mut egui::Ui>) -> PyResult<()> 
     let has_rules = ruled.is_some();
     let mut frame = ruled.unwrap_or_else(|| egui::Frame::central_panel(root.style()));
     // partial glass: the content is an almost opaque sheet over the glass (with layout rules, the
-    // opacity of the "central" region decides instead)
+    // background of the rules decides instead)
     if !has_rules {
         if let Some(fill) = style::sheet_fill(&root.style().visuals) {
             frame = frame.fill(fill);
