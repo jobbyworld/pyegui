@@ -1052,6 +1052,11 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
             .pane_margin
             .unwrap_or_else(|| crate::layout::dock_rules().map_or(6.0, |rules| rules.inner_margin));
 
+        if let Some(rules) = crate::layout::dock_rules() {
+            // the pane is a box of the rules: filled with the opacity of the region, with its corners
+            let fill = ui.visuals().panel_fill.gamma_multiply(rules.opacity);
+            ui.painter().rect_filled(ui.max_rect(), rules.rounding, fill);
+        }
         let result = egui::Frame::new()
             .inner_margin(margin)
             .show(ui, |ui| unsafe { run_nested_update_func(ui, update_func) })
@@ -1247,7 +1252,8 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         if stroke.width <= 0.0 {
             return;
         }
-        let radius = f32::from(style.visuals.widgets.inactive.corner_radius.sw);
+        let radius = crate::layout::dock_rules()
+            .map_or_else(|| f32::from(style.visuals.widgets.inactive.corner_radius.sw), |rules| rules.rounding);
         let tab = self
             .active_tabs
             .get(&tile_id)

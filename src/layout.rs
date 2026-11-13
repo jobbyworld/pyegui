@@ -245,7 +245,7 @@ unsafe fn show_region_panel(
     let ui = panel_parent_ui(&UI)?;
     let fill = ui.style().visuals.panel_fill.gamma_multiply(values.opacity);
     // the margin is the inner margin of the panel, so that it keeps the color of the window
-    let panel_frame = Frame::new().inner_margin(margins(placed, Some(side), values.gap)).fill(fill);
+    let panel_frame = Frame::new().inner_margin(margins(placed, Some(side), values.gap));
     panel = panel.frame(panel_frame);
 
     let py = update_fun.py();
@@ -254,6 +254,7 @@ unsafe fn show_region_panel(
         let boxed = Frame::new()
             .inner_margin(values.inner_margin.round().clamp(0.0, 127.0) as i8)
             .corner_radius(values.rounding)
+            .fill(fill)
             .stroke(values.outline);
         // the box fills the panel; its size is taken before the frame is opened, since the frame
         // adds its margins around what is asked inside
