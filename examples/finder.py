@@ -16,12 +16,14 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
 from finder_tags import TagStore, key as tag_key
+from finder_watch import CREATED, DELETED, MODIFIED, PROBLEM, RENAMED, Watcher
 
 from pyegui import (
     Backdrop,
@@ -32,6 +34,7 @@ from pyegui import (
     Int,
     RGB,
     Str,
+    spinner,
     TreeNode,
     TreeView,
     add_enabled,
@@ -40,6 +43,7 @@ from pyegui import (
     available_width,
     bottom_panel,
     button_clicked,
+    checkbox,
     close_menu,
     code,
     color_edit_button_rgb,
@@ -196,6 +200,28 @@ tags_query = Str("")  # the search or creation field of the Tags pane
 tag_query = Str("")  # what is typed in the window to tag the selection
 tag_index = Int(0)  # the highlighted row of that window
 tag_picker_state = {"query": "", "pointer": None, "just_opened": False}
+find_name = Str("")  # the Recherche pane: part of the name,
+find_ext = Str("")  # the extensions (py, md pdf),
+find_scope = Int(0)  # 0: from the current folder, 1: everywhere in the index
+find_folders = Bool(True)  # folders among the results
+find_pages_min = Str("")  # filters on what pypdf read of the PDF: number of pages,
+find_pages_max = Str("")
+find_protect = Int(0)  # 0: all, 1: encrypted, 2: not encrypted
+find_pdf_text = Str("")  # a text of the title, author, subject or keywords
+find_auto = Bool(True)  # search by itself once the typing paused, otherwise with the button
+find_state = {  # applied: the criteria of the rows shown; typed: those of the fields last frame
+    "applied": None, "typed": None, "changed_at": 0.0, "rows": [], "more": False,
+    "index": None, "pin": None, "job": 0, "running": False,
+}
+FIND_LIMIT = 100  # results kept: more is not readable in a pane, refine the criteria instead
+FIND_DELAY = 0.3  # seconds without typing before an automatic search
+watcher = Watcher()  # the watched folders, and what happens in them, see finder_watch.py
+WATCH_COLORS = {
+    CREATED: (34, 197, 94), MODIFIED: (234, 179, 8), DELETED: (239, 68, 68),
+    RENAMED: (59, 130, 246), PROBLEM: (249, 115, 22),
+}
+WATCH_PANES = ("Dossiers surveillés", "Activités")  # closed until a folder is watched
+indexing = {"running": False, "count": 0, "folder": "", "result": None}  # the folder index job
 note_text = Str("")  # the text of the Notes pane, for the item it holds
 note_of = {"path": ""}  # the item the Notes pane holds
 
@@ -231,7 +257,10 @@ icons_per_row = Int(1)
 started = Bool(False)
 context = []  # the Context, kept on the first frame
 
-listing_cache = {}  # folder -> entries, read once
+listing_cache = {}  # folder -> entries, read again when the folder changed on the disk
+listing_stamp = {}  # folder -> (its modification time when read, when it was last looked at)
+WATCH_SEEN = {"version": 0}  # the last events of the watcher the listings took into account
+LISTING_RECHECK = 1.0  # seconds between two looks at the date of a folder shown
 tree = TreeView("tree", multi_select=True, default_open=False, activatable_dirs=True)
 tree_ids = {}  # path -> id of the tree node
 tree_paths = {}  # id -> path
@@ -272,8 +301,26 @@ def entry(path):
     }
 
 
+def folder_mtime(folder):
+    try:
+        return folder.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
 def listing(folder):
+    """the entries of a folder, read once. A folder that changes outside the app (a file created or
+    deleted by another program) is read again: its date is looked at about once a second"""
+    now = time.monotonic()
+    stamp = listing_stamp.get(folder)
+    if folder in listing_cache and stamp and now - stamp[1] > LISTING_RECHECK:
+        mtime = folder_mtime(folder)
+        if mtime != stamp[0]:
+            del listing_cache[folder]
+        else:
+            listing_stamp[folder] = (mtime, now)
     if folder not in listing_cache:
+        listing_stamp[folder] = (folder_mtime(folder), now)  # before reading: a change during it is seen
         try:
             paths = [p for p in folder.iterdir() if not p.name.startswith(".")]
         except OSError:
@@ -373,11 +420,25 @@ def forward():
         deselect()
 
 
+def open_file(path):
+    """opens a file with the application the system associates with it (not the browser:
+    open_url() hands file:// URIs to the default browser on Windows)"""
+    if sys.platform == "win32":
+        os.startfile(path)
+    elif MACOS:
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
+
+
 def open_item(item):
     if item["is_dir"]:
         go(item["path"])
     else:
-        context[0].open_url(item["path"].as_uri())  # with the app of the file
+        try:
+            open_file(item["path"])
+        except OSError:
+            return  # no application for this file, or it vanished
         tags.opened(item["path"])  # remembered in the base
 
 
@@ -587,6 +648,7 @@ def snapshot():
         "folder": str(current()),
         "tree_open": sorted(str(p) for p in open_folders()),
         "dock": dock.save(),  # the panes still open, their tabs and sizes
+        "watched": [str(p) for p in watcher.paths()],
     }
 
 
@@ -605,6 +667,9 @@ def restore(saved):
     folded.update(saved.get("folded", []))
     tags_folded.update(i for i in saved.get("tags_folded", []) if isinstance(i, int))
     tree_to_open.update(Path(p) for p in saved.get("tree_open", []) if isinstance(p, str))
+    for watched in saved.get("watched", []):
+        if isinstance(watched, str) and Path(watched).is_dir():
+            watcher.add(Path(watched))
     layout = saved.get("dock")
     if layout and not has_pane(layout, CENTRAL):
         # saved before the files were a pane: what was on the right stays there
@@ -991,6 +1056,274 @@ def tags_panel():
         tag_manager_open.value = True
 
 
+def find_root():
+    """the folder a search from the current folder covers. After a click on a result the current
+    folder changes to the one of that result: the search keeps its root, or the results would
+    shrink under the click"""
+    pin = find_state["pin"]
+    if pin and pin[0] == current():
+        return pin[1]
+    return current()
+
+
+def find_params():
+    """what the fields ask for now: (name, extensions, root folder or None, with folders, and the
+    PDF criteria as (pages min, pages max, protected, text))"""
+    root = find_root() if find_scope.value == 0 else None
+
+    def number(text):
+        return int(text) if text.strip().isdigit() else None
+
+    pdf = (
+        number(find_pages_min.value),
+        number(find_pages_max.value),
+        {0: None, 1: True, 2: False}[find_protect.value],
+        find_pdf_text.value,
+    )
+    return (find_name.value, find_ext.value, root, find_folders.value, pdf)
+
+
+def run_find(params):
+    name, ext, root, folders, (pages_min, pages_max, protected, text) = params
+    pdf = {"pages_min": pages_min, "pages_max": pages_max, "protected": protected, "text": text}
+    find_state["job"] += 1
+    job = find_state["job"]
+    find_state.update(applied=params, index=find_index_key(), running=True)
+
+    def work():
+        try:
+            rows = tags.find(name, ext, root, folders, limit=FIND_LIMIT + 1, pdf=pdf)
+        except Exception:  # base locked or busy: shown as no result
+            rows = []
+        if find_state["job"] == job:  # a newer search replaced this one: its result is dropped
+            find_state.update(rows=rows[:FIND_LIMIT], more=len(rows) > FIND_LIMIT, running=False)
+
+    threading.Thread(target=work, daemon=True).start()
+
+
+def find_index_key():
+    return (indexing["running"], indexing.get("done_at"), tags.version)
+
+
+def find_update():
+    """asks the base when needed. Automatic: once the fields stopped changing for FIND_DELAY
+    seconds (a letter typed restarts the wait). Manual: only from the button or Enter. Whatever
+    the mode, a change of the index runs again the search already shown. Returns the pending state
+    for the pane: True while the fields differ from the search shown."""
+    now = time.monotonic()
+    params = find_params()
+    if params != find_state["typed"]:
+        find_state.update(typed=params, changed_at=now)
+    if find_state["applied"] is None:
+        run_find(params)  # the first frame: everything, or what the folder holds
+    elif find_auto.value:
+        if params != find_state["applied"]:
+            wait = find_state["changed_at"] + FIND_DELAY - now
+            if wait <= 0:
+                run_find(params)
+            else:
+                context[0].request_repaint()  # nothing else wakes the window for the timer
+    elif key_pressed("Enter", when_typing=True) and params != find_state["applied"]:
+        run_find(params)
+    if find_state["index"] != find_index_key():
+        run_find(find_state["applied"])
+    return params != find_state["applied"]
+
+
+def show_found(path, open_it):
+    """goes to the folder of a result and selects it; a double click opens it"""
+    path = Path(os.path.realpath(path))  # the base keeps paths in the case of the comparison
+    item = entry(path)
+    if not item:
+        return  # it was deleted since the index
+    root = find_root()
+    if path.parent != current():
+        go(path.parent)
+    find_state["pin"] = (current(), root)
+    select_path(path)
+    scroll_target.value = str(path)
+    if open_it:
+        open_item(item)
+
+
+def find_panel():
+    """the dock pane of the advanced search in the SQLite index: by name and extension, from the
+    current folder or everywhere, automatically (after a pause in the typing) or with a button"""
+    text_edit_singleline(find_name, hint_text="Nom contient")
+    text_edit_singleline(find_ext, hint_text="Extensions (py md pdf)")
+    segmented_control(find_scope, [(None, "Dossier courant"), (None, "Partout")], tint=icon_tint())
+    checkbox(find_folders, "Inclure les dossiers")
+    add_space(2)
+    weak("Filtres PDF (les PDF déjà indexés)")
+
+    def pages_fields():
+        for holder, hint in ((find_pages_min, "Pages min"), (find_pages_max, "Pages max")):
+            set_width(80)
+            text_edit_singleline(holder, hint_text=hint)
+
+    horizontal(pages_fields)
+    segmented_control(find_protect, [(None, "Tous"), (None, "Protégés"), (None, "Non protégés")], tint=icon_tint())
+    text_edit_singleline(find_pdf_text, hint_text="Titre, auteur, sujet, mots-clés")
+    add_space(2)
+    checkbox(find_auto, "Recherche automatique")
+    stale = find_update()
+    if not find_auto.value:
+        if button_clicked("Rechercher"):
+            run_find(find_params())
+            stale = False
+    if not tags.indexed_count():
+        weak("L'index est vide : lance « Indexer le dossier dans SQLite » (Outils).")
+        return
+    rows = find_state["rows"]
+    count = f"{len(rows)}{'+' if find_state['more'] else ''} résultat{'s' if len(rows) != 1 else ''}"
+    if find_state["running"]:
+        context[0].request_repaint(after=0.1)  # the thread cannot wake the window
+
+        def searching():
+            spinner()
+            weak("Recherche en cours…")
+
+        horizontal(searching)
+    elif index_status():
+        weak(index_status())
+    elif stale:
+        weak(f"Recherche en cours… ({count})" if find_auto.value else f"{count} · critères modifiés")
+    else:
+        weak(count + (f" · seuls les {FIND_LIMIT} premiers sont affichés, affine la recherche" if find_state["more"] else ""))
+    add_space(4)
+    current_key = tag_key(selected.value) if selected.value else None
+    for path, is_dir, size, modified, name, pages, encrypted in rows:
+        def row(path=path, is_dir=is_dir, size=size, name=name, pages=pages, encrypted=encrypted):
+            icon({"path": Path(path), "emoji": "📁" if is_dir else "📄"}, 16)
+            response = selectable_label_response(path == current_key, name)
+            if response.clicked:
+                show_found(path, response.double_clicked)
+            if not is_dir:
+                weak(human_size(size))
+            if pages:
+                weak(f"{pages} p.")
+            if encrypted:
+                weak("protégé")
+
+        horizontal(row)
+        weak(str(Path(path).parent))
+
+
+pane_requests = []  # titles of the panes to bring back, done at the start of the next frame
+
+
+def show_pane(title):
+    """brings a pane of the dock back if it was closed, on the right of the files. It is done at
+    the start of the next frame: the layout of the dock cannot be read while one of its panes
+    is being drawn"""
+    pane_requests.append(title)
+
+
+def add_pane_right(layout, title):
+    """the layout (as dock.save() gives it) with a new pane in the column on the right of the files,
+    under the panes already there; the column is made if there is none. Dock.add_pane would put it
+    in the tabs of the files"""
+    new = {"pane": title}
+    horizontal = isinstance(layout, dict) and layout.get("kind") == "horizontal"
+    children = layout.get("children") if horizontal else None  # else: wrapped below
+    beside = [
+        c for c in (children or []) if isinstance(c, dict) and not has_pane(c, CENTRAL)
+    ]
+    if beside:
+        column = beside[-1]
+        if "pane" in column:  # a single pane: it becomes a column with the new one
+            index = children.index(column)
+            column = children[index] = {
+                "kind": "vertical", "shares": [1.0, 1.0], "children": [column],
+            }
+            column["children"].append(new)
+            return layout
+        shares = column.get("shares")
+        column.setdefault("children", []).append(new)
+        if shares:  # the new pane takes the share of an average one
+            shares.append(sum(shares) / len(shares))
+        if column.get("kind") == "tabs":
+            column["active"] = len(column["children"]) - 1
+        return layout
+    column = {"kind": "vertical", "shares": [1.0], "children": [new]}
+    return {"kind": "horizontal", "shares": [4.0, 1.0], "children": [layout, column]}
+
+
+def open_requested_panes():
+    for title in dict.fromkeys(pane_requests):  # once each, in order
+        if title in dock.titles:
+            dock.set_active(title)
+            continue
+        pane = DockPane(title, PANES[title], closable=True)
+        layout = dock.save()
+        if not layout or not dock.load(add_pane_right(layout, title), panes=[pane]):
+            dock.add_pane(pane)  # no layout to build on: the tabs of the files, as a last resort
+    pane_requests.clear()
+
+
+def watch_folder():
+    """watches the selected folder, the folder of the selected file, or the current folder"""
+    watcher.add(target_directory())
+    for title in WATCH_PANES:
+        show_pane(title)
+
+
+def unwatch_folder():
+    watcher.remove(target_directory())
+
+
+def watched_panel():
+    """the dock pane of the watched folders: click one to go there, the cross stops watching it"""
+    if button_clicked("Surveiller le dossier courant"):
+        watcher.add(current())
+        show_pane("Activités")
+    add_space(4)
+    paths = watcher.paths()
+    if not paths:
+        weak("Aucun dossier surveillé : les changements de leur contenu seront listés dans Activités.")
+    for path in paths:
+        def row(path=path):
+            icon({"path": path, "emoji": "📁"}, 16)
+            if selectable_label_clicked(False, path.name or str(path)) and path.is_dir():
+                go(path)
+            changes = watcher.count(path)
+            if changes:
+                weak(f"{changes} changement{'s' if changes != 1 else ''}")
+            if image_button_clicked(svg("close"), size=12, tint=icon_tint()):
+                watcher.remove(path)
+
+        horizontal(row)
+        weak(str(path))
+
+
+def activity_panel():
+    """the console of the watched folders: one line per change, the newest first. A click on a
+    line shows the item in its folder"""
+    events = watcher.recent(200)
+
+    def header():
+        weak(f"{len(events)} événement{'s' if len(events) != 1 else ''}" if events else "Aucune activité")
+        if events and small_button_clicked("Effacer"):
+            watcher.clear()
+
+    horizontal(header)
+    if not watcher.paths():
+        weak("Aucun dossier surveillé : action Outils › Surveiller le dossier.")
+    for event in events:
+        def line(event=event):
+            weak(time.strftime("%H:%M:%S", time.localtime(event["time"])))
+            colored_label(WATCH_COLORS[event["kind"]], event["kind"])
+            name = Path(event["root"]).name or event["root"]
+            if selectable_label_clicked(False, f"[{name}] {event['text'].split(' : ', 1)[-1]}"):
+                path = Path(event["path"])
+                if path.exists():
+                    show_found(path, False)
+                elif path.parent.is_dir():
+                    go(path.parent)
+
+        horizontal(line)
+
+
 def tag_picker():
     if not chosen():
         tag_picker_open.value = False
@@ -1130,13 +1463,7 @@ def sidebar_content():
         place(icon_name, name, path)
     add_space(12)
 
-    def tags_title():
-        weak("Tags")
-        add_space(max(available_width() - 40, 4))
-        if image_button_clicked(svg("gear"), size=14, tint=icon_tint()):
-            tag_manager_open.value = True
-
-    horizontal(tags_title)
+    weak("Tags")
     all_tags = tag_data()["all"]
     with_children = {t["parent"] for t in all_tags}
     hidden_below = None  # depth of the folded tag whose children are being skipped
@@ -1248,7 +1575,7 @@ def panes_menu():
         weak("Tous les panneaux sont affichés")
     for title in closed:
         if button_clicked(f"Afficher {title}"):
-            dock.add_pane(DockPane(title, PANES[title], closable=True))
+            show_pane(title)
     separator()
     toggle_value(show_dock, "Dock")
 
@@ -1310,8 +1637,21 @@ def toolbar():
 # views
 
 
+pdf_columns = {"key": None, "info": {}}
+
+
+def pdf_columns_of(entries):
+    """{path: (pages, protected)} of the PDF shown, from the index; asked once per listing"""
+    pdfs = [str(e["path"]) for e in entries if not e["is_dir"] and str(e["name"]).lower().endswith(".pdf")]
+    key_ = (current(), len(pdfs), pdfs[:1], pdfs[-1:], indexing.get("done_at"), WATCH_SEEN.get("version"))
+    if pdf_columns["key"] != key_:
+        pdf_columns.update(key=key_, info=tags.pdf_summary(pdfs) if pdfs else {})
+    return pdf_columns["info"]
+
+
 def list_view():
     entries = visible_entries()
+    pdf_known = pdf_columns_of(entries)
 
     def cell(row, col):
         item = entries[row]
@@ -1336,17 +1676,24 @@ def list_view():
             weak(item["modified"])
         elif col == 3:
             weak(item["size"])
+        elif col == 4:
+            pages = pdf_known.get(str(item["path"]), (None, False))[0]
+            if pages is not None:
+                weak(str(pages))
+        elif col == 5:
+            if pdf_known.get(str(item["path"]), (None, False))[1]:
+                label("🔒")
         else:
             weak(item["kind"])
 
     paths = [str(e["path"]) for e in entries]
     row = paths.index(scroll_target.value) if scroll_target.value in paths else None
     table_ui(
-        ["Name", "Notes", "Date Modified", "Size", "Kind"],
+        ["Name", "Notes", "Date Modified", "Size", "Pages", "Prot.", "Kind"],
         len(entries),
         cell,
         id=f"list {current()}",
-        column_widths=[290, 50, 165, 80, "remainder"],
+        column_widths=[290, 50, 165, 80, 55, 45, "remainder"],
         striped=True,
         scroll_to_row=row,
     )
@@ -1559,6 +1906,60 @@ def content():
 # preview
 
 
+pdf_cache = {"key": None, "info": None}
+
+
+def pdf_details(path):
+    """what pypdf read of a PDF: from the index, or (not indexed yet) from the file itself, once.
+    Cached: the preview asks at every frame"""
+    stamp = folder_mtime(path)
+    key_ = (str(path), stamp, indexing.get("done_at"))
+    if pdf_cache["key"] != key_:
+        info = tags.pdf_info(path)
+        if info is None:
+            try:
+                from finder_pdf import read_pdf_info
+
+                info = read_pdf_info(path)
+            except ImportError:
+                info = {"error": "pypdf n'est pas installé (pip install pypdf)"}
+        pdf_cache.update(key=key_, info=info)
+    return pdf_cache["info"]
+
+
+def pdf_rows(path):
+    """the lines of the preview for a PDF: (name, value), what is known only"""
+    info = pdf_details(path)
+    if info.get("error") and info.get("pages") is None and not info.get("encrypted"):
+        return [("PDF", f"illisible : {info['error']}")]
+    from finder_pdf import restrictions
+
+    def day(value):
+        return datetime.fromtimestamp(value).strftime("%d %b %Y") if value else None
+
+    if info.get("needs_password"):
+        protection = "Mot de passe requis pour ouvrir"
+    elif info.get("encrypted"):
+        forbidden = restrictions(info)
+        protection = "Protégé : " + (", ".join(forbidden) if forbidden else "aucune restriction")
+    else:
+        protection = "Non protégé"
+    rows = [
+        ("Pages", info.get("pages")),
+        ("Version PDF", info.get("pdf_version")),
+        ("Protection", protection),
+        ("Titre", info.get("title")),
+        ("Auteur", info.get("author")),
+        ("Sujet", info.get("subject")),
+        ("Mots-clés", info.get("keywords")),
+        ("Créé avec", info.get("creator")),
+        ("Producteur", info.get("producer")),
+        ("Créé le", day(info.get("created"))),
+        ("Modifié le", day(info.get("modified"))),
+    ]
+    return [(name, str(value)) for name, value in rows if value not in (None, "")]
+
+
 def preview():
     item = selected_entry()
     if item is None:
@@ -1599,7 +2000,17 @@ def preview():
     add_space(8)
 
     suffix = item["path"].suffix.lower()
-    if suffix in IMAGE_SUFFIXES:
+    if suffix == ".pdf":
+
+        def pdf_grid():
+            for name, value in pdf_rows(item["path"]):
+                weak(name)
+                label(value)
+                end_row()
+
+        grid("pdf-info", pdf_grid, num_columns=2, spacing=(12, 6))
+        add_space(8)
+    elif suffix in IMAGE_SUFFIXES:
         image(item["path"].as_uri(), max_width=260, max_height=220)
     elif suffix in TEXT_SUFFIXES:
         try:
@@ -1804,6 +2215,77 @@ def one_selected():
     return len(chosen()) == 1
 
 
+def index_folder_action():
+    """records the folder (the selected one, or the current one) and all it contains in the SQLite
+    base, in a thread so the window stays alive; the progress shows in the path bar"""
+    folder = target_directory()
+    start_index_job(folder, folder.name or str(folder), walk=True)
+
+
+def read_pdfs_action():
+    """reads with pypdf the PDF already in the index that were never read (indexed before the PDF
+    were read, or new), or changed since: no new walk of the disk, for the whole index"""
+    start_index_job(None, "l'index", walk=False)
+
+
+def start_index_job(folder, name, walk):
+    """the thread of an indexation: the walk of a folder (if walk), then the reading of its PDF"""
+    if indexing["running"]:
+        return
+    indexing.update(
+        running=True, count=0, folder=name, result=None, pdf=None, pdfs=None, walk=walk
+    )
+
+    def progress(count):
+        indexing["count"] = count
+
+    def pdf_progress(done, total):
+        indexing["pdf"] = (done, total)
+
+    def work():
+        try:
+            indexing["result"] = tags.index_folder(folder, progress) if walk else (0, 0)
+            try:  # then what the PDF say of themselves: only the new or changed ones are read
+                indexing["pdfs"] = tags.index_pdfs(folder, pdf_progress)
+            except ImportError:
+                indexing["pdfs"] = "pypdf"  # not installed: the files are indexed all the same
+        except Exception as error:  # a base that is locked, a disk that is full...
+            indexing["result"] = error
+        indexing["done_at"] = time.time()
+        indexing["running"] = False
+
+    threading.Thread(target=work, daemon=True).start()
+
+
+def index_status():
+    """the text of the index job for the path bar, or "" when there is nothing to tell"""
+    if indexing["running"]:
+        if indexing.get("pdf"):
+            return f"Lecture des PDF de {indexing['folder']}… {indexing['pdf'][0]}/{indexing['pdf'][1]}"
+        return f"Indexation de {indexing['folder']}… {indexing['count']}"
+    result = indexing["result"]
+    if time.time() - indexing.get("done_at", 0) > 6:
+        return ""  # the message of the end stays a few seconds
+    if isinstance(result, Exception):
+        return f"Indexation impossible : {result}"
+    if result:
+        pdfs = indexing.get("pdfs")
+        if not indexing.get("walk"):  # only the PDF of the index were read
+            if pdfs == "pypdf":
+                return "PDF non lus : pypdf n'est pas installé (pip install pypdf)"
+            read, bad = (pdfs[0], pdfs[1]) if pdfs else (0, 0)
+            if not read:
+                return "Tous les PDF de l'index sont déjà lus"
+            return f"{read} PDF lus" + (f" dont {bad} illisibles" if bad else "")
+        text = f"{indexing['folder']} indexé : {result[0]} éléments"
+        if pdfs == "pypdf":
+            text += " (PDF non lus : pip install pypdf)"
+        elif pdfs and pdfs[0]:
+            text += f", {pdfs[0]} PDF lus" + (f" dont {pdfs[1]} illisibles" if pdfs[1] else "")
+        return text
+    return ""
+
+
 def reload_app():
     """restarts the whole process in place, so edits made to this script take effect"""
     os.execv(sys.executable, [sys.executable, *sys.argv])
@@ -1880,6 +2362,38 @@ ACTIONS = [
     ),
     (
         "Outils",
+        "Indexer le dossier dans SQLite",
+        "folder-plus",
+        None,
+        lambda: not indexing["running"],
+        index_folder_action,
+    ),
+    (
+        "Outils",
+        "Lire les PDF de l'index",
+        "refresh",
+        None,
+        lambda: not indexing["running"],
+        read_pdfs_action,
+    ),
+    (
+        "Outils",
+        "Surveiller le dossier",
+        "refresh",
+        None,
+        lambda: not watcher.watching(target_directory()),
+        watch_folder,
+    ),
+    (
+        "Outils",
+        "Ne plus surveiller le dossier",
+        "close",
+        None,
+        lambda: watcher.watching(target_directory()),
+        unwatch_folder,
+    ),
+    (
+        "Outils",
         "Afficher dans le Finder" if MACOS else "Afficher dans l'explorateur",
         "reveal",
         None,
@@ -1920,9 +2434,9 @@ ACTIONS = [
             "gear",
             None,
             lambda title=title: title not in dock.titles,
-            lambda title=title: dock.add_pane(DockPane(title, PANES[title], closable=True)),
+            lambda title=title: show_pane(title),
         )
-        for title in ("Actions", "Preview", "Notes", "Tags")  # PANES is defined further down
+        for title in ("Actions", "Preview", "Notes", "Tags", "Recherche", *WATCH_PANES)  # PANES is defined further down
     ],
     ("Système", "Recharger l'application", "refresh", "Cmd+R", lambda: True, reload_app),
 ]
@@ -2105,7 +2619,7 @@ def path_bar():
                 go(part)
 
         count = len(visible_entries())
-        text = f"{count} item{'s' if count != 1 else ''}"
+        text = index_status() or f"{count} item{'s' if count != 1 else ''}"
         with_text = available_width() >= widths["count"] + SLACK  # the count goes first when narrow
         key = "count" if with_text else "dock"
         add_space(max(available_width() - widths[key] - SLACK, 4))
@@ -2177,6 +2691,9 @@ PANES = {
     "Preview": zone_pane("dock", lambda: scroll_area_vertical(preview)),
     "Notes": zone_pane("dock", notes_panel),
     "Tags": zone_pane("dock", lambda: scroll_area_vertical(tags_panel)),
+    "Recherche": zone_pane("dock", lambda: scroll_area_vertical(find_panel)),
+    "Dossiers surveillés": zone_pane("dock", lambda: scroll_area_vertical(watched_panel)),
+    "Activités": zone_pane("dock", lambda: scroll_area_vertical(activity_panel)),
 }
 central_ui = zone_pane("content", content, margin=8)
 dock = Dock(
@@ -2186,7 +2703,7 @@ dock = Dock(
             DockPane(CENTRAL, central_ui, hide_tab=True),  # no tab while the files are alone
             DockContainer(
                 "vertical",
-                [DockPane(title, ui, closable=True) for title, ui in PANES.items()],
+                [DockPane(title, ui, closable=True) for title, ui in PANES.items() if title not in WATCH_PANES],
             ),
         ],
     ),
@@ -2222,6 +2739,13 @@ def update_func(ctx):
 
     keyboard()
     action_keys()
+    open_requested_panes()  # before the dock is drawn
+    # the threads cannot wake the window, and a folder can change under it: look every second
+    ctx.request_repaint(after=LISTING_RECHECK)
+    if watcher.version != WATCH_SEEN["version"]:
+        WATCH_SEEN["version"] = watcher.version
+        for folder in [k for k in listing_cache if not isinstance(k, tuple)]:
+            del listing_cache[folder]  # something changed in a watched folder: read again at once
     edge = EDGE
     left_panel(
         "sidebar",
@@ -2276,13 +2800,16 @@ if __name__ == "__main__":
         import ctypes
 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
-    run_native(
-        "Finder",
-        update_func,
-        inner_width=1180,
-        inner_height=720,
-        backdrop=BACKDROP,
-        fullsize_content=True,
-        icon_path=str(APP_ICON),
-        persist_id=APP_USER_MODEL_ID,  # the window and the choices come back at the next run
-    )
+    try:
+        run_native(
+            "Finder",
+            update_func,
+            inner_width=1180,
+            inner_height=720,
+            backdrop=BACKDROP,
+            fullsize_content=True,
+            icon_path=str(APP_ICON),
+            persist_id=APP_USER_MODEL_ID,  # the window and the choices come back at the next run
+        )
+    finally:
+        watcher.stop()  # or the process stays alive after the window closed, see Watcher.stop()

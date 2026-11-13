@@ -32,6 +32,12 @@ Repository = "https://github.com/GachiLord/pyegui"
 Issues = "https://github.com/GachiLord/pyegui/issues"
 
 
+[dependency-groups]
+# what the scripts of examples/ import besides pyegui (finder_watch.py, finder_pdf.py)
+examples = ["watchdog>=4", "pypdf[crypto]>=5"]
+
 [tool.uv]
+# `uv run examples/finder.py` installs the examples group too
+default-groups = ["examples"]
 # rebuild the extension when the Rust sources change
 cache-keys = [{ file = "pyproject.toml" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }, { file = "src/**/*.rs" }]
