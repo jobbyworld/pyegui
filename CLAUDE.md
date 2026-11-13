@@ -27,7 +27,7 @@ On Windows the app has to set the same AppUserModelID as the shortcut (see the e
 `make develop` is the same without `--release`. Wheels are built by CI (Windows and macOS only)
 and attached to the GitHub Release of a `v*` tag.
 
-## The model in five rules
+## The model in six rules
 
 1. **Immediate mode.** `run_native(title, update_func)` calls `update_func(ctx)` about 60 times per
    second. The whole UI is redrawn each call; nothing is created once and kept in a widget tree.
@@ -44,6 +44,16 @@ and attached to the GitHub Release of a `v*` tag.
 5. **GUI thread only.** The ui stack is a global (`static mut`, see `src/lib.rs`): never call a
    widget function from another thread. Long work goes in a thread that sets a holder or a plain
    variable read by `update_func`.
+
+6. **Layout rules.** `run_native(..., layout=dict(gap=8, rounding=12, background=..., sheet=...,
+   opacity=..., outline=..., inner_margin=..., dock=dict(...)))` or `ctx.set_layout(...)` give the look
+   of the window once. A window is a sidebar, a central area, a dock (`Dock`), a topbar and a
+   bottombar: `sidebar_panel(f)`, `topbar_panel(f)` and `bottombar_panel(f)` draw the boxes, the
+   `Dock` and the central area follow the same rules. The **background** is what is seen between the
+   boxes, the **sheet** what is seen inside the (rounded) boxes and in the tab of a dock pane (the tab
+   that is not active has a fainter sheet). A value is looked up in the call, then in the region, then
+   in the global rules, then in the defaults; `DockPane(sheet=...)` colors one pane. Without rules
+   nothing changes. See [panels](docs/framework/panels.md) and [styling](docs/framework/styling.md).
 
 Things that bite:
 
@@ -71,12 +81,12 @@ an example. They are generated from the docstrings, see "Keeping the reference u
 | Text | [text.md](docs/framework/text.md) | headings, labels, code, links, badges, markdown with mermaid |
 | Buttons and inputs | [inputs.md](docs/framework/inputs.md) | buttons, checkbox, radio, switch, sliders, text edits, color and date pickers, progress |
 | Layout | [layout.md](docs/framework/layout.md) | horizontal/vertical, grid, columns, group, frame, sizes, scroll areas, enable/disable |
-| Panels and popups | [panels.md](docs/framework/panels.md) | side/top/bottom panels, window, modal, menus, tooltips, context menu |
+| Panels and popups | [panels.md](docs/framework/panels.md) | `sidebar_panel`/`topbar_panel`/`bottombar_panel`, side/top/bottom panels, window, modal, menus, tooltips, context menu |
 | Data | [data.md](docs/framework/data.md) | `table`, `table_ui`, `tree_view`, plots |
 | Docking | [docking.md](docs/framework/docking.md) | `Dock`, `DockPane`, `DockContainer`, `DockTabBar`, `dock_area` |
 | Images and icons | [images.md](docs/framework/images.md) | `image`, image buttons, tinted SVG icons, native `file_icon` |
 | Keyboard, mouse, drag and drop | [interaction.md](docs/framework/interaction.md) | `key_pressed`, `typed_text`, `modifiers`, `pointer_pos`, `interactive` (a clickable/draggable area with its `rect`), `draw_rect`, `dnd_drag_source`, `dnd_drop_zone` |
-| Styling | [styling.md](docs/framework/styling.md) | light/dark/system theme, accent, `set_style`, fonts, glass and native backdrops |
+| Styling | [styling.md](docs/framework/styling.md) | light/dark/system theme, accent, `set_style`, `set_layout` (layout rules), fonts, glass and native backdrops |
 
 Index of all files: [docs/framework/README.md](docs/framework/README.md).
 
@@ -94,6 +104,7 @@ Index of all files: [docs/framework/README.md](docs/framework/README.md).
 | `glass.py` | glass style and native backdrops |
 | `markdown.py` | markdown editor with live preview and mermaid diagrams |
 | `dock_colors.py` | layout rules in a glass style: a blue dock and a green dock, semi transparent (`DockPane(sheet=...)`) |
+| `markdown_viewer_bars.py`, `markdown_viewer_glass.py`, `markdown_viewer_bars_glass.py` | the same app with a top and a bottom bar, with a glass backdrop, with both: the layout rules (`layout=dict(...)`, `sidebar_panel`, `topbar_panel`, `bottombar_panel`) |
 | `markdown_viewer.py` | minimal app: a sidebar listing markdown files, a viewer in the middle and three docks on the right (outline, source, infos) |
 
 `finder.py` is the reference for a real desktop layout. Its Actions pane works like the Actions
@@ -108,6 +119,7 @@ predicate, run) read by both the panel and the keyboard, so an action is declare
 | `widgets.rs` | buttons, inputs, `key_pressed`, drag and drop, size helpers |
 | `containers.rs` | panels, windows, modals, menus, tooltips, grid, frame |
 | `table.rs`, `tree.rs`, `plot.rs` | data widgets (`egui_extras`, `egui_ltreeview`, `egui_plot`) |
+| `layout.rs` | layout rules: tokens, regions, `sidebar_panel`, `topbar_panel`, `bottombar_panel`, the central frame |
 | `dock.rs` | docking (`egui_dock`) |
 | `markdown.rs` | markdown and mermaid |
 | `style.rs` | themes, accent, glass, `set_style` |

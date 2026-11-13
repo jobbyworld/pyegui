@@ -1015,6 +1015,12 @@ impl eframe::App for PyeguiApp<'_> {
 ///     keeping the window buttons at the top left. Leave about 28 points free at the top of the
 ///     first panel. Ignored on other platforms
 ///
+///     layout (dict): the layout rules of the window: spacing (gap), corners (rounding), outline,
+///     background between the boxes, sheet inside the boxes, opacity and inner_margin, given once and
+///     overridden by region ("sidebar", "topbar", "bottombar", "central", "dock"). They are used by
+///     sidebar_panel, topbar_panel, bottombar_panel, the Dock and the central area. Same as
+///     ctx.set_layout(), see its documentation. Example: layout=dict(gap=8, rounding=12, dock=dict(opacity=0.8))
+///
 /// Examples::
 ///
 ///     name = Str("")

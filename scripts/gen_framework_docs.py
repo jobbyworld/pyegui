@@ -60,7 +60,9 @@ THEMES = [
     ("panels", "Panels, windows, menus and popups",
      "Side, top and bottom panels are placed on the borders of the window, the rest is the "
      "central panel. Call the panels first in the update function: a panel added after a widget "
-     "is placed inside the current ui.",
+     "is placed inside the current ui. `sidebar_panel`, `topbar_panel` and `bottombar_panel` are the "
+     "panels of the layout rules: boxes with the same gap, rounding, outline and sheet, laid out for "
+     "you (see `Context.set_layout`).",
      ["sidebar_panel", "topbar_panel", "bottombar_panel", "left_panel", "right_panel", "top_panel",
       "bottom_panel", "window", "modal", "tooltip",
       "tooltip_ui", "context_menu", "menu_bar", "menu_button", "menu_image_button",
@@ -87,7 +89,9 @@ THEMES = [
     ("styling", "Themes, colors, fonts and glass",
      "Everything that changes the look is a method of the `Context`, given to the update "
      "function of the top level. Call them from the first frame; `reset_style` goes back to the "
-     "defaults before a new style is applied.",
+     "defaults before a new style is applied. `set_layout` (or `run_native(layout=dict(...))`) gives the "
+     "spacing, corners, outline, background, sheet and opacity of the whole window once, and a region "
+     "(`sidebar`, `topbar`, `bottombar`, `central`, `dock`) or a call overrides them.",
      ["Context.is_dark_theme", "Context.is_light_theme", "Context.set_dark_theme",
       "Context.set_light_theme", "Context.set_system_theme", "Context.set_style",
       "Context.reset_style", "Context.set_layout", "Context.set_accent", "Context.set_glass_style",

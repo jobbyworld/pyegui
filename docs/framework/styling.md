@@ -1,6 +1,6 @@
 # Themes, colors, fonts and glass
 
-Everything that changes the look is a method of the `Context`, given to the update function of the top level. Call them from the first frame; `reset_style` goes back to the defaults before a new style is applied.
+Everything that changes the look is a method of the `Context`, given to the update function of the top level. Call them from the first frame; `reset_style` goes back to the defaults before a new style is applied. `set_layout` (or `run_native(layout=dict(...))`) gives the spacing, corners, outline, background, sheet and opacity of the whole window once, and a region (`sidebar`, `topbar`, `bottombar`, `central`, `dock`) or a call overrides them.
 
 ## `Context.is_dark_theme`
 

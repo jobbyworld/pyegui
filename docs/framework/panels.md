@@ -1,6 +1,6 @@
 # Panels, windows, menus and popups
 
-Side, top and bottom panels are placed on the borders of the window, the rest is the central panel. Call the panels first in the update function: a panel added after a widget is placed inside the current ui.
+Side, top and bottom panels are placed on the borders of the window, the rest is the central panel. Call the panels first in the update function: a panel added after a widget is placed inside the current ui. `sidebar_panel`, `topbar_panel` and `bottombar_panel` are the panels of the layout rules: boxes with the same gap, rounding, outline and sheet, laid out for you (see `Context.set_layout`).
 
 ## `sidebar_panel(update_fun, **kwargs)`
 
