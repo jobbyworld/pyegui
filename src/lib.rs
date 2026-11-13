@@ -1472,10 +1472,15 @@ unsafe fn open_central_panel(ui_stack: &mut Vec<*mut egui::Ui>) -> PyResult<()> 
     panel_ui.shrink_clip_rect(outer_rect);
 
     // the framework lays the window out when it has layout rules: the margins follow the panels
-    let mut frame = layout::central_frame(root.style()).unwrap_or_else(|| egui::Frame::central_panel(root.style()));
-    // partial glass: the content is an almost opaque sheet over the glass
-    if let Some(fill) = style::sheet_fill(&root.style().visuals) {
-        frame = frame.fill(fill);
+    let ruled = layout::central_frame(root.style());
+    let has_rules = ruled.is_some();
+    let mut frame = ruled.unwrap_or_else(|| egui::Frame::central_panel(root.style()));
+    // partial glass: the content is an almost opaque sheet over the glass (with layout rules, the
+    // opacity of the "central" region decides instead)
+    if !has_rules {
+        if let Some(fill) = style::sheet_fill(&root.style().visuals) {
+            frame = frame.fill(fill);
+        }
     }
     let prepared = frame.begin(&mut panel_ui);
     let central = CENTRAL.insert(Box::new(CentralPanelState { panel_ui, prepared }));
