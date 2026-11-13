@@ -14,7 +14,6 @@ from pathlib import Path
 from pyegui import *
 
 FOLDER = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "docs" / "framework"
-GAP = 8  # around the sidebar; the central area already keeps 8 points on its four sides
 
 files = sorted(FOLDER.glob("*.md"))
 current = Str(str(files[0]) if files else "")
@@ -33,9 +32,6 @@ def text():
 
 
 def sidebar():
-    set_min_height(available_height())  # the box is as tall as the panel
-    if sys.platform == "darwin":
-        add_space(26)  # the window buttons are over the sidebar
     weak(FOLDER.name)
     if not files:
         weak("No markdown file here")
@@ -112,9 +108,6 @@ dock = Dock(
     ),
     id="markdown_viewer",
     tab_bar_height=26,
-    pane_margin=8,
-    gap_width=GAP,
-    resize_stroke=(1, (0, 0, 0, 0)),  # the gap stays empty, the panes can still be resized
 )
 layout = dock.save()
 layout["shares"] = [3.0, 1.0]  # the viewer takes three quarters of the width
@@ -126,16 +119,7 @@ def update_func(ctx):
         ctx.set_system_theme()
         started.value = True
 
-    # the panel keeps the color of the window all around its box: the margin is the inner margin of the
-    # panel, not an outer margin, which would show the background of the window
-    left_panel(
-        "sidebar",
-        lambda: frame(sidebar, inner_margin=12, rounding=12, stroke=(1, (127, 127, 127, 60))),
-        default_size=200 + 2 * GAP,
-        min_size=140,
-        inner_margin=GAP,
-        show_separator_line=False,
-    )
+    sidebar_panel(sidebar, default_size=200, min_size=140)
     dock_area(dock)
 
 
@@ -146,4 +130,5 @@ if __name__ == "__main__":
         inner_width=1100,
         inner_height=700,
         fullsize_content=True,
+        layout=dict(gap=8, rounding=12),  # the same spacing and corners for the sidebar, the docks and the bars
     )

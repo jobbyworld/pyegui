@@ -7,9 +7,9 @@ Generated from the docstrings by `scripts/gen_framework_docs.py`, do not edit by
 - [Text, links and markdown](text.md): 14 names
 - [Buttons and input widgets](inputs.md): 25 names
 - [Layout, sizes and scrolling](layout.md): 41 names
-- [Panels, windows, menus and popups](panels.md): 14 names
+- [Panels, windows, menus and popups](panels.md): 17 names
 - [Tables, tree views and plots](data.md): 10 names
 - [Docking tabs](docking.md): 5 names
 - [Images and icons](images.md): 4 names
 - [Keyboard, mouse and drag and drop](interaction.md): 10 names
-- [Themes, colors, fonts and glass](styling.md): 11 names
+- [Themes, colors, fonts and glass](styling.md): 12 names

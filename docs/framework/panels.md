@@ -2,6 +2,54 @@
 
 Side, top and bottom panels are placed on the borders of the window, the rest is the central panel. Call the panels first in the update function: a panel added after a widget is placed inside the current ui.
 
+## `sidebar_panel(update_fun, **kwargs)`
+
+The sidebar: a box at the left of the window, as tall as the window, that can be resized. On macOS
+with fullsize_content the room of the window buttons is kept at its top.
+
+**Keyword args**
+
+- `id` (str): id of the panel. Default is "sidebar"
+- default_size (float), min_size (float), max_size (float), exact_size (float), resizable (bool): the width, see left_panel
+- `expanded` (Bool): the panel is shown when expanded.value is True
+- gap, rounding, outline, opacity, inner_margin: the layout rules of this region, see Context.set_layout. They are looked up in the call, then in the rules of the sidebar, then in the global rules
+
+**Example:**
+
+```python
+def update_func(ctx):
+    sidebar_panel(lambda: label("Files"), default_size=200)
+    topbar_panel(lambda: label("Title"))
+    heading("Content")
+```
+
+
+## `topbar_panel(update_fun, **kwargs)`
+
+The top bar: a box at the top of the window, after the sidebar if there is one. Accepts the same
+keyword args as sidebar_panel, the size being the height. Default id is "topbar".
+
+**Example:**
+
+```python
+def update_func(ctx):
+    topbar_panel(lambda: heading("Title"))
+```
+
+
+## `bottombar_panel(update_fun, **kwargs)`
+
+The bottom bar: a box at the bottom of the window. Accepts the same keyword args as
+sidebar_panel, the size being the height. Default id is "bottombar".
+
+**Example:**
+
+```python
+def update_func(ctx):
+    bottombar_panel(lambda: small("Ready"))
+```
+
+
 ## `left_panel(id, update_fun, **kwargs)`
 
 A panel on the left side of the window. The rest of the window is the central panel.

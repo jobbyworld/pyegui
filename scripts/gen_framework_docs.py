@@ -61,7 +61,8 @@ THEMES = [
      "Side, top and bottom panels are placed on the borders of the window, the rest is the "
      "central panel. Call the panels first in the update function: a panel added after a widget "
      "is placed inside the current ui.",
-     ["left_panel", "right_panel", "top_panel", "bottom_panel", "window", "modal", "tooltip",
+     ["sidebar_panel", "topbar_panel", "bottombar_panel", "left_panel", "right_panel", "top_panel",
+      "bottom_panel", "window", "modal", "tooltip",
       "tooltip_ui", "context_menu", "menu_bar", "menu_button", "menu_image_button",
       "menu_image_text_button", "close_menu"]),
     ("data", "Tables, tree views and plots",
@@ -89,7 +90,7 @@ THEMES = [
      "defaults before a new style is applied.",
      ["Context.is_dark_theme", "Context.is_light_theme", "Context.set_dark_theme",
       "Context.set_light_theme", "Context.set_system_theme", "Context.set_style",
-      "Context.reset_style", "Context.set_accent", "Context.set_glass_style",
+      "Context.reset_style", "Context.set_layout", "Context.set_accent", "Context.set_glass_style",
       "Context.set_backdrop", "Context.set_font"]),
 ]
 

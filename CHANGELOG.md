@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- layout rules: `run_native(..., layout=dict(gap=8, rounding=12, outline=..., opacity=..., inner_margin=..., sidebar=dict(...), dock=dict(...)))` or `ctx.set_layout(...)` give the spacing, corners, outline and opacity of every region (`sidebar`, `central`, `dock`, `topbar`, `bottombar`); a region or a call overrides the global rules. `sidebar_panel(f)`, `topbar_panel(f)` and `bottombar_panel(f)` draw a box with these rules, keep the same gap all around the boxes and clear the macOS window buttons; `Dock` and the central area follow the same rules
 - `run_native(..., persist_id="app.name")`: the position and size of the window and what egui remembers (scroll, collapsed sections) come back at the next run
 - `ctx.save_state(obj)` and `ctx.load_state()`: the choices of the user (theme, folder, view...) as JSON, saved with the window. `examples/finder.py` uses them
 - `dock.save()` and `dock.load(layout, panes=None)`: the open panes, tabs, splits and sizes of a `Dock` as plain values, to keep with `ctx.save_state()`

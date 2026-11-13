@@ -437,8 +437,10 @@ impl DockStyle {
     }
 
     fn active_tab_stroke(&self, visuals: &Visuals) -> Stroke {
-        self.active_tab_stroke
-            .unwrap_or(Stroke::new(1.0, Self::border(visuals, 45)))
+        self.active_tab_stroke.unwrap_or_else(|| match crate::layout::dock_rules() {
+            Some(rules) => rules.outline,
+            None => Stroke::new(1.0, Self::border(visuals, 45)),
+        })
     }
 
     fn pane_stroke(&self, visuals: &Visuals) -> Stroke {
@@ -1045,7 +1047,10 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
     fn pane_ui(&mut self, ui: &mut egui::Ui, tile_id: TileId, pane: &mut Pane) -> UiResponse {
         self.panes.insert(tile_id);
         let update_func = pane.update_func.bind(self.py).clone();
-        let margin = self.style.pane_margin.unwrap_or(6.0);
+        let margin = self
+            .style
+            .pane_margin
+            .unwrap_or_else(|| crate::layout::dock_rules().map_or(6.0, |rules| rules.inner_margin));
 
         let result = egui::Frame::new()
             .inner_margin(margin)
@@ -1271,14 +1276,23 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
     }
 
     fn gap_width(&self, _style: &egui::Style) -> f32 {
-        self.style.gap_width.unwrap_or(if self.style.glass { 6.0 } else { 1.0 })
+        self.style.gap_width.unwrap_or_else(|| match crate::layout::dock_rules() {
+            Some(rules) => rules.gap,
+            None => {
+                if self.style.glass {
+                    6.0
+                } else {
+                    1.0
+                }
+            }
+        })
     }
 
     fn resize_stroke(&self, style: &egui::Style, resize_state: ResizeState) -> Stroke {
         match (resize_state, self.style.resize_stroke) {
             (ResizeState::Idle, Some(stroke)) => stroke,
             // the gap stays see-through, the line only shows when hovered or dragged
-            (ResizeState::Idle, None) if self.style.glass => Stroke::NONE,
+            (ResizeState::Idle, None) if self.style.glass || crate::layout::dock_rules().is_some() => Stroke::NONE,
             (ResizeState::Idle, None) => Stroke::new(
                 self.gap_width(style),
                 style.visuals.widgets.noninteractive.bg_stroke.color,
@@ -1338,7 +1352,10 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         } else {
             self.style
                 .inactive_tab_stroke
-                .unwrap_or(Stroke::new(1.0, DockStyle::border(visuals, 25)))
+                .unwrap_or_else(|| match crate::layout::dock_rules() {
+                    Some(rules) => rules.outline,
+                    None => Stroke::new(1.0, DockStyle::border(visuals, 25)),
+                })
         }
     }
 
