@@ -245,7 +245,9 @@ unsafe fn show_region_panel(
     let ui = panel_parent_ui(&UI)?;
     let fill = ui.style().visuals.panel_fill.gamma_multiply(values.opacity);
     // the margin is the inner margin of the panel, so that it keeps the color of the window
-    let panel_frame = Frame::new().inner_margin(margins(placed, Some(side), values.gap));
+    // the gap around the box is the background of the window: the opacity of the "central" region
+    let backdrop = ui.style().visuals.panel_fill.gamma_multiply(resolve("central", &Tokens::default()).opacity);
+    let panel_frame = Frame::new().inner_margin(margins(placed, Some(side), values.gap)).fill(backdrop);
     panel = panel.frame(panel_frame);
 
     let py = update_fun.py();
