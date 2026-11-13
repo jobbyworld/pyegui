@@ -223,7 +223,12 @@ class DockPane:
     closable: bool
     hide_tab: bool
     def __init__(
-        self, title: str, update_func: Callable[[], Any], closable: bool = False, hide_tab: bool = False
+        self,
+        title: str,
+        update_func: Callable[[], Any],
+        closable: bool = False,
+        hide_tab: bool = False,
+        sheet: Color | None = None,
     ) -> None: ...
 
 class DockContainer:

@@ -93,6 +93,7 @@ Index of all files: [docs/framework/README.md](docs/framework/README.md).
 | `workspace.py`, `python-ide.py`, `pages.py` | docking, panes and pages |
 | `glass.py` | glass style and native backdrops |
 | `markdown.py` | markdown editor with live preview and mermaid diagrams |
+| `dock_colors.py` | layout rules in a glass style: a blue dock and a green dock, semi transparent (`DockPane(sheet=...)`) |
 | `markdown_viewer.py` | minimal app: a sidebar listing markdown files, a viewer in the middle and three docks on the right (outline, source, infos) |
 
 `finder.py` is the reference for a real desktop layout. Its Actions pane works like the Actions

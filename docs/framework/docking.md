@@ -166,11 +166,13 @@ A pane of a Dock, shown as a tab.
 - `update_func` (Callable[[], None]): draws the contents of the pane
 - `closable` (bool): show a close button on the tab. Default is False
 - `hide_tab` (bool): hide the tab bar while the pane is alone in its tabs, like hide_single_tab_bar but for this pane only. The tab is back as soon as another pane joins it. Default is False
+- `sheet` (color): with layout rules, the background of the pane and of its tab, instead of the sheet of the dock. Its opacity is multiplied by the opacity of the dock. Default is the sheet of the dock
 
 **Usage:**
 
 ```python
 DockPane("Editor", editor_ui, closable=True)
+DockPane("Notes", notes_ui, sheet=(59, 130, 246, 200))  # a blue sheet, with layout rules
 ```
 
 
