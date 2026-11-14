@@ -3,6 +3,10 @@
 Sidebar with favorites, toolbar with back / forward, list, icon and tree views, search, a preview
 panel and a path bar. The icons are the ones of the Finder on macOS.
 
+The views are the file views of pyegui (FileListView, FileIconView, FileTreeView) sharing one
+FileWatcher: what any program changes in the folder shows at once. The title of the toolbar is a
+path_combo (a menu of the parent folders) and the path bar a path_breadcrumb.
+
 Mouse: click to select, double click to open (folders here, files with their app). Right-click
 opens the action palette. In the tree view, the arrow of a folder shows its contents in the tree.
 Keyboard: arrows to select, Enter or Cmd+Down to open, Backspace or Cmd+Up for the parent folder,
@@ -13,6 +17,7 @@ Space or Cmd+P to open the action palette (search and run an action for the curr
 """
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -21,19 +26,23 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from finder_tags import TagStore, key as tag_key
-
+from finder_tags import TagStore
+from finder_tags import key as tag_key
 from pyegui import (
+    RGB,
     Backdrop,
     Bool,
     Dock,
     DockContainer,
     DockPane,
+    FileIconView,
+    FileListView,
+    FileTreeView,
+    FileWatcher,
+    Float,
     Int,
-    RGB,
     Str,
-    TreeNode,
-    TreeView,
+    Terminal,
     add_enabled,
     add_space,
     available_height,
@@ -44,12 +53,15 @@ from pyegui import (
     code,
     color_edit_button_rgb,
     colored_label,
-    combo_box,
     columns,
+    combo_box,
     dock_area,
     draw_rect,
     end_row,
     file_icon,
+    file_icon_view,
+    file_list_view,
+    file_tree_view,
     frame,
     grid,
     horizontal,
@@ -59,11 +71,11 @@ from pyegui import (
     key_pressed,
     label,
     left_panel,
-    link_clicked,
     menu_button,
     menu_image_button,
     modal,
-    modifiers,
+    path_breadcrumb,
+    path_combo,
     pointer_pos,
     pointer_pressed,
     radio_clicked,
@@ -73,25 +85,23 @@ from pyegui import (
     scroll_area_both,
     scroll_area_vertical,
     scroll_to_rect,
-    selectable_label_clicked,
     segmented_control,
-    selectable_label_response,
+    selectable_label_clicked,
     separator,
     set_max_height,
     set_min_height,
     set_min_width,
     set_width,
     small,
+    slider_float,
     small_button_clicked,
     strong,
-    table_ui,
     text_edit_multiline,
+    terminal,
     text_edit_singleline,
     toggle_value,
     tooltip,
     top_panel,
-    tree_view,
-    typed_text,
     ui_contains_pointer,
     vertical,
     vertical_centered,
@@ -111,8 +121,11 @@ ICONS_DIR = (
     Path(__file__).resolve().parent / "icons"
 )  # white SVG icons, tinted to the theme
 
-EDGE = (1, (127, 127, 127, 60))  # the one outline of every box: the same width and color
-GAP = 8  # between two boxes, and (with the 8 points the window already leaves) around the window
+EDGE = (
+    1,
+    (127, 127, 127, 60),
+)  # the one outline of every box: the same width and color
+GAP = 4  # between two boxes, and (with the 8 points the window already leaves) around the window
 H = GAP // 2  # each box gives half of the gap on the sides that face another box
 TREE, LIST, ICONS = 0, 1, 2  # the order of the segmented control of the toolbar
 LIGHT, DARK, SYSTEM = 0, 1, 2
@@ -179,19 +192,41 @@ KINDS = {
     ".lock": "Lock file",
     ".zip": "ZIP archive",
 }
-NEW_TAG_COLORS = ["#ef4444", "#f97316", "#22c55e", "#3b82f6", "#a855f7", "#eab308", "#14b8a6"]
+NEW_TAG_COLORS = [
+    "#ef4444",
+    "#f97316",
+    "#22c55e",
+    "#3b82f6",
+    "#a855f7",
+    "#eab308",
+    "#14b8a6",
+]
 
 # state
 
-tags = TagStore()  # the tags and what they are put on, in a SQLite file, see finder_tags.py
+tags = (
+    TagStore()
+)  # the tags and what they are put on, in a SQLite file, see finder_tags.py
 tag_filter = Int(0)  # id of the tag whose items are shown instead of a folder, or 0
-tag_manager_open = Bool(False)  # the window to create, rename, recolor, move and delete tags
+tag_manager_open = Bool(
+    False
+)  # the window to create, rename, recolor, move and delete tags
 tag_picker_open = Bool(False)  # the window to put tags on the selected items
-tag_edit = {"id": 0, "loaded": 0}  # the tag edited in the manager, and the one the fields hold
+tag_edit = {
+    "id": 0,
+    "loaded": 0,
+}  # the tag edited in the manager, and the one the fields hold
 tag_name = Str("")
 tag_color = RGB(0.0, 0.0, 0.0)  # channels between 0 and 1
 tag_parent = Int(0)
-tag_cache = {"version": -1, "own": {}, "effective": {}, "all": [], "by_id": {}, "noted": set()}
+tag_cache = {
+    "version": -1,
+    "own": {},
+    "effective": {},
+    "all": [],
+    "by_id": {},
+    "noted": set(),
+}
 tags_query = Str("")  # the search or creation field of the Tags pane
 tag_query = Str("")  # what is typed in the window to tag the selection
 tag_index = Int(0)  # the highlighted row of that window
@@ -205,15 +240,14 @@ position = Int(0)
 selected = Str("")  # the item the single-item commands act on: the last one clicked
 picked = set()  # paths of all the selected items
 anchor = Str("")  # where a range with Shift starts
-band = {"start": None, "base": set()}  # the rectangle being drawn with the mouse
-tree_picked = set()  # what the tree view showed last frame
-typed = {"text": "", "last": 0.0}  # the letters typed to jump to a name
 scroll_target = Str("")  # path of the item the view has to scroll to this frame
 view = Int(LIST)
 search = Str("")
 show_sidebar = Bool(True)
 ZONES = ["sidebar", "content", "dock"]  # F6 goes through them, left to right
-focus_zone = Str("content")  # the part of the window the keyboard acts on, see keyboard()
+focus_zone = Str(
+    "content"
+)  # the part of the window the keyboard acts on, see keyboard()
 show_dock = Bool(True)  # the dock around the files: Actions, Preview, Notes and Tags
 folded = set()  # categories of the Actions panel folded shut
 tags_folded = set()  # ids of the tags of the sidebar whose children are hidden
@@ -225,17 +259,37 @@ palette_index = Int(0)  # the highlighted action, moved by the keyboard or the m
 file_clipboard = {"paths": [], "cut": False}
 theme = Int(SYSTEM)
 glass = Int(PARTIAL)
+glass_opacity = Float(1.0)  # multiplies the opacity of the glass: the slider of the panes menu
+# the levels of each surface, set in the Transparence pane; a level not chosen is the style's one
+GLASS_SURFACES = [
+    ("sidebar", "Barre latérale", 0.3),
+    ("bars", "Barres haut et bas", 0.4),
+    ("central", "Fichiers (central)", 0.9),
+    ("dock", "Docks", 0.7),
+    ("windows", "Fenêtres et menus", 0.8),
+    ("background", "Fond (entre les boîtes)", 0.2),
+]
+sidebar_gap = Float(GAP)  # the space between the sidebar and the rest, set in the Transparence pane
+# the margins outside the sidebar (0 sticks it to the border of the window) and its corners
+sidebar_box = {"left": Float(0), "top": Float(0), "bottom": Float(0), "rounding": Float(12)}
+backdrop_blur = Float(0)  # the blur of what is behind the window (macOS), in points
+glass_level = {name: Float(value) for name, _, value in GLASS_SURFACES}
+glass_custom = {name: Bool(False) for name, _, _ in GLASS_SURFACES}
 accent_name = Str("Blue")
 pill_tabs = Bool(False)
-icons_per_row = Int(1)
 started = Bool(False)
 context = []  # the Context, kept on the first frame
 
-listing_cache = {}  # folder -> entries, read once
-tree = TreeView("tree", multi_select=True, default_open=False, activatable_dirs=True)
-tree_ids = {}  # path -> id of the tree node
-tree_paths = {}  # id -> path
-tree_to_open = set()  # folders that were open last run: opened as their node is first built
+listing_cache = {}  # folder -> (version of the watcher, entries): read again when the disk changed
+
+# the views of the files: state objects of pyegui, sharing one watcher of the disk
+watcher = FileWatcher()
+tree = FileTreeView("tree", start, watcher=watcher, activatable_dirs=True)
+# navigate=False: a double click or Enter comes back in activated, the Finder opens it itself
+files_list = FileListView("list", start, watcher=watcher, navigate=False)
+files_icons = FileIconView("icons", start, watcher=watcher, navigate=False)
+files_icons.icon_size = 56
+tree_menu = {"paths": None}  # the items right-clicked in a view this frame
 
 
 # files
@@ -273,29 +327,34 @@ def entry(path):
 
 
 def listing(folder):
-    if folder not in listing_cache:
-        try:
-            paths = [p for p in folder.iterdir() if not p.name.startswith(".")]
-        except OSError:
-            paths = []
-        entries = [e for e in map(entry, paths) if e]
+    """the items of a folder, from the watcher: read again only when something changed on the disk"""
+    cached = listing_cache.get(folder)
+    if cached is None or cached[0] != watcher.version:
+        entries = [
+            e for e in (entry(Path(d["path"])) for d in watcher.list_dir(folder)) if e
+        ]
         # folders first, then by name like the Finder
-        listing_cache[folder] = sorted(
-            entries, key=lambda e: (not e["is_dir"], e["name"].lower())
+        listing_cache[folder] = (
+            watcher.version,
+            sorted(entries, key=lambda e: (not e["is_dir"], e["name"].lower())),
         )
-    return listing_cache[folder]
+    return listing_cache[folder][1]
 
 
 def listing_here():
     """what the content shows: the folder, or the items of the tag chosen in the sidebar"""
     if not tag_filter.value:
         return listing(current())
-    key = ("tag", tag_filter.value, tags.version)
+    key = ("tag", tag_filter.value, tags.version, watcher.version)
     if key not in listing_cache:
-        entries = [e for e in (entry(Path(p)) for p in tags.tagged_with(tag_filter.value)) if e]
+        entries = [
+            e for e in (entry(Path(p)) for p in tags.tagged_with(tag_filter.value)) if e
+        ]
         for old in [k for k in listing_cache if isinstance(k, tuple)]:
             del listing_cache[old]  # the views of the tag in its former states
-        listing_cache[key] = sorted(entries, key=lambda e: (not e["is_dir"], e["name"].lower()))
+        listing_cache[key] = sorted(
+            entries, key=lambda e: (not e["is_dir"], e["name"].lower())
+        )
     return listing_cache[key]
 
 
@@ -340,6 +399,163 @@ def icon(item, size):
 # navigation
 
 
+def newest_python():
+    """the most recent Python found: since 3.13 its prompt has colors, since 3.14 it colors the code"""
+    for minor in range(20, sys.version_info.minor, -1):
+        found = shutil.which(f"python3.{minor}")
+        if found:
+            return found
+    return sys.executable
+
+
+# the terminals of the dock at the bottom: states, created once, outside the update function.
+# They start in the folder the Finder opens
+shell = Terminal(cwd=str(start))
+python = Terminal(cwd=str(start), shell=newest_python(), args=["-q"])
+follow_folder = Bool(True)  # the shell goes to the folder shown, with cd
+shell_folder = {"path": start}  # where the shell was sent last
+
+
+def cd_command(folder):
+    if sys.platform == "win32":
+        return f'cd /d "{folder}"'
+    return f" cd {shlex.quote(str(folder))}"  # the leading space keeps it out of the history
+
+
+def follow_in_shell():
+    """the shell follows the folder of the Finder, while the option is on"""
+    if follow_folder.value and current() != shell_folder["path"] and not tag_filter.value:
+        shell_folder["path"] = current()
+        shell.run(cd_command(current()))
+
+
+def shell_pane():
+    def bar():
+        toggle_value(follow_folder, "Suivre le dossier")
+        if small_button_clicked("cd ici"):
+            shell.run(cd_command(current()))
+        if small_button_clicked("Redémarrer"):
+            shell.restart(cwd=str(current()))
+
+    horizontal(bar)
+    terminal(shell)
+
+
+def python_pane():
+    terminal(python)
+
+
+TRANSPARENCY = "Transparence"
+
+
+def transparency_pane():
+    """every level of set_glass_style on sliders, applied at once, to try them"""
+    changed = False
+
+    def modes():
+        nonlocal changed
+        changed |= bool(
+            segmented_control(theme, [(None, "Clair"), (None, "Sombre"), (None, "Système")])
+        )
+        changed |= bool(
+            segmented_control(glass, [(None, "Sans vitre"), (None, "Partielle"), (None, "Complète")])
+        )
+
+    horizontal(modes)
+
+    def sidebar_rows():
+        # not levels of the glass: the box of the sidebar, read by update_func at every frame;
+        # all at 0 the sidebar fills the left of the window, with square corners
+        for title, value, low, high in [
+            ("Écart à droite (vers le contenu)", sidebar_gap, 0, 40),
+            ("Marge à gauche", sidebar_box["left"], 0, 40),
+            ("Marge en haut", sidebar_box["top"], 0, 40),
+            ("Marge en bas", sidebar_box["bottom"], 0, 40),
+            ("Arrondi", sidebar_box["rounding"], 0, 32),
+        ]:
+            weak(title)
+            slider_float(value, low, high, "")
+            end_row()
+
+    small("Barre latérale")
+    grid("sidebar_box", sidebar_rows, num_columns=2, spacing=(12, 6))
+    if small_button_clicked("Barre latérale collée (tout à 0)"):
+        sidebar_gap.value = 0
+        for value in sidebar_box.values():
+            value.value = 0
+    add_space(4)
+
+    if MACOS:
+
+        def blur_row():
+            nonlocal changed
+            # set_backdrop_blur: the blur behind the window, on top of the one of the backdrop
+            weak("Flou du fond")
+            before = backdrop_blur.value
+            slider_float(backdrop_blur, 0, 64, "")
+            changed |= backdrop_blur.value != before
+
+        horizontal(blur_row)
+    if glass.value == NO_GLASS:
+        weak("Choisis une vitre partielle ou complète pour régler sa transparence.")
+        if changed:
+            apply_style()
+        return
+    add_space(4)
+
+    def rows():
+        nonlocal changed
+        # opacity=: multiplies every level that was not chosen
+        weak("Global (×)")
+        label("")
+        before = glass_opacity.value
+        slider_float(glass_opacity, 0.3, 1.6, "")
+        changed |= glass_opacity.value != before
+        end_row()
+        # sidebar=, bars=, central=, dock=, windows=: the level of one part of the window, 0 to 1
+        for name, title, _ in GLASS_SURFACES:
+            weak(title)
+            on = glass_custom[name]
+            before = (on.value, glass_level[name].value)
+            toggle_value(on, "fixé" if on.value else "auto")
+            add_enabled(on.value, lambda name=name: slider_float(glass_level[name], 0.0, 1.0, ""))
+            changed |= (on.value, glass_level[name].value) != before
+            end_row()
+
+    grid("glass_levels", rows, num_columns=3, spacing=(12, 6))
+    add_space(4)
+
+    def bottom():
+        nonlocal changed
+        if small_button_clicked("Valeurs du style"):
+            glass_opacity.value = 1.0
+            sidebar_gap.value = GAP
+            for name, value in sidebar_box.items():
+                value.value = 12 if name == "rounding" else 0
+            backdrop_blur.value = 0
+            for name, _, value in GLASS_SURFACES:
+                glass_custom[name].value = False
+                glass_level[name].value = value
+            changed = True
+        # the call that gives this look, to copy into an app
+        args = [f"mode={'full' if glass.value == FULL else 'partial'}"]
+        if glass_opacity.value != 1.0:
+            args.append(f"opacity={glass_opacity.value:.2f}")
+        args += [
+            f"{name}={glass_level[name].value:.2f}"
+            for name, _, _ in GLASS_SURFACES
+            if glass_custom[name].value
+        ]
+        call = f'ctx.set_glass_style({", ".join(args)})'
+        if small_button_clicked("Copier l'appel"):
+            context[0].copy_text(call)
+        weak(call)
+
+    horizontal(bottom)
+    if changed:
+        apply_style()
+
+
 def go(folder):
     folder = Path(folder)
     tag_filter.value = 0  # leaving a tag view
@@ -364,7 +580,8 @@ def up():
     child = current()
     go(child.parent)
     if current() != child:
-        selected.value = str(child)
+        select_path(child)
+        scroll_target.value = str(child)
 
 
 def forward():
@@ -385,73 +602,33 @@ def select(item):
     select_path(item["path"])
 
 
-def pick(item, entries):
-    """a click on an item: alone, Cmd toggles it, Shift selects the range from the last click"""
-    path = str(item["path"])
-    held = modifiers()
-    if held["command"]:
-        if path in picked:
-            picked.discard(path)
-            selected.value = next(iter(picked), "")
-        else:
-            picked.add(path)
-            selected.value = path
-        anchor.value = path
-    elif held["shift"] and anchor.value:
-        paths = [str(e["path"]) for e in entries]
-        if anchor.value in paths and path in paths:
-            a, b = sorted((paths.index(anchor.value), paths.index(path)))
-            picked.clear()
-            picked.update(paths[a : b + 1])
-            selected.value = path
-        else:
-            select(item)
-    else:
-        select(item)
-
-
 def open_palette():
     palette_query.value = ""
     palette_index.value = 0
     palette_open.value = True
 
 
-def handle(item, response, entries):
-    if response.clicked:
-        pick(item, entries)
-    if response.double_clicked:
-        open_item(item)
-    if response.secondary_clicked:
-        if str(item["path"]) not in picked:
-            select(item)
-        open_palette()
-
-
-def type_to_select():
-    """typing the start of a name selects the first item of the view starting with it"""
-    text = typed_text()
-    if not text or not text.isprintable() or (not typed["text"] and not text.strip()):
-        return
-    now = time.monotonic()
-    if now - typed["last"] > 1.0:  # a pause starts a new search
-        typed["text"] = ""
-    typed["text"] += text
-    typed["last"] = now
-    for item in visible_entries():
-        if item["name"].lower().startswith(typed["text"].lower()):
-            select(item)
-            scroll_target.value = str(item["path"])
-            return
-
-
 def popup_open():
     """a dialog is open: it has its own keyboard"""
-    return bool(palette_open.value or renaming.value or tag_picker_open.value or tag_manager_open.value)
+    return bool(
+        palette_open.value
+        or renaming.value
+        or tag_picker_open.value
+        or tag_manager_open.value
+    )
 
 
 def cycle_zone(step):
-    zones = [z for z in ZONES if (z != "sidebar" or show_sidebar.value) and (z != "dock" or show_dock.value)]
-    index = zones.index(focus_zone.value) if focus_zone.value in zones else zones.index("content")
+    zones = [
+        z
+        for z in ZONES
+        if (z != "sidebar" or show_sidebar.value) and (z != "dock" or show_dock.value)
+    ]
+    index = (
+        zones.index(focus_zone.value)
+        if focus_zone.value in zones
+        else zones.index("content")
+    )
     focus_zone.value = zones[(index + step) % len(zones)]
 
 
@@ -478,9 +655,7 @@ def keyboard():
         cycle_zone(1)
     if key_pressed("Shift+F6"):
         cycle_zone(-1)
-    if focus_zone.value == "content":
-        type_to_select()
-    if key_pressed("Space") and not typed["text"]:  # not the space of an active type-to-select
+    if key_pressed("Space"):
         open_palette()
     if key_pressed("Cmd+P"):
         open_palette()
@@ -502,46 +677,7 @@ def keyboard():
     if key_pressed("Cmd+A"):
         picked.update(str(e["path"]) for e in visible_entries())
         selected.value = selected.value or next(iter(picked), "")
-    if view.value == TREE:
-        return  # the tree view has its own keyboard navigation, its Enter opens like the Open button
-    if picked and (key_pressed("Enter") or key_pressed("Cmd+ArrowDown")):
-        action_open()
-
-    entries = visible_entries()
-    if not entries:
-        return
-    paths = [str(e["path"]) for e in entries]
-    index = paths.index(selected.value) if selected.value in paths else -1
-    per_row = icons_per_row.value if view.value == ICONS else 1
-    page = per_row * 5
-    steps = [
-        ("ArrowDown", per_row),
-        ("ArrowUp", -per_row),
-        ("PageDown", page),
-        ("PageUp", -page),
-    ]
-    if view.value == ICONS:
-        steps += [("ArrowRight", 1), ("ArrowLeft", -1)]
-    target = None
-    for key, step in steps:
-        if key_pressed(key):
-            target = min(max(index + step, 0), len(entries) - 1) if index >= 0 else 0
-    if key_pressed("Home"):
-        target = 0
-    if key_pressed("End"):
-        target = len(entries) - 1
-    if target is None:
-        return
-    if (
-        modifiers()["shift"] and anchor.value in paths
-    ):  # Shift extends the range from the anchor
-        a, b = sorted((paths.index(anchor.value), target))
-        picked.clear()
-        picked.update(paths[a : b + 1])
-        selected.value = paths[target]
-    else:
-        select(entries[target])
-    scroll_target.value = paths[target]  # the view follows the selection
+    # the arrows, Home, End, Enter and typing a name are handled by the view that has the focus
 
 
 # style, as the View menu of app.py
@@ -560,16 +696,17 @@ def apply_style():
         ctx.set_glass_style(
             accent=ACCENTS[accent_name.value],
             mode="full" if glass.value == FULL else "partial",
+            opacity=glass_opacity.value,  # how transparent the glass is, from the slider
+            # a surface whose level was chosen in the Transparence pane, else None: the style's
+            **{
+                name: glass_level[name].value if glass_custom[name].value else None
+                for name, _, _ in GLASS_SURFACES
+            },
         )
     else:
         ctx.set_accent(ACCENTS[accent_name.value])
     dock.set_style(tab_style="pill" if pill_tabs.value else "classic")
-
-
-def open_folders():
-    """the folders open in the tree view, including the ones of the last run not shown yet"""
-    shown = {path for path, node_id in tree_ids.items() if tree.is_open(node_id)}
-    return shown | (tree_to_open - set(tree_ids))
+    ctx.set_backdrop_blur(backdrop_blur.value)  # macOS only, added to the blur of the backdrop
 
 
 def snapshot():
@@ -577,6 +714,16 @@ def snapshot():
     return {
         "theme": theme.value,
         "glass": glass.value,
+        "glass_opacity": glass_opacity.value,
+        "glass_levels": {
+            name: glass_level[name].value if glass_custom[name].value else None
+            for name, _, _ in GLASS_SURFACES
+        },
+        "terminals": True,  # the layout has the dock of the terminals
+        "transparency_pane": True,
+        "sidebar_gap": sidebar_gap.value,
+        "sidebar_box": {name: value.value for name, value in sidebar_box.items()},
+        "backdrop_blur": backdrop_blur.value,  # and the Transparence pane next to them
         "accent": accent_name.value,
         "pill_tabs": pill_tabs.value,
         "view": view.value,
@@ -585,7 +732,7 @@ def snapshot():
         "folded": sorted(folded),
         "tags_folded": sorted(tags_folded),
         "folder": str(current()),
-        "tree_open": sorted(str(p) for p in open_folders()),
+        "tree_open": tree.open_folders,
         "dock": dock.save(),  # the panes still open, their tabs and sizes
     }
 
@@ -596,6 +743,19 @@ def restore(saved):
         return
     theme.value = saved.get("theme", theme.value)
     glass.value = saved.get("glass", glass.value)
+    glass_opacity.value = float(saved.get("glass_opacity", glass_opacity.value))
+    sidebar_gap.value = float(saved.get("sidebar_gap", sidebar_gap.value))
+    box = saved.get("sidebar_box")
+    for name, value in (box.items() if isinstance(box, dict) else []):
+        if name in sidebar_box and isinstance(value, (int, float)):
+            sidebar_box[name].value = float(value)
+    backdrop_blur.value = float(saved.get("backdrop_blur", backdrop_blur.value))
+    levels = saved.get("glass_levels")
+    for name, _, _ in GLASS_SURFACES:
+        value = levels.get(name) if isinstance(levels, dict) else None
+        if isinstance(value, (int, float)):
+            glass_level[name].value = float(value)
+            glass_custom[name].value = True
     if saved.get("accent") in ACCENTS:
         accent_name.value = saved["accent"]
     pill_tabs.value = saved.get("pill_tabs", pill_tabs.value)
@@ -604,11 +764,21 @@ def restore(saved):
     show_dock.value = saved.get("show_dock", show_dock.value)
     folded.update(saved.get("folded", []))
     tags_folded.update(i for i in saved.get("tags_folded", []) if isinstance(i, int))
-    tree_to_open.update(Path(p) for p in saved.get("tree_open", []) if isinstance(p, str))
+    tree.open_folders = [p for p in saved.get("tree_open", []) if isinstance(p, str)]
     layout = saved.get("dock")
+    if layout and not saved.get("terminals") and not has_pane(layout, "Terminal"):
+        # saved before the dock of the terminals: it goes under the files once
+        layout = with_terminals(layout)
+    if layout and not saved.get("transparency_pane") and not has_pane(layout, TRANSPARENCY):
+        # saved before the Transparence pane: it is put next to the terminals once
+        layout = with_pane_next_to(layout, "Terminal", TRANSPARENCY)
     if layout and not has_pane(layout, CENTRAL):
         # saved before the files were a pane: what was on the right stays there
-        layout = {"kind": "horizontal", "shares": [4.0, 1.0], "children": [{"pane": CENTRAL}, layout]}
+        layout = {
+            "kind": "horizontal",
+            "shares": [4.0, 1.0],
+            "children": [{"pane": CENTRAL}, layout],
+        }
     if layout:
         dock.load(layout)  # a layout that no longer fits is ignored
     folder = Path(saved.get("folder", ""))
@@ -650,7 +820,11 @@ def tag_data():
     """the tags, read again only when they changed: the content asks at every frame"""
     if tag_cache["version"] != tags.version:
         tag_cache.update(
-            version=tags.version, own={}, effective={}, all=tags.all(), noted=tags.noted()
+            version=tags.version,
+            own={},
+            effective={},
+            all=tags.all(),
+            noted=tags.noted(),
         )
         tag_cache["by_id"] = {t["id"]: t for t in tag_cache["all"]}
     return tag_cache
@@ -675,24 +849,12 @@ def dot(color, size=10):
     image(svg("dot"), size=size, tint=color)
 
 
-DOT_WIDTH = 18  # what a dot takes with its spacing, to right-align them
-
-
-def tag_dots(item, right=False):
-    """a dot of the color of each tag of the item; paler when the tag is inherited. With
-    right=True they are pushed to the right edge of the space left in the row"""
-    found = tags_of(item["path"])
-    if right and found:
-        add_space(max(available_width() - DOT_WIDTH * len(found) - 14, 4))
-    for tag, how in found:
-        r, g, b = hex_color(tag["color"])
-        dot((r, g, b, 255 if how == "own" else 110))
-
-
 def tag_badges(path):
-    """the colors of the tags of an item for the tree view: pale when inherited"""
-    colors = [hex_color(tag["color"]) + (255 if how == "own" else 110,) for tag, how in tags_of(path)]
-    return colors[::-1]  # the row of the tree adds them from the right: the same order as the list view
+    """the colors of the tags of an item, drawn as dots by the views: pale when inherited"""
+    return [
+        hex_color(tag["color"]) + (255 if how == "own" else 110,)
+        for tag, how in tags_of(path)
+    ]
 
 
 def has_note(item):
@@ -724,7 +886,9 @@ def hex_color(color):
 
 def to_hex(rgb):
     """the color of a color picker (RGB holds channels between 0 and 1) as "#rrggbb" """
-    return "#{:02x}{:02x}{:02x}".format(*(min(max(round(c * 255), 0), 255) for c in (rgb.r, rgb.g, rgb.b)))
+    return "#{:02x}{:02x}{:02x}".format(
+        *(min(max(round(c * 255), 0), 255) for c in (rgb.r, rgb.g, rgb.b))
+    )
 
 
 def tag_header():
@@ -740,7 +904,9 @@ def tag_header():
         dot(hex_color(tag["color"]) + (255,))
         strong(tag["name"])
         weak(f"{len(listing_here())} élément(s) avec ce tag ou ses sous-tags")
-        if image_button_clicked(svg("close"), size=12, tint=icon_tint()):  # an icon: the glyph ✕ is missing in some fonts
+        if image_button_clicked(
+            svg("close"), size=12, tint=icon_tint()
+        ):  # an icon: the glyph ✕ is missing in some fonts
             tag_filter.value = 0
 
     horizontal(line)
@@ -768,7 +934,7 @@ def tag_path(tag):
 
 
 def split_tag_path(text):
-    """"Work/ Invoice" -> ["Work", "Invoice"]: the "/" separate the levels of the tree of tags"""
+    """ "Work/ Invoice" -> ["Work", "Invoice"]: the "/" separate the levels of the tree of tags"""
     return [part.strip() for part in text.split("/") if part.strip()]
 
 
@@ -777,7 +943,9 @@ def find_tag(parts):
     parent = None
     for part in parts:
         siblings = [
-            t for t in tag_data()["all"] if t["parent"] == parent and t["name"].lower() == part.lower()
+            t
+            for t in tag_data()["all"]
+            if t["parent"] == parent and t["name"].lower() == part.lower()
         ]
         if not siblings:
             return None
@@ -804,7 +972,8 @@ def matching_tags(parts):
     for tag in tag_data()["all"]:
         names = [n.lower() for n in tag_path(tag["id"])]
         if len(parts) <= len(names) and all(
-            part.lower() in name for part, name in zip(parts, names[len(names) - len(parts) :])
+            part.lower() in name
+            for part, name in zip(parts, names[len(names) - len(parts) :])
         ):
             found.append(tag)
     return found
@@ -815,7 +984,9 @@ def can_create_tag(parts):
     already exists somewhere in the tree is found, not offered again"""
     if not parts or find_tag(parts) is not None:
         return False
-    return len(parts) > 1 or not any(t["name"].lower() == parts[0].lower() for t in tag_data()["all"])
+    return len(parts) > 1 or not any(
+        t["name"].lower() == parts[0].lower() for t in tag_data()["all"]
+    )
 
 
 def tag_picker_ui():
@@ -823,12 +994,16 @@ def tag_picker_ui():
     set_width(440)
     names = ", ".join(p.name for p in paths[:3]) + (" …" if len(paths) > 3 else "")
     weak(f"Taguer « {names} »")
-    text_edit_singleline(tag_query, hint_text="Chercher ou créer un tag", request_focus=True)
+    text_edit_singleline(
+        tag_query, hint_text="Chercher ou créer un tag", request_focus=True
+    )
     parts = split_tag_path(tag_query.value)
     rows = [("tag", t) for t in (matching_tags(parts) if parts else tag_data()["all"])]
     if can_create_tag(parts):
         rows.append(("create", parts))
-    if tag_query.value != tag_picker_state["query"]:  # a new search starts at its first row
+    if (
+        tag_query.value != tag_picker_state["query"]
+    ):  # a new search starts at its first row
         tag_picker_state["query"] = tag_query.value
         tag_index.value = 0
     tag_index.value = min(tag_index.value, max(len(rows) - 1, 0))
@@ -851,23 +1026,32 @@ def tag_picker_ui():
         else:
             toggle_tags(paths, value["id"])
 
-    just_opened, tag_picker_state["just_opened"] = tag_picker_state["just_opened"], False
+    just_opened, tag_picker_state["just_opened"] = (
+        tag_picker_state["just_opened"],
+        False,
+    )
     if rows and key_pressed("Enter", when_typing=True) and not just_opened:
         activate(rows[tag_index.value])
 
     add_space(4)
     owned = [tags.own(p) for p in paths]
     accent = ACCENTS[accent_name.value]
-    row_width = available_width() - 14  # measured here, inside the scroll area it is unreliable
+    row_width = (
+        available_width() - 14
+    )  # measured here, inside the scroll area it is unreliable
 
     def list_ui():
         for i, (kind, value) in enumerate(rows):
 
             def row(kind=kind, value=value):
                 def line():
-                    set_width(row_width)  # the highlight covers the whole row, not just the text
+                    set_width(
+                        row_width
+                    )  # the highlight covers the whole row, not just the text
                     if kind == "create":
-                        label(f"+ Créer le tag « {' / '.join(value)} »", selectable=False)
+                        label(
+                            f"+ Créer le tag « {' / '.join(value)} »", selectable=False
+                        )
                         return
                     on = sum(value["id"] in o for o in owned)
                     names = tag_path(value["id"])
@@ -875,13 +1059,16 @@ def tag_picker_ui():
                     mark = "✓" if on == len(paths) else "–" if on else ""
 
                     def mark_column():
-                        set_min_width(12)  # the names stay aligned whether or not they are checked
+                        set_min_width(
+                            12
+                        )  # the names stay aligned whether or not they are checked
                         label(mark, selectable=False)
 
                     vertical(mark_column)
                     label(" / ".join(names), selectable=False)
                     if len(paths) == 1 and any(
-                        t["id"] == value["id"] and how != "own" for t, how in tags_of(paths[0])
+                        t["id"] == value["id"] and how != "own"
+                        for t, how in tags_of(paths[0])
                     ):
                         weak("hérité")
 
@@ -902,6 +1089,7 @@ def tag_picker_ui():
 
     if not rows:
         weak("Aucun tag : tape un nom pour en créer un")
+
     def bounded():
         # set_max_height measures from the top of its own ui, so it needs a fresh one here
         set_max_height(300)
@@ -936,7 +1124,9 @@ def tags_panel():
     shown = matching_tags(parts) if searching else data["all"]
     creating = can_create_tag(parts)
     if paths:
-        weak(paths[0].name if len(paths) == 1 else f"{len(paths)} éléments sélectionnés")
+        weak(
+            paths[0].name if len(paths) == 1 else f"{len(paths)} éléments sélectionnés"
+        )
     else:
         weak("Sélectionne des éléments pour les taguer")
     add_space(4)
@@ -983,7 +1173,11 @@ def tags_panel():
 
         horizontal(row)
     if not shown and not creating:
-        weak("Aucun tag : tape un nom pour en créer un" if not searching else "Aucun tag trouvé")
+        weak(
+            "Aucun tag : tape un nom pour en créer un"
+            if not searching
+            else "Aucun tag trouvé"
+        )
     if creating and button_clicked(f"+ Créer le tag « {' / '.join(parts)} »"):
         create()
     add_space(8)
@@ -994,7 +1188,9 @@ def tags_panel():
 def tag_picker():
     if not chosen():
         tag_picker_open.value = False
-    elif modal("tag-picker", tag_picker_ui, rounding=12, inner_margin=14, fill=dialog_fill()):
+    elif modal(
+        "tag-picker", tag_picker_ui, rounding=12, inner_margin=14, fill=dialog_fill()
+    ):
         tag_picker_open.value = False
 
 
@@ -1033,10 +1229,14 @@ def tag_manager_ui():
     tag = data["by_id"].get(tag_edit["id"])
     if tag is None:
         tag_edit["id"] = 0
-    elif tag_edit["loaded"] != tag["id"]:  # the fields take the values of the chosen tag
+    elif (
+        tag_edit["loaded"] != tag["id"]
+    ):  # the fields take the values of the chosen tag
         tag_edit["loaded"] = tag["id"]
         tag_name.value = tag["name"]
-        tag_color.r, tag_color.g, tag_color.b = (c / 255 for c in hex_color(tag["color"]))
+        tag_color.r, tag_color.g, tag_color.b = (
+            c / 255 for c in hex_color(tag["color"])
+        )
         tag_parent.value = tag["parent"] or 0
     if tag:
 
@@ -1074,7 +1274,9 @@ def tag_manager_ui():
 
 
 def tag_manager():
-    if modal("tag-manager", tag_manager_ui, rounding=12, inner_margin=14, fill=dialog_fill()):
+    if modal(
+        "tag-manager", tag_manager_ui, rounding=12, inner_margin=14, fill=dialog_fill()
+    ):
         tag_manager_open.value = False
 
 
@@ -1098,7 +1300,9 @@ def locations():
 def sidebar():
     if MACOS:
         add_space(26)  # the window buttons are over the sidebar
-    scroll_area_vertical(sidebar_content)  # many tags: the sidebar scrolls instead of overflowing
+    scroll_area_vertical(
+        sidebar_content
+    )  # many tags: the sidebar scrolls instead of overflowing
 
 
 def sidebar_content():
@@ -1194,32 +1398,19 @@ def drives():
     import string
 
     mask = ctypes.windll.kernel32.GetLogicalDrives()
-    return [Path(f"{letter}:/") for i, letter in enumerate(string.ascii_uppercase) if mask & (1 << i)]
+    return [
+        Path(f"{letter}:/")
+        for i, letter in enumerate(string.ascii_uppercase)
+        if mask & (1 << i)
+    ]
 
 
-def ancestors_menu():
-    """the current folder then its parents, like the title menu of the Finder"""
-    for path in [current(), *current().parents]:
-
-        def row(path=path):
-            # the check mark of the current folder, an invisible one keeps the others aligned
-            colored_label(
-                (127, 127, 127, 255) if path == current() else (0, 0, 0, 0), "✓"
-            )
-            uri = file_icon(str(path), 16)
-            clicked = (
-                image_button_clicked(uri, place_name(path))
-                if uri
-                else button_clicked(place_name(path))
-            )
-            if clicked:
-                go(path)
-                close_menu()
-
-        horizontal(row)
-
-
-widths = {"view": 130, "panes": 60, "count": 110, "dock": 50}  # what the right side of the bars takes: measured as drawn
+widths = {
+    "view": 130,
+    "panes": 60,
+    "count": 110,
+    "dock": 50,
+}  # what the right side of the bars takes: measured as drawn
 
 
 def measure(key, draw, last=False):
@@ -1238,19 +1429,30 @@ def measure(key, draw, last=False):
 
 
 SLACK = 1  # room kept in a row, to see that what is at its right grew
-SEARCH_WIDTH, SEARCH_MIN = 240, 90  # the search field: its widest, and the least worth showing
+SEARCH_WIDTH, SEARCH_MIN = (
+    240,
+    90,
+)  # the search field: its widest, and the least worth showing
 
 
 def panes_menu():
     """the panes of the dock that were closed with their tab, to bring them back"""
-    closed = [title for title in PANES if title not in dock.titles]
+    closed = [title for title in ALL_PANES if title not in dock.titles]
     if not closed:
         weak("Tous les panneaux sont affichés")
     for title in closed:
         if button_clicked(f"Afficher {title}"):
-            dock.add_pane(DockPane(title, PANES[title], closable=True))
+            dock.add_pane(DockPane(title, ALL_PANES[title], closable=True))
     separator()
     toggle_value(show_dock, "Dock")
+    if glass.value != NO_GLASS:
+        # how transparent the glass is: set_glass_style(opacity=...)
+        separator()
+        small("Transparence de la vitre")
+        before = glass_opacity.value
+        slider_float(glass_opacity, 0.3, 1.6, "")
+        if glass_opacity.value != before:
+            apply_style()
 
 
 def toolbar():
@@ -1274,7 +1476,10 @@ def toolbar():
             current().parent != current(), parent_button
         )  # greyed out at the root
         add_space(6)
-        menu_button(f"{place_name(current())}  ▾", ancestors_menu, size=14)
+        # the name of the folder; under the mouse its icon and a menu of its parent folders
+        chosen_folder = path_combo(current(), size=15, context_menu=path_menu)
+        if chosen_folder:
+            go(chosen_folder)
         # the right side: the view, the search, the hidden panes. The search shrinks with the window and
         # disappears when it would be too small. What each part takes is what it took the last time it
         # was drawn, so the right edge does not depend on fonts or on the length of a name
@@ -1283,7 +1488,11 @@ def toolbar():
         search_width = min(left_over - view_w - panes_w - 8 - SLACK, SEARCH_WIDTH)
         show_search = search_width >= SEARCH_MIN
         show_view = left_over >= view_w + panes_w
-        used = panes_w + (view_w if show_view else 0) + (search_width + 8 if show_search else 0)
+        used = (
+            panes_w
+            + (view_w if show_view else 0)
+            + (search_width + 8 if show_search else 0)
+        )
         add_space(max(left_over - used - SLACK, 4))
         if show_view:
             measure(
@@ -1302,7 +1511,11 @@ def toolbar():
                 text_edit_singleline(search, hint_text="Search")
 
             vertical(search_field)
-        measure("panes", lambda: menu_image_button(svg("panes"), panes_menu, size=18, tint=tint), last=True)
+        measure(
+            "panes",
+            lambda: menu_image_button(svg("panes"), panes_menu, size=18, tint=tint),
+            last=True,
+        )
 
     horizontal(bar)
 
@@ -1310,173 +1523,63 @@ def toolbar():
 # views
 
 
-def list_view():
-    entries = visible_entries()
-
-    def cell(row, col):
-        item = entries[row]
-        if col == 0:
-
-            def name():
-                icon(item, 18)
-                handle(
-                    item,
-                    selectable_label_response(
-                        str(item["path"]) in picked, item["name"]
-                    ),
-                    entries,
-                )
-                tag_dots(item, right=True)
-
-            horizontal(name)
-        elif col == 1:
-            if has_note(item):
-                image(svg("note"), size=14, tint=icon_tint())
-        elif col == 2:
-            weak(item["modified"])
-        elif col == 3:
-            weak(item["size"])
-        else:
-            weak(item["kind"])
-
-    paths = [str(e["path"]) for e in entries]
-    row = paths.index(scroll_target.value) if scroll_target.value in paths else None
-    table_ui(
-        ["Name", "Notes", "Date Modified", "Size", "Kind"],
-        len(entries),
-        cell,
-        id=f"list {current()}",
-        column_widths=[290, 50, 165, 80, "remainder"],
-        striped=True,
-        scroll_to_row=row,
-    )
-
-
-TILE_DOT, TILE_DOT_GAP = 9, 3  # the dots of the tags over a tile of the icon view
-
-
-def draw_tag_dots(item, rect):
-    """the tags of an item as dots on the top left corner of its tile, from left to right"""
-    left, top, right, _ = rect
-    icon_left = (left + right) / 2 - 28  # the icon is 56 wide, in the middle of the tile
-    for i, (tag, how) in enumerate(tags_of(item["path"])):
-        x = icon_left + 2 + i * (TILE_DOT + TILE_DOT_GAP)
-        color = hex_color(tag["color"]) + (255 if how == "own" else 110,)
-        draw_rect((x, top + 4, x + TILE_DOT, top + 4 + TILE_DOT), fill=color, rounding=TILE_DOT / 2)
-
-
-def icon_view():
-    entries = visible_entries()
-    width, height = available_width(), available_height()
-    per_row = max(int(width // 120), 1)
-    icons_per_row.value = per_row
-    tiles = {}  # path -> where the tile is, for the rectangle of the mouse
-    accent = ACCENTS[accent_name.value]
-
-    def rows():
-        for start_index in range(0, len(entries), per_row):
-            row = entries[start_index : start_index + per_row]
-
-            def column(i, row=row):
-                if i >= len(row):
-                    return
-                item = row[i]
-
-                def tile():
-                    set_min_width(available_width())  # every tile as wide as its column
-                    icon(item, 56)
-                    # not selectable, so the click reaches the tile instead of selecting the text
-                    label(item["name"], truncate=True, selectable=False)
-
-                # the icon and the name are one target: a click anywhere on the tile selects it
-                response = interactive(lambda: vertical_centered(tile))
-                tiles[str(item["path"])] = response.rect
-                if str(item["path"]) in picked:
-                    draw_rect(
-                        response.rect,
-                        fill=accent + "50",
-                        stroke=(1, accent),
-                        rounding=6,
-                    )
-                elif response.hovered:
-                    draw_rect(response.rect, fill=(127, 127, 127, 40), rounding=6)
-                draw_tag_dots(item, response.rect)
-                handle(item, response, entries)
-                if str(item["path"]) == scroll_target.value:
-                    scroll_to_rect(response.rect)  # the whole tile comes into view
-
-            columns(per_row, column)
-            add_space(10)
-
-    def background():
-        set_min_width(width)  # the empty space around the tiles takes the mouse too
-        set_min_height(height)
-        rows()
-
-    def area():
-        response = interactive(background, drag=True)
-        if response.clicked and not any(modifiers().values()):
-            deselect()
-        if response.secondary_clicked:
-            open_palette()
-        rubber_band(response, tiles, accent)
-
-    scroll_area_vertical(area)
-
-
-def rubber_band(response, tiles, accent):
-    """select the tiles touched by a rectangle drawn with the mouse; Cmd or Shift keeps the selection"""
-    here = pointer_pos()
-    if response.drag_started and here:
-        band["start"] = here
-        band["base"] = set(picked) if any(modifiers().values()) else set()
-    if response.drag_stopped:
-        band["start"] = None
-    if not (band["start"] and response.dragged and here):
-        return
-    (x0, y0), (x1, y1) = band["start"], here
-    rect = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
-    touched = {
-        path
-        for path, (l, t, r, b) in tiles.items()
-        if l < rect[2] and r > rect[0] and t < rect[3] and b > rect[1]
-    }
-    picked.clear()
-    picked.update(band["base"] | touched)
-    if selected.value not in picked:
-        selected.value = next(iter(touched), "") or next(iter(picked), "")
-    draw_rect(rect, fill=accent + "30", stroke=(1, accent))
-
-
-def tree_node(item):
-    path = item["path"]
-    if path not in tree_ids:
-        tree_ids[path] = len(tree_ids)
-        tree_paths[tree_ids[path]] = path
-        if path in tree_to_open:  # ids change at every run, so the folders are kept by path
-            tree.set_open(tree_ids[path], True)
-    node_id = tree_ids[path]
-    # the icon of the Finder, or an emoji where the platform gives none
-    icon_uri = file_icon(str(path), 16)
-    text = item["name"] if icon_uri else f"{item['emoji']}  {item['name']}"
-    dots = tag_badges(path)
-    if not item["is_dir"]:
-        return TreeNode(node_id, text, icon=icon_uri, badges=dots)
-    # the children of a folder are read only once it is opened
-    children = (
-        [tree_node(child) for child in listing(path)] if tree.is_open(node_id) else []
-    )
-    return TreeNode(node_id, text, children, icon=icon_uri, badges=dots)
-
-
-tree_menu = {"ids": None}  # nodes right-clicked this frame, applied once tree_view returns
-
-
-def tree_context_menu(ids):
-    """a right click on a row of the tree opens the actions panel, like in the other views"""
+def view_menu(paths):
+    """a right click in a view opens the actions panel, like the Space key"""
     close_menu()  # the panel replaces the menu
-    tree_menu["ids"] = ids  # tree is borrowed by tree_view here: it is updated afterwards
+    tree_menu["paths"] = paths
     open_palette()
+
+
+def note_cell(path):
+    """the Notes column of the list: an icon when the item has a note"""
+    if tag_key(Path(path)) in tag_data()["noted"]:
+        image(svg("note"), size=14, tint=icon_tint())
+
+
+def file_view():
+    return {TREE: tree, LIST: files_list, ICONS: files_icons}[view.value]
+
+
+def before_view(v):
+    """gives the view what the Finder decided since the last frame: the folder, the items of a
+    tag, the search, the selection, the scroll and the keyboard focus"""
+    if view.value == TREE:
+        if v.root != str(current()):
+            v.root = current()
+    elif v.folder != str(current()):
+        v.go(current())
+    v.paths = [str(e["path"]) for e in listing_here()] if tag_filter.value else None
+    v.filter = search.value
+    if set(v.selected) != picked:
+        v.selected = sorted(
+            picked, key=lambda p: p == selected.value
+        )  # the last clicked last
+    if scroll_target.value:
+        v.scroll_to(scroll_target.value)
+    # the view keeps the focus while the content is the zone of the keyboard: a click on a button
+    # must not cut the arrows; a text field being edited and a dialog keep it
+    v.keep_focus = focus_zone.value == "content" and not popup_open()
+    if focus_zone.value != "content":
+        v.focus(False)
+
+
+def after_view(v):
+    """what the user did in the view: the selection, the items opened"""
+    paths, tree_menu["paths"] = tree_menu["paths"], None
+    if paths and not set(paths) <= set(v.selected):
+        v.selected = (
+            paths  # a right click outside the selection acts on the item clicked
+        )
+    now = set(v.selected)
+    if now != picked:
+        picked.clear()
+        picked.update(now)
+        selected.value = anchor.value = v.selected[-1] if v.selected else ""
+    opened = [p for p in (entry(Path(p)) for p in v.activated) if p]
+    if len(opened) == 1 and opened[0]["is_dir"]:
+        open_item(opened[0])  # into the folder
+    elif opened:
+        action_open()  # the files with their app, like the Open button
 
 
 def seed_tree_selection():
@@ -1494,65 +1597,30 @@ def seed_tree_selection():
         tree.focus(False)
 
 
-def tree_view_ui():
-    seed_tree_selection()
-
-    def nodes():
-        query = search.value.lower()
-        nodes_ = [
-            tree_node(e) for e in listing_here() if query in e["name"].lower()
-        ]
-        if (
-            picked != tree_picked
-        ):  # selected somewhere else since the last frame: the tree follows
-            tree.selected = [tree_ids[Path(p)] for p in picked if Path(p) in tree_ids]
-        tree_view(
-            tree,
-            nodes_,
-            scroll_to=tree_ids.get(Path(scroll_target.value))
-            if scroll_target.value
-            else None,
-            context_menu=tree_context_menu,
-        )
-        if tree_menu["ids"] is not None:
-            ids, tree_menu["ids"] = tree_menu["ids"], None
-            if not all(i in tree.selected for i in ids):
-                tree.selected = [i for i in ids if i in tree_paths]
-        tree_picked.clear()
-        tree_picked.update(str(tree_paths[i]) for i in tree.selected)
-        if tree_picked != picked:
-            picked.clear()
-            picked.update(tree_picked)
-            selected.value = str(tree_paths[tree.selected[-1]]) if tree.selected else ""
-            anchor.value = selected.value
-        for node_id in tree.activated:
-            # a double click or Enter opens like the Open button: into a folder, a file with its app.
-            # The arrow of a folder opens it in the tree
-            item = entry(tree_paths[node_id])
-            if item:
-                open_item(item)
-
-    scroll_area_both(nodes)
-
-
-def focus_tree():
-    """the tree view keeps the egui focus while the content is the focused zone: a click on a
-    button or a blank area, or a widget that grabs the focus, must not cut the arrows. A text field
-    being edited (the search) keeps it, and so does a dialog"""
-    popup = popup_open()
-    in_content = focus_zone.value == "content" and not popup
-    tree.keep_focus = in_content
-    if focus_zone.value != "content":
-        tree.focus(False)
-
-
 def content():
     tag_header()
     if not listing_here() or (search.value and not visible_entries()):
         weak("No items" if not search.value else f"No items match “{search.value}”")
         return
-    focus_tree()
-    [tree_view_ui, list_view, icon_view][view.value]()
+    if view.value == TREE:
+        seed_tree_selection()
+    v = file_view()
+    before_view(v)
+    if view.value == TREE:
+        scroll_area_both(
+            lambda: file_tree_view(tree, badges=tag_badges, context_menu=view_menu)
+        )
+    elif view.value == LIST:
+        file_list_view(
+            files_list,
+            headers=["Name", "Date Modified", "Size", "Kind"],
+            extra_columns=[("Notes", 50, note_cell)],  # a column drawn by the Finder
+            badges=tag_badges,  # the tags as dots
+            context_menu=view_menu,
+        )
+    else:
+        file_icon_view(files_icons, badges=tag_badges, context_menu=view_menu)
+    after_view(v)
     scroll_target.value = ""  # scrolled once, the user can scroll away
 
 
@@ -1779,7 +1847,9 @@ def target_directory():
 def open_in_zed():
     command = zed_command()
     if command:
-        subprocess.Popen([*command, *map(str, targets())])  # without selection: the current folder
+        subprocess.Popen(
+            [*command, *map(str, targets())]
+        )  # without selection: the current folder
 
 
 def open_in_claude(mode):
@@ -1792,7 +1862,9 @@ def open_in_claude(mode):
 def open_tag_picker():
     tag_query.value = ""
     tag_index.value = 0
-    tag_picker_state["just_opened"] = True  # the Enter that chose the action must not tag a row
+    tag_picker_state["just_opened"] = (
+        True  # the Enter that chose the action must not tag a row
+    )
     tag_picker_open.value = True
 
 
@@ -1849,9 +1921,30 @@ ACTIONS = [
         lambda: start_rename(Path(selected.value)),
     ),
     ("Édition", "Taguer…", "tag", "Cmd+T", has_selection, open_tag_picker),
-    ("Édition", "Copier", "copy", "Cmd+C", has_selection, lambda: copy_to_clipboard(False)),
-    ("Édition", "Couper", "cut", "Cmd+X", has_selection, lambda: copy_to_clipboard(True)),
-    ("Édition", "Coller", "paste", "Cmd+V", lambda: bool(file_clipboard["paths"]), paste),
+    (
+        "Édition",
+        "Copier",
+        "copy",
+        "Cmd+C",
+        has_selection,
+        lambda: copy_to_clipboard(False),
+    ),
+    (
+        "Édition",
+        "Couper",
+        "cut",
+        "Cmd+X",
+        has_selection,
+        lambda: copy_to_clipboard(True),
+    ),
+    (
+        "Édition",
+        "Coller",
+        "paste",
+        "Cmd+V",
+        lambda: bool(file_clipboard["paths"]),
+        paste,
+    ),
     ("Édition", "Dupliquer", "duplicate", "Cmd+D", has_selection, duplicate),
     (
         "Édition",
@@ -1861,7 +1954,14 @@ ACTIONS = [
         can_group,
         group,
     ),
-    ("Édition", "Nouveau dossier", "folder-plus", "Cmd+Shift+N", lambda: True, new_folder),
+    (
+        "Édition",
+        "Nouveau dossier",
+        "folder-plus",
+        "Cmd+Shift+N",
+        lambda: True,
+        new_folder,
+    ),
     (
         "Édition",
         "Mettre à la corbeille",
@@ -1888,13 +1988,62 @@ ACTIONS = [
     ),
     ("Affichage", "Thème clair", "gear", None, lambda: True, lambda: set_theme(LIGHT)),
     ("Affichage", "Thème sombre", "gear", None, lambda: True, lambda: set_theme(DARK)),
-    ("Affichage", "Thème système", "gear", None, lambda: True, lambda: set_theme(SYSTEM)),
-    ("Affichage", "Vitre partielle", "gear", None, lambda: True, lambda: set_glass(PARTIAL)),
-    ("Affichage", "Vitre complète", "gear", None, lambda: True, lambda: set_glass(FULL)),
-    ("Affichage", "Mode plat (sans vitre)", "gear", None, lambda: True, lambda: set_glass(NO_GLASS)),
-    ("Affichage", "Onglets classiques", "gear", None, lambda: True, lambda: set_tab_style(False)),
-    ("Affichage", "Onglets en pilule", "gear", None, lambda: True, lambda: set_tab_style(True)),
-    ("Affichage", "Vue arborescence", "tree", None, lambda: True, lambda: set_view(TREE)),
+    (
+        "Affichage",
+        "Thème système",
+        "gear",
+        None,
+        lambda: True,
+        lambda: set_theme(SYSTEM),
+    ),
+    (
+        "Affichage",
+        "Vitre partielle",
+        "gear",
+        None,
+        lambda: True,
+        lambda: set_glass(PARTIAL),
+    ),
+    (
+        "Affichage",
+        "Vitre complète",
+        "gear",
+        None,
+        lambda: True,
+        lambda: set_glass(FULL),
+    ),
+    (
+        "Affichage",
+        "Mode plat (sans vitre)",
+        "gear",
+        None,
+        lambda: True,
+        lambda: set_glass(NO_GLASS),
+    ),
+    (
+        "Affichage",
+        "Onglets classiques",
+        "gear",
+        None,
+        lambda: True,
+        lambda: set_tab_style(False),
+    ),
+    (
+        "Affichage",
+        "Onglets en pilule",
+        "gear",
+        None,
+        lambda: True,
+        lambda: set_tab_style(True),
+    ),
+    (
+        "Affichage",
+        "Vue arborescence",
+        "tree",
+        None,
+        lambda: True,
+        lambda: set_view(TREE),
+    ),
     ("Affichage", "Vue liste", "list", None, lambda: True, lambda: set_view(LIST)),
     ("Affichage", "Vue icônes", "grid", None, lambda: True, lambda: set_view(ICONS)),
     *[
@@ -1920,11 +2069,27 @@ ACTIONS = [
             "gear",
             None,
             lambda title=title: title not in dock.titles,
-            lambda title=title: dock.add_pane(DockPane(title, PANES[title], closable=True)),
+            lambda title=title: dock.add_pane(
+                DockPane(title, ALL_PANES[title], closable=True)
+            ),
         )
-        for title in ("Actions", "Preview", "Notes", "Tags")  # PANES is defined further down
+        for title in (
+            "Actions",
+            "Preview",
+            "Notes",
+            "Tags",
+            "Terminal",
+            "Python",
+        )  # ALL_PANES is defined further down
     ],
-    ("Système", "Recharger l'application", "refresh", "Cmd+R", lambda: True, reload_app),
+    (
+        "Système",
+        "Recharger l'application",
+        "refresh",
+        "Cmd+R",
+        lambda: True,
+        reload_app,
+    ),
 ]
 
 
@@ -1938,7 +2103,9 @@ def action_keys():
 # action palette: a searchable popup of the actions above, opened with right click, Space or Cmd+P
 
 
-palette_pointer = {"pos": None}  # the pointer position of the previous frame of the palette
+palette_pointer = {
+    "pos": None
+}  # the pointer position of the previous frame of the palette
 
 
 def palette_actions():
@@ -1955,9 +2122,15 @@ def palette_ui():
     tint = icon_tint()
     accent = ACCENTS[accent_name.value]
 
-    set_width(460)  # a fixed width, so available_width() stays bounded inside this auto-sized modal
-    row_width = available_width()  # measured once here: inside the scroll area below it is unreliable
-    text_edit_singleline(palette_query, hint_text="Search an action…", request_focus=True)
+    set_width(
+        460
+    )  # a fixed width, so available_width() stays bounded inside this auto-sized modal
+    row_width = (
+        available_width()
+    )  # measured once here: inside the scroll area below it is unreliable
+    text_edit_singleline(
+        palette_query, hint_text="Search an action…", request_focus=True
+    )
     actions = palette_actions()
     if not actions:
         add_space(4)
@@ -1967,7 +2140,9 @@ def palette_ui():
 
     moved_by_key = False
     pointer = pointer_pos()
-    pointer_moved = pointer != palette_pointer["pos"]  # a still mouse must not fight the keyboard
+    pointer_moved = (
+        pointer != palette_pointer["pos"]
+    )  # a still mouse must not fight the keyboard
     palette_pointer["pos"] = pointer
     if key_pressed("ArrowDown", when_typing=True):
         palette_index.value = min(palette_index.value + 1, len(actions) - 1)
@@ -2005,7 +2180,9 @@ def palette_ui():
             elif response.hovered:
                 draw_rect(response.rect, fill=(127, 127, 127, 30), rounding=6)
             if response.hovered and pointer_moved:
-                palette_index.value = i  # the mouse takes over the highlight from the keyboard
+                palette_index.value = (
+                    i  # the mouse takes over the highlight from the keyboard
+                )
             if response.clicked:
                 run_palette_action(action)
 
@@ -2086,6 +2263,29 @@ def rename_dialog():
 # path bar
 
 
+def go_or_select(path):
+    """a folder of the path bar is entered, the selected item shown in its folder"""
+    path = Path(path)
+    if path.is_dir() and path != Path(selected.value):
+        go(path)
+    else:
+        go(path.parent)
+        select_path(path)
+        scroll_target.value = str(path)
+
+
+def path_menu(path):
+    """the menu of a folder of the path bar or of the title"""
+    strong(place_name(Path(path)))
+    separator()
+    if button_clicked("Ouvrir"):
+        go_or_select(path)
+        close_menu()
+    if button_clicked("Copier le chemin"):
+        context[0].copy_text(path)
+        close_menu()
+
+
 def path_bar():
     def crumbs():
         if image_button_clicked(
@@ -2094,20 +2294,20 @@ def path_bar():
             show_sidebar.value = not show_sidebar.value
         add_space(4)
 
-        anchor = Path(current().anchor)
-        ancestors = list(reversed(current().parents))[1:]
-        # current() is the anchor itself at a drive root: do not repeat it as an empty crumb
-        parts = [anchor] + ancestors + ([current()] if current() != anchor else [])
-        for i, part in enumerate(parts):
-            if i:
-                image(svg("chevron-right"), size=10, tint=icon_tint())
-            if link_clicked(place_name(part) if i == 0 else part.name):
-                go(part)
-
         count = len(visible_entries())
         text = f"{count} item{'s' if count != 1 else ''}"
-        with_text = available_width() >= widths["count"] + SLACK  # the count goes first when narrow
+        with_text = (
+            available_width() >= widths["count"] + SLACK
+        )  # the count goes first when narrow
         key = "count" if with_text else "dock"
+        # the folders down to the selected item, the parents shortened when the room is missing
+        here = selected.value if len(picked) == 1 else str(current())
+        path_breadcrumb(
+            here,
+            max_width=available_width() - widths[key] - SLACK - 8,
+            on_click=go_or_select,
+            context_menu=path_menu,
+        )
         add_space(max(available_width() - widths[key] - SLACK, 4))
 
         def right():
@@ -2178,12 +2378,28 @@ PANES = {
     "Notes": zone_pane("dock", notes_panel),
     "Tags": zone_pane("dock", lambda: scroll_area_vertical(tags_panel)),
 }
+# the dock at the bottom, under the files
+BOTTOM_PANES = {
+    "Terminal": zone_pane("dock", shell_pane),
+    "Python": zone_pane("dock", python_pane),
+    TRANSPARENCY: zone_pane("dock", lambda: scroll_area_vertical(transparency_pane)),
+}
+ALL_PANES = {**PANES, **BOTTOM_PANES}
 central_ui = zone_pane("content", content, margin=8)
 dock = Dock(
     DockContainer(
         "horizontal",
         [
-            DockPane(CENTRAL, central_ui, hide_tab=True),  # no tab while the files are alone
+            DockContainer(
+                "vertical",
+                [
+                    DockPane(CENTRAL, central_ui, hide_tab=True, central=True),  # no tab while the files are alone
+                    DockContainer(
+                        "tabs",
+                        [DockPane(title, ui, closable=True) for title, ui in BOTTOM_PANES.items()],
+                    ),
+                ],
+            ),
             DockContainer(
                 "vertical",
                 [DockPane(title, ui, closable=True) for title, ui in PANES.items()],
@@ -2197,11 +2413,38 @@ dock = Dock(
     pane_stroke=EDGE,
     active_tab_stroke=EDGE,
     inactive_tab_stroke=EDGE,
-    resize_stroke=(1, (0, 0, 0, 0)),  # the gap stays empty: no grey band, the panes still resize
+    resize_stroke=(
+        1,
+        (0, 0, 0, 0),
+    ),  # the gap stays empty: no grey band, the panes still resize
 )
 default_layout = dock.save()
 default_layout["shares"] = [4.0, 1.0]  # the files take most of the width
+default_layout["children"][0]["shares"] = [3.0, 1.0]  # and most of the height, over the terminals
 dock.load(default_layout)
+
+
+def with_terminals(layout):
+    """a saved layout with the dock of the terminals put under the files"""
+    if layout.get("pane") == CENTRAL:
+        return {
+            "kind": "vertical",
+            "shares": [3.0, 1.0],
+            "children": [layout, {"kind": "tabs", "active": 0, "children": [{"pane": t} for t in BOTTOM_PANES]}],
+        }
+    if "children" in layout:
+        return {**layout, "children": [with_terminals(child) for child in layout["children"]]}
+    return layout
+
+
+def with_pane_next_to(layout, neighbour, title):
+    """a saved layout with a tab added to the tabs that hold the pane neighbour"""
+    children = layout.get("children")
+    if children is None:
+        return layout
+    if layout.get("kind") == "tabs" and any(c.get("pane") == neighbour for c in children):
+        return {**layout, "children": [*children, {"pane": title}]}
+    return {**layout, "children": [with_pane_next_to(c, neighbour, title) for c in children]}
 
 
 def has_pane(layout, title):
@@ -2222,7 +2465,10 @@ def update_func(ctx):
 
     keyboard()
     action_keys()
+    follow_in_shell()
     edge = EDGE
+    # the gap between the sidebar and the boxes on its right: each side gives its half, up to H
+    left_gap = min(H, sidebar_gap.value)
     left_panel(
         "sidebar",
         in_zone("sidebar", sidebar),
@@ -2230,16 +2476,22 @@ def update_func(ctx):
         default_size=215,
         min_size=200,
         inner_margin=12,
-        outer_margin=(0, 0, H, 0),
+        # the boxes on the right give H already: the sidebar gives the rest of its gap
+        outer_margin=(
+            sidebar_box["left"].value,
+            sidebar_box["top"].value,
+            max(sidebar_gap.value - H, 0),
+            sidebar_box["bottom"].value,
+        ),
         show_separator_line=False,
-        rounding=12,
+        rounding=sidebar_box["rounding"].value,
         stroke=zone_stroke("sidebar", edge),
     )
     top_panel(
         "toolbar",
         toolbar,
         inner_margin=8,
-        outer_margin=(H, 0, 0, H),
+        outer_margin=(left_gap, 0, 0, H),
         show_separator_line=False,
         rounding=12,
         stroke=edge,
@@ -2248,17 +2500,19 @@ def update_func(ctx):
         "path",
         path_bar,
         inner_margin=8,
-        outer_margin=(H, H, 0, 0),
+        outer_margin=(left_gap, H, 0, 0),
         show_separator_line=False,
         rounding=12,
         stroke=edge,
     )
     # the panes of the dock, or the files alone when the dock is hidden
     frame(
-        lambda: dock_area(dock)
-        if show_dock.value
-        else frame(central_ui, stroke=EDGE, rounding=6),  # what the dock draws around its panes
-        outer_margin=(H, H, 0, H),  # the same as the bars: the panes line up with them
+        lambda: (
+            dock_area(dock)
+            if show_dock.value
+            else frame(central_ui, stroke=EDGE, rounding=6)
+        ),  # what the dock draws around its panes
+        outer_margin=(left_gap, H, 0, H),  # the same as the bars: the panes line up with them
     )
     if renaming.value:
         rename_dialog()
