@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `Terminal(cwd=..., shell=..., args=..., env=...)` and `terminal(term)`: a real terminal (a shell in a pseudo terminal, colors, full screen programs, history, selection, copy and paste) to put in a `DockPane` or anywhere; `term.run(command)`, `term.send(text)`, `term.restart()`, `term.title`, `term.text()`. `examples/terminal.py` shows it in a dock
 - layout rules: `run_native(..., layout=dict(gap=8, rounding=12, outline=..., sheet=..., opacity=..., inner_margin=..., background=..., sidebar=dict(...), dock=dict(...)))` or `ctx.set_layout(...)` give the spacing, corners, outline and opacity of every region (`sidebar`, `central`, `dock`, `topbar`, `bottombar`); a region or a call overrides the global rules. `sidebar_panel(f)`, `topbar_panel(f)` and `bottombar_panel(f)` draw a box with these rules, keep the same gap all around the boxes and clear the macOS window buttons; `Dock` and the central area follow the same rules: the tab of a pane has the sheet of the pane, the other tabs a fainter one
 - `run_native(..., persist_id="app.name")`: the position and size of the window and what egui remembers (scroll, collapsed sections) come back at the next run
 - `ctx.save_state(obj)` and `ctx.load_state()`: the choices of the user (theme, folder, view...) as JSON, saved with the window. `examples/finder.py` uses them

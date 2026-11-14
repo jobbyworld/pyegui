@@ -936,7 +936,7 @@ fn parse_shortcut(shortcut: &str) -> PyResult<(egui::Modifiers, egui::Key)> {
 unsafe fn key_pressed(shortcut: &str, when_typing: bool) -> PyResult<bool> {
     let (modifiers, key) = parse_shortcut(shortcut)?;
     let ctx = current_ui(&UI)?.ctx().clone();
-    if !when_typing && ctx.text_edit_focused() {
+    if !when_typing && (ctx.text_edit_focused() || crate::terminal::terminal_focused(&ctx)) {
         return Ok(false);
     }
     Ok(ctx.input(|i| i.key_pressed(key) && i.modifiers.matches_logically(modifiers)))

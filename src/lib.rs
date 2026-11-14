@@ -22,6 +22,7 @@ mod markdown;
 mod plot;
 mod style;
 mod table;
+mod terminal;
 mod tree;
 mod widgets;
 
@@ -2613,5 +2614,6 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     plot::register(m)?;
     markdown::register(m)?;
     style::register(m)?;
+    terminal::register(m)?;
     Ok(())
 }
