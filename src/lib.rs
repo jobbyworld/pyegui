@@ -18,12 +18,14 @@ mod containers;
 mod icons;
 mod layout;
 mod dock;
+mod files;
 mod markdown;
 mod plot;
 mod style;
 mod table;
 mod terminal;
 mod tree;
+mod watcher;
 mod widgets;
 
 // state
@@ -2615,5 +2617,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     markdown::register(m)?;
     style::register(m)?;
     terminal::register(m)?;
+    watcher::register(m)?;
+    files::register(m)?;
     Ok(())
 }

@@ -64,6 +64,9 @@ Things that bite:
   wider content.
 - A `TreeView` and a `Dock` are state objects: create them once, outside `update_func`. Their
   nodes/panes may be rebuilt every frame.
+- `FileListView`, `FileIconView`, `FileTreeView` and `FileWatcher` are state objects too. A view
+  without `watcher=` uses one shared default watcher. The context menu function of a view may read
+  and change the view (it is called once the view is drawn).
 - A `Terminal` is a state object too. Its shell starts the first time it is drawn (a pane in a tab
   that was never shown has no shell yet; `send` and `run` are kept until then). While it has the
   focus the keys go to the shell and `key_pressed` returns False unless `when_typing=True`.
@@ -88,6 +91,7 @@ an example. They are generated from the docstrings, see "Keeping the reference u
 | Data | [data.md](docs/framework/data.md) | `table`, `table_ui`, `tree_view`, plots |
 | Docking | [docking.md](docs/framework/docking.md) | `Dock`, `DockPane`, `DockContainer`, `DockTabBar`, `dock_area` |
 | Terminal | [terminal.md](docs/framework/terminal.md) | `Terminal` (a shell in a pseudo terminal: `run`, `send`, `restart`, `title`, `text`), `terminal` to draw it, e.g. in a `DockPane` |
+| File views | [files.md](docs/framework/files.md) | `FileListView`, `FileIconView`, `FileTreeView` and their draw functions, `FileWatcher` (folders kept up to date with the disk) |
 | Images and icons | [images.md](docs/framework/images.md) | `image`, image buttons, tinted SVG icons, native `file_icon` |
 | Keyboard, mouse, drag and drop | [interaction.md](docs/framework/interaction.md) | `key_pressed`, `typed_text`, `modifiers`, `pointer_pos`, `interactive` (a clickable/draggable area with its `rect`), `draw_rect`, `dnd_drag_source`, `dnd_drop_zone` |
 | Styling | [styling.md](docs/framework/styling.md) | light/dark/system theme, accent, `set_style`, `set_layout` (layout rules), fonts, glass and native backdrops |
@@ -110,6 +114,7 @@ Index of all files: [docs/framework/README.md](docs/framework/README.md).
 | `dock_colors.py` | layout rules in a glass style: a blue dock and a green dock, semi transparent (`DockPane(sheet=...)`) |
 | `markdown_viewer_bars.py`, `markdown_viewer_glass.py`, `markdown_viewer_bars_glass.py` | the same app with a top and a bottom bar, with a glass backdrop, with both: the layout rules (`layout=dict(...)`, `sidebar_panel`, `topbar_panel`, `bottombar_panel`) |
 | `terminal.py` | a terminal in a dock: a sidebar of files, a viewer and a bottom dock with a shell and a Python prompt; buttons write commands to the shell (`term.run`) |
+| `files.py` | the three file views (tree, list, icons) sharing one `FileWatcher`, and a preview reloaded when the file changes on the disk |
 | `markdown_viewer.py` | minimal app: a sidebar listing markdown files, a viewer in the middle and three docks on the right (outline, source, infos) |
 
 `finder.py` is the reference for a real desktop layout. Its Actions pane works like the Actions
@@ -129,6 +134,8 @@ predicate, run) read by both the panel and the keyboard, so an action is declare
 | `terminal.rs` | `Terminal` and `terminal`: the pseudo terminal and its grid (`alacritty_terminal`), drawn cell by cell, keys and mouse sent to the shell |
 | `markdown.rs` | markdown and mermaid |
 | `style.rs` | themes, accent, glass, `set_style` |
+| `watcher.rs` | `FileWatcher`: listings of folders cached and watched with `notify`, a change asks for a repaint |
+| `files.rs` | `FileListView`, `FileIconView`, `FileTreeView` and their draw functions |
 | `icons.rs` | `file_icon` (native file icons) |
 
 Conventions when adding a function: a `#[pyfunction]` with a docstring in the same style as the

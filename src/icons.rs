@@ -144,10 +144,15 @@ fn native_icon_png(_path: &str, _pixels: u32) -> Option<Vec<u8>> {
 #[pyo3(signature = (path, size=32.0))]
 unsafe fn file_icon(path: &str, size: f32) -> PyResult<Option<String>> {
     let ctx = current_ui(&UI)?.ctx().clone();
+    Ok(icon_uri(&ctx, path, size))
+}
+
+/// The uri of the native icon of a file, made once per path and size, None if the platform has none
+pub(crate) fn icon_uri(ctx: &eframe::egui::Context, path: &str, size: f32) -> Option<String> {
     let pixels = (size * ctx.pixels_per_point()).round().clamp(8.0, 1024.0) as u32;
     let key = (path.to_string(), pixels);
 
-    Ok(ICONS.with_borrow_mut(|icons| {
+    ICONS.with_borrow_mut(|icons| {
         icons
             .entry(key)
             .or_insert_with(|| {
@@ -159,7 +164,7 @@ unsafe fn file_icon(path: &str, size: f32) -> PyResult<Option<String>> {
                 Some(uri)
             })
             .clone()
-    }))
+    })
 }
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
