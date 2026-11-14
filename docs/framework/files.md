@@ -61,7 +61,18 @@ def update_func(ctx):
 - `FileListView.forward()` (method): Goes forward in the history, after back
 - `FileListView.go(folder)` (method): Enters a folder, kept in the history of back and forward
 - `FileListView.items` (attribute): Paths of the items shown at the last frame, in their order
+- `FileListView.keep_focus` (attribute): If True, the view takes back the keyboard focus at every frame when another widget
+
+  holds it, except a text field being edited. For an app where the view is the part of
+  the window the keyboard acts on
+
+- `FileListView.paths` (attribute): The items shown instead of the items of the folder, e.g. the result of a search or
+
+  the files of a tag, from any folders. They stay up to date like a folder. None (the
+  default) shows the folder; entering a folder sets it back to None
+
 - `FileListView.reveal(path)` (method): Selects one item and scrolls to it
+- `FileListView.scroll_to(path)` (method): Scrolls just enough to show an item, at the next frame
 - `FileListView.selected` (attribute): Paths of the selected items, in the order they were selected
 - `FileListView.show_hidden` (attribute): Shows the hidden items: a name starting with a dot, or hidden by the system
 - `FileListView.sort_by` (attribute): The order of the items: "name", "modified", "size" or "kind". A click on a column of
@@ -133,7 +144,18 @@ def update_func(ctx):
   Finder. The icon_size keyword arg of file_icon_view wins over it
 
 - `FileIconView.items` (attribute): Paths of the items shown at the last frame, in their order
+- `FileIconView.keep_focus` (attribute): If True, the view takes back the keyboard focus at every frame when another widget
+
+  holds it, except a text field being edited. For an app where the view is the part of
+  the window the keyboard acts on
+
+- `FileIconView.paths` (attribute): The items shown instead of the items of the folder, e.g. the result of a search or
+
+  the files of a tag, from any folders. They stay up to date like a folder. None (the
+  default) shows the folder; entering a folder sets it back to None
+
 - `FileIconView.reveal(path)` (method): Selects one item and scrolls to it
+- `FileIconView.scroll_to(path)` (method): Scrolls just enough to show an item, at the next frame
 - `FileIconView.selected` (attribute): Paths of the selected items, in the order they were selected
 - `FileIconView.show_hidden` (attribute): Shows the hidden items: a name starting with a dot, or hidden by the system
 - `FileIconView.sort_by` (attribute): The order of the items: "name", "modified", "size" or "kind". A click on a column of
@@ -162,6 +184,7 @@ activates it.
 - `multi_select` (bool): several items can be selected with Cmd (Ctrl) and Shift. Default is True
 - `show_root` (bool): the root folder is the first node and the rest is in it. Default is False: the items of the root are at the top
 - `dirs_first` (bool): folders before files. Default is True
+- `activatable_dirs` (bool): a double click or Enter on a folder activates it, like a file (see activated). Its arrow still opens and closes it. Default is False: a double click opens and closes the folder
 
 **Usage:**
 
@@ -175,16 +198,29 @@ def update_func(ctx):
 ```
 
 
-- `FileTreeView.activated` (attribute): Paths of the files activated during the last frame by a double click or Enter
+- `FileTreeView.activated` (attribute): Paths activated during the last frame by a double click or Enter: files, and folders when
+
+  activatable_dirs is True
+
 - `FileTreeView.filter` (attribute): Only the files whose name contains this text are shown (without case), the folders always
 - `FileTreeView.focus(focused=True)` (method): Gives the keyboard focus to the tree (True, the default) or takes it away (False) at the
 
   next frame
 
 - `FileTreeView.is_open(path)` (method): True if the folder is open in the tree
+- `FileTreeView.keep_focus` (attribute): If True, the tree takes back the keyboard focus at every frame when another widget holds
+
+  it, except a text field being edited
+
 - `FileTreeView.open_folders` (attribute): The paths of the open folders, to save and give back at the next run
+- `FileTreeView.paths` (attribute): The items at the top of the tree instead of the items of the root, e.g. the result of a
+
+  search or the files of a tag, from any folders; their folders still open. None (the
+  default) shows the root
+
 - `FileTreeView.reveal(path)` (method): Opens the folders down to a path, selects it and scrolls to it
 - `FileTreeView.root` (attribute): The folder at the top of the tree
+- `FileTreeView.scroll_to(path)` (method): Scrolls just enough to show an item, at the next frame. It has to be shown: its folders open
 - `FileTreeView.selected` (attribute): Paths of the selected items
 - `FileTreeView.set_open(path, open)` (method): Opens or closes a folder of the tree
 - `FileTreeView.show_hidden` (attribute): Shows the hidden items: a name starting with a dot, or hidden by the system
@@ -204,6 +240,8 @@ in the ui and scrolls; only the visible rows are drawn, so large folders stay fa
 - `headers` (list[str]): the titles of the columns name, modified, size and kind. Default is ["Name", "Date Modified", "Size", "Kind"]
 - `date_format` (str): format of the dates, like strftime. Default is "%d %b %Y %H:%M"
 - `row_height` (float): height of a row. Default is 24
+- `extra_columns` (list[tuple[str, float, callable]]): columns of your own, after the name: a title, a width and a function called with the path of the row inside the cell, to draw it with the usual widgets. They do not sort
+- `badges` (callable): called with the path of each row shown, returns a list of colors drawn as dots at the right end of the name, e.g. the tags of a file
 - `context_menu` (callable): called with the list of paths concerned on a right click, inside a menu: the selection if the item clicked is in it, else the item clicked, and [] on the background. Build the menu in it
 
 **Example:**
@@ -234,6 +272,7 @@ the ui and scrolls; only the visible tiles are drawn.
 **Keyword args**
 
 - `icon_size` (float): size of the icons, instead of view.icon_size. Default is view.icon_size
+- `badges` (callable): called with the path of each tile shown, returns a list of colors drawn as dots on the top left corner of the icon, e.g. the tags of a file
 - `context_menu` (callable): called with the list of paths concerned on a right click, inside a menu, like for file_list_view
 
 **Example:**
@@ -258,6 +297,7 @@ when they are opened and watched while they are open.
 **Keyword args**
 
 - `context_menu` (callable): called with the list of paths concerned when an item is right-clicked, inside a menu: the selection if the item clicked is in it, else the item clicked. Build the menu in it
+- `badges` (callable): called with the path of each item, returns a list of colors drawn as dots at the right end of its row, e.g. the tags of a file
 
 **Example:**
 

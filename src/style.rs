@@ -367,11 +367,63 @@ pub(crate) struct ThemeState {
     pub(crate) accent: Option<Color32>,
     /// set by set_glass_style
     pub(crate) glass: Option<GlassMode>,
+    /// the opacities given to set_glass_style
+    pub(crate) levels: GlassLevels,
+    /// the color of the glass given to set_glass_style
+    pub(crate) tint: Option<Color32>,
+}
+
+/// How opaque the surfaces of the glass are: `scale` multiplies the opacity of every surface,
+/// the others give the opacity of one surface, between 0 (clear) and 1 (opaque)
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GlassLevels {
+    pub(crate) scale: f32,
+    pub(crate) panels: Option<f32>,
+    pub(crate) windows: Option<f32>,
+    pub(crate) content: Option<f32>,
+    /// the left and right panels, instead of `panels`
+    pub(crate) sidebar: Option<f32>,
+    /// the top and bottom panels, instead of `panels`
+    pub(crate) bars: Option<f32>,
+    /// the central area, instead of `content`
+    pub(crate) central: Option<f32>,
+    /// the panes of the docks: given, each pane is filled on its own
+    pub(crate) dock: Option<f32>,
+    /// what is seen between the boxes: the whole window is filled under them
+    pub(crate) background: Option<f32>,
+}
+
+impl GlassLevels {
+    pub(crate) const DEFAULT: GlassLevels = GlassLevels {
+        scale: 1.0,
+        panels: None,
+        windows: None,
+        content: None,
+        sidebar: None,
+        bars: None,
+        central: None,
+        dock: None,
+        background: None,
+    };
+
+    /// The alpha of a surface: the one given, or the default one scaled
+    fn alpha(&self, given: Option<f32>, default: u8) -> u8 {
+        let opacity = given.unwrap_or(default as f32 / 255.0 * self.scale);
+        (opacity.clamp(0.0, 1.0) * 255.0).round() as u8
+    }
+}
+
+impl Default for GlassLevels {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
 }
 
 pub(crate) static THEME: Mutex<ThemeState> = Mutex::new(ThemeState {
     accent: None,
     glass: None,
+    levels: GlassLevels::DEFAULT,
+    tint: None,
 });
 
 pub(crate) fn theme_state() -> ThemeState {
@@ -417,15 +469,83 @@ pub(crate) fn accent_style(style: &mut Style, accent: Color32) {
 
 /// The almost opaque sheet under the content in the partial glass mode, None otherwise
 pub(crate) fn sheet_fill(visuals: &egui::Visuals) -> Option<Color32> {
-    if theme_state().glass != Some(GlassMode::Partial) {
+    let theme = theme_state();
+    if theme.glass != Some(GlassMode::Partial) {
         return None;
     }
-    let alpha = if reduce_transparency() { 255 } else if visuals.dark_mode { 236 } else { 242 };
+    let default = if visuals.dark_mode { 236 } else { 242 };
+    let level = theme.levels.central.or(theme.levels.content);
+    let alpha = if reduce_transparency() { 255 } else { theme.levels.alpha(level, default) };
     Some(if visuals.dark_mode {
         Color32::from_rgba_unmultiplied(28, 30, 36, alpha)
     } else {
         Color32::from_rgba_unmultiplied(251, 251, 253, alpha)
     })
+}
+
+/// A part of the window whose glass can have its own opacity, see set_glass_style
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Surface {
+    /// left and right panels
+    Sidebar,
+    /// top and bottom panels
+    Bars,
+    /// the central area, and the panes of a dock marked central
+    Central,
+    /// the other panes of a dock
+    Dock,
+}
+
+/// The color of the glass of the theme, without opacity
+fn glass_base(dark: bool, tint: Option<Color32>) -> Color32 {
+    let base = tint.unwrap_or(if dark { Color32::from_rgb(20, 22, 30) } else { Color32::from_rgb(250, 250, 255) });
+    Color32::from_rgb(base.r(), base.g(), base.b())
+}
+
+/// The fill of a surface whose level was given to set_glass_style, None to keep the usual fill
+/// (for the panes of a dock: not filled)
+pub(crate) fn surface_fill(visuals: &egui::Visuals, surface: Surface) -> Option<Color32> {
+    let theme = theme_state();
+    let mode = theme.glass?;
+    let levels = theme.levels;
+    let level = match surface {
+        Surface::Sidebar => levels.sidebar,
+        Surface::Bars => levels.bars,
+        Surface::Central => levels.central,
+        // a dock filled on its own: its panes take the level of the central area by default
+        Surface::Dock => levels.dock,
+    }?;
+    let dark = visuals.dark_mode;
+    // the panels are glass; the content is the sheet of the partial mode, or glass in the full mode
+    let color = match (surface, mode) {
+        (Surface::Central | Surface::Dock, GlassMode::Partial) => {
+            if dark {
+                Color32::from_rgb(28, 30, 36)
+            } else {
+                Color32::from_rgb(251, 251, 253)
+            }
+        }
+        _ => glass_base(dark, theme.tint),
+    };
+    let alpha = if reduce_transparency() { 255 } else { (level.clamp(0.0, 1.0) * 255.0).round() as u8 };
+    Some(Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha))
+}
+
+/// The glass under the whole window, seen in the gaps between the boxes: set_glass_style(background=...)
+pub(crate) fn background_fill(visuals: &egui::Visuals) -> Option<Color32> {
+    let theme = theme_state();
+    theme.glass?;
+    let level = theme.levels.background?;
+    let color = glass_base(visuals.dark_mode, theme.tint);
+    let alpha = if reduce_transparency() { 255 } else { (level.clamp(0.0, 1.0) * 255.0).round() as u8 };
+    Some(Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha))
+}
+
+/// True when the panes of the docks are filled on their own (set_glass_style(dock=...)): the
+/// central area under a dock is then left clear
+pub(crate) fn dock_filled() -> bool {
+    let theme = theme_state();
+    theme.glass.is_some() && theme.levels.dock.is_some()
 }
 
 /// Colors of the plot items without a color: the accent first, then colors that go with it
@@ -478,6 +598,7 @@ pub(crate) fn modern_glass_style(
     tint: Option<Color32>,
     accent: Color32,
     mode: GlassMode,
+    levels: GlassLevels,
 ) {
     glass_style(style, tint);
     let dark = style.visuals.dark_mode;
@@ -491,12 +612,15 @@ pub(crate) fn modern_glass_style(
         (_, GlassMode::Full, true) => 200,
         (_, GlassMode::Full, false) => 215,
     };
-    let fill = style.visuals.window_fill;
-    style.visuals.window_fill = Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), window_alpha);
-    if reduce {
-        let fill = style.visuals.panel_fill;
-        style.visuals.panel_fill = Color32::from_rgb(fill.r(), fill.g(), fill.b());
-    }
+    let with_alpha = |color: Color32, alpha: u8| {
+        let [r, g, b, _] = color.to_srgba_unmultiplied();
+        Color32::from_rgba_unmultiplied(r, g, b, alpha)
+    };
+    let window_alpha = if reduce { 255 } else { levels.alpha(levels.windows, window_alpha) };
+    style.visuals.window_fill = with_alpha(style.visuals.window_fill, window_alpha);
+    let panel = style.visuals.panel_fill;
+    let panel_alpha = if reduce { 255 } else { levels.alpha(levels.panels, panel.to_srgba_unmultiplied()[3]) };
+    style.visuals.panel_fill = with_alpha(panel, panel_alpha);
 
     accent_style(style, accent);
     modern_text_styles(style);

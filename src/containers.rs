@@ -2,7 +2,7 @@ use eframe::egui;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
 
-use crate::style::{apply_frame_kwargs, has_frame_kwargs, kwarg_color};
+use crate::style::{self, apply_frame_kwargs, has_frame_kwargs, kwarg_color};
 use crate::{
     current_ui, kwarg, panel_parent_ui, run_nested_update_func, with_bool_copy, Bool, UI,
 };
@@ -11,6 +11,7 @@ use crate::{
 
 unsafe fn show_panel(
     mut panel: egui::Panel,
+    surface: style::Surface,
     update_fun: Bound<'_, PyAny>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<()> {
@@ -35,8 +36,14 @@ unsafe fn show_panel(
 
     let ui = panel_parent_ui(&UI)?;
 
-    if has_frame_kwargs(kwargs)? {
-        panel = panel.frame(apply_frame_kwargs(egui::Frame::side_top_panel(ui.style()), kwargs)?);
+    // a level of glass given to set_glass_style for this side, unless the call gives a fill
+    let glass = style::surface_fill(&ui.style().visuals, surface);
+    if has_frame_kwargs(kwargs)? || glass.is_some() {
+        let mut frame = egui::Frame::side_top_panel(ui.style());
+        if let Some(fill) = glass {
+            frame = frame.fill(fill);
+        }
+        panel = panel.frame(apply_frame_kwargs(frame, kwargs)?);
     }
 
     match kwarg::<Py<Bool>>(kwargs, "expanded")? {
@@ -87,7 +94,7 @@ unsafe fn left_panel(
     update_fun: Bound<'_, PyAny>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<()> {
-    show_panel(egui::Panel::left(id), update_fun, kwargs)
+    show_panel(egui::Panel::left(id), style::Surface::Sidebar, update_fun, kwargs)
 }
 
 /// A panel on the right side of the window. Accepts the same keyword args as left_panel.
@@ -104,7 +111,7 @@ unsafe fn right_panel(
     update_fun: Bound<'_, PyAny>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<()> {
-    show_panel(egui::Panel::right(id), update_fun, kwargs)
+    show_panel(egui::Panel::right(id), style::Surface::Sidebar, update_fun, kwargs)
 }
 
 /// A panel on the top of the window. Accepts the same keyword args as left_panel, sizes being heights.
@@ -121,7 +128,7 @@ unsafe fn top_panel(
     update_fun: Bound<'_, PyAny>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<()> {
-    show_panel(egui::Panel::top(id), update_fun, kwargs)
+    show_panel(egui::Panel::top(id), style::Surface::Bars, update_fun, kwargs)
 }
 
 /// A panel on the bottom of the window. Accepts the same keyword args as left_panel, sizes being heights.
@@ -138,7 +145,7 @@ unsafe fn bottom_panel(
     update_fun: Bound<'_, PyAny>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<()> {
-    show_panel(egui::Panel::bottom(id), update_fun, kwargs)
+    show_panel(egui::Panel::bottom(id), style::Surface::Bars, update_fun, kwargs)
 }
 
 // windows
