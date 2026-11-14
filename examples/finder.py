@@ -242,7 +242,7 @@ selected = Str("")  # the item the single-item commands act on: the last one cli
 picked = set()  # paths of all the selected items
 anchor = Str("")  # where a range with Shift starts
 scroll_target = Str("")  # path of the item the view has to scroll to this frame
-view = Int(LIST)
+view = Int(TREE)
 search = Str("")
 show_sidebar = Bool(True)
 ZONES = ["sidebar", "content", "dock"]  # F6 goes through them, left to right
@@ -250,7 +250,7 @@ focus_zone = Str(
     "content"
 )  # the part of the window the keyboard acts on, see keyboard()
 show_dock = Bool(True)  # the dock around the files: Actions, Preview, Notes and Tags
-folded = set()  # categories of the Actions panel folded shut
+folded = {"Outils", "Ouvrir", "Système", "Édition"}  # categories of the Actions panel folded shut
 tags_folded = set()  # ids of the tags of the sidebar whose children are hidden
 renaming = Str("")  # path being renamed, or ""
 new_name = Str("")
@@ -258,15 +258,15 @@ palette_open = Bool(False)  # the action palette: a searchable list of the actio
 palette_query = Str("")
 palette_index = Int(0)  # the highlighted action, moved by the keyboard or the mouse
 file_clipboard = {"paths": [], "cut": False}
-theme = Int(SYSTEM)
-glass = Int(PARTIAL)
-glass_opacity = Float(1.0)  # multiplies the opacity of the glass: the slider of the panes menu
+theme = Int(LIGHT)
+glass = Int(FULL)
+glass_opacity = Float(1.2)  # multiplies the opacity of the glass: the Global slider of the Transparence pane
 # the levels of each surface, set in the Transparence pane; a level not chosen is the style's one
 GLASS_SURFACES = [
     ("sidebar", "Barre latérale", 0.3),
     ("bars", "Barres haut et bas", 0.4),
-    ("central", "Fichiers (central)", 0.9),
-    ("dock", "Docks", 0.7),
+    ("central", "Fichiers (central)", 0.3),
+    ("dock", "Docks", 0.3),
     ("windows", "Fenêtres et menus", 0.8),
     ("background", "Fond (entre les boîtes)", 0.2),
 ]
@@ -278,12 +278,13 @@ unified_gap = Float(8)  # the gap of the unified layout, around the dock and bet
 TOP_H, BOTTOM_H = 52, 44  # the heights of the top and bottom bands, in the sidebar and the body
 CLEAR = (0, 0, 0, 0)
 LINE = (1, (127, 127, 127, 70))  # the lines between the bands and between the sidebar and the body
-sidebar_gap = Float(GAP)  # the space between the sidebar and the rest, set in the Transparence pane
+sidebar_gap = Float(0)  # the space between the sidebar and the rest, set in the Transparence pane
 # the margins outside the sidebar (0 sticks it to the border of the window) and its corners
-sidebar_box = {"left": Float(0), "top": Float(0), "bottom": Float(0), "rounding": Float(12)}
-backdrop_blur = Float(0)  # the blur of what is behind the window (macOS), in points
+sidebar_box = {"left": Float(0), "top": Float(39), "bottom": Float(15.5), "rounding": Float(14.7)}
+backdrop_blur = Float(32)  # the blur of what is behind the window (macOS), in points
 glass_level = {name: Float(value) for name, _, value in GLASS_SURFACES}
-glass_custom = {name: Bool(False) for name, _, _ in GLASS_SURFACES}
+# the levels fixed by default: the files and the docks are clear glass
+glass_custom = {name: Bool(name in ("central", "dock")) for name, _, _ in GLASS_SURFACES}
 accent_name = Str("Blue")
 pill_tabs = Bool(False)
 started = Bool(False)
@@ -789,10 +790,13 @@ def restore(saved):
     backdrop_blur.value = float(saved.get("backdrop_blur", backdrop_blur.value))
     levels = saved.get("glass_levels")
     for name, _, _ in GLASS_SURFACES:
-        value = levels.get(name) if isinstance(levels, dict) else None
-        if isinstance(value, (int, float)):
+        if not isinstance(levels, dict) or name not in levels:
+            continue  # not saved: the default stays
+        value = levels[name]
+        # a number is a fixed level, None the level of the style ("auto")
+        glass_custom[name].value = isinstance(value, (int, float))
+        if glass_custom[name].value:
             glass_level[name].value = float(value)
-            glass_custom[name].value = True
     if saved.get("accent") in ACCENTS:
         accent_name.value = saved["accent"]
     pill_tabs.value = saved.get("pill_tabs", pill_tabs.value)
@@ -1400,10 +1404,23 @@ def sidebar_bottom():
 
     def row():
         image(svg("drive"), size=16, tint=icon_tint())
-        strong(place_name(anchor))
         weak(f"{usage.free / 1e9:.0f} Go libres")
+        add_space(max(available_width() - THEME_W, 4))
+        # light, dark or the theme of the system, at the right like the settings of the Claude app
+        theme_control()
 
     horizontal_centered(row)
+
+
+def theme_control():
+    """light, dark, system: a segmented control of icons"""
+    if segmented_control(
+        theme,
+        [(svg("sun"), None), (svg("moon"), None), (svg("theme-system"), None)],
+        size=14,
+        tint=icon_tint(),
+    ):
+        apply_style()
 
 def sidebar_content():
     accent = ACCENTS[accent_name.value]
@@ -1509,7 +1526,8 @@ widths = {
     "panes": 60,
     "count": 110,
     "dock": 50,
-}  # what the right side of the bars takes: measured as drawn
+}
+THEME_W = 116  # the width of the theme control: three icons in a segmented control  # what the right side of the bars takes: measured as drawn
 
 
 def measure(key, draw, last=False):
@@ -1543,15 +1561,7 @@ def panes_menu():
         if button_clicked(f"Afficher {title}"):
             dock.add_pane(DockPane(title, ALL_PANES[title], closable=True))
     separator()
-    toggle_value(show_dock, "Dock")
-    if glass.value != NO_GLASS:
-        # how transparent the glass is: set_glass_style(opacity=...)
-        separator()
-        small("Transparence de la vitre")
-        before = glass_opacity.value
-        slider_float(glass_opacity, 0.3, 1.6, "")
-        if glass_opacity.value != before:
-            apply_style()
+    toggle_value(show_dock, "Dock")  # the transparency is set in the Transparence pane
 
 
 def toolbar():
