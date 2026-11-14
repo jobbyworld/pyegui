@@ -2,7 +2,7 @@
 //! (FSEvents on macOS, ReadDirectoryChangesW on Windows, inotify on Linux). A change made by any
 //! program invalidates the listing and asks egui for a new frame, so the views follow it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -37,7 +37,19 @@ struct Changes {
     removed: HashSet<PathBuf>,
     /// to ask for a new frame when something changed
     ctx: Option<egui::Context>,
+    /// the last events of the system, for FileWatcher.take_events
+    log: VecDeque<Logged>,
 }
+
+/// An event of the system as it came, kept for debugging
+struct Logged {
+    time: SystemTime,
+    kind: String,
+    paths: Vec<PathBuf>,
+}
+
+/// The events kept until take_events reads them
+const LOG_SIZE: usize = 1000;
 
 impl Changes {
     fn generation_of(&self, path: &Path) -> u64 {
@@ -49,11 +61,20 @@ impl Changes {
         let generation = self.generation;
         let event = match event {
             Ok(event) => event,
-            Err(_) => {
+            Err(err) => {
+                self.keep(format!("Error({err})"), err.paths.clone());
                 self.all_changed_at = generation;
                 return self.repaint();
             }
         };
+        self.keep(
+            if event.need_rescan() {
+                format!("{:?} (rescan)", event.kind)
+            } else {
+                format!("{:?}", event.kind)
+            },
+            event.paths.clone(),
+        );
         if event.need_rescan() {
             self.all_changed_at = generation;
         }
@@ -79,6 +100,17 @@ impl Changes {
             self.all_changed_at = generation;
         }
         self.repaint();
+    }
+
+    fn keep(&mut self, kind: String, paths: Vec<PathBuf>) {
+        if self.log.len() == LOG_SIZE {
+            self.log.pop_front();
+        }
+        self.log.push_back(Logged {
+            time: SystemTime::now(),
+            kind,
+            paths,
+        });
     }
 
     fn repaint(&self) {
@@ -403,6 +435,33 @@ impl FileWatcher {
             .collect();
         paths.sort();
         paths
+    }
+
+    /// The events the system sent since the last call, oldest first, for debugging: each one is a
+    /// dict time (timestamp), kind (the kind of notify, e.g. "Create(File)", "Modify(Name(From))",
+    /// "Remove(Any)") and paths (list[str]). All events are there, also the ones the views ignore
+    /// (Access). Only the last 1000 are kept between two calls
+    fn take_events<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        let events: Vec<Logged> = lock(&self.core).changes().log.drain(..).collect();
+        events
+            .into_iter()
+            .map(|e| {
+                let d = PyDict::new(py);
+                d.set_item(
+                    "time",
+                    e.time
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .map(|d| d.as_secs_f64())
+                        .unwrap_or(0.0),
+                )?;
+                d.set_item("kind", e.kind)?;
+                d.set_item(
+                    "paths",
+                    e.paths.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>(),
+                )?;
+                Ok(d)
+            })
+            .collect()
     }
 
     /// The reason the system refused to watch, None when it works. The views still list the

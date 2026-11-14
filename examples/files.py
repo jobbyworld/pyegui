@@ -1,5 +1,5 @@
 """File views kept up to date with the disk: a tree in the sidebar, a list or icons in the middle
-and a preview of the selected text file.
+a preview of the selected text file and a log of the events the system sends (to debug).
 
     python examples/files.py [folder]
 
@@ -8,6 +8,8 @@ Finder and it shows at once. The preview reads the selected file again when an e
 """
 
 import sys
+import time
+from collections import deque
 from pathlib import Path
 
 from pyegui import *
@@ -25,6 +27,8 @@ hidden = Bool(False)
 started = Bool(False)
 preview_state = {"path": None, "text": ""}
 last_tree_selection = []
+events = deque(maxlen=500)  # the events of the watcher, newest first
+paused = Bool(False)
 
 
 def shown():
@@ -134,10 +138,51 @@ def preview():
     scroll_area_both(lambda: code(preview_text(path)))
 
 
+def collect_events():
+    """the events of the system since the last frame, read at every frame so none is lost"""
+    for event in watcher.take_events():
+        if not paused.value:
+            events.appendleft(event)
+
+
+def short(path):
+    """a path from the folder shown, to keep the lines short"""
+    try:
+        return str(Path(path).relative_to(FOLDER)) or "."
+    except ValueError:
+        return path
+
+
+def log_pane():
+    def bar():
+        if button_clicked("Clear"):
+            events.clear()
+        checkbox(paused, "Pause")
+        weak(f"{len(events)} events")
+
+    horizontal(bar)
+    separator()
+
+    def lines():
+        for event in events:
+            stamp = time.strftime("%H:%M:%S", time.localtime(event["time"]))
+            millis = int(event["time"] % 1 * 1000)
+            paths = ", ".join(short(p) for p in event["paths"]) or "-"
+            monospace(f"{stamp}.{millis:03d} {event['kind']} {paths}")
+
+    scroll_area_both(lines)
+
+
 dock = Dock(
     DockContainer(
         "horizontal",
-        [DockPane("Files", files_pane, hide_tab=True), DockPane("Preview", preview, closable=True)],
+        [
+            DockPane("Files", files_pane, hide_tab=True),
+            DockContainer(
+                "vertical",
+                [DockPane("Preview", preview, closable=True), DockPane("Log", log_pane, closable=True)],
+            ),
+        ],
     ),
     id="files_example",
     tab_bar_height=26,
@@ -151,6 +196,7 @@ context = [None]
 
 def update_func(ctx):
     context[0] = ctx
+    collect_events()
     if not started.value:
         ctx.set_system_theme()
         started.value = True

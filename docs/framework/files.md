@@ -310,6 +310,12 @@ def update_func(ctx):
   - `folder` (str): the folder
   - `hidden` (bool): with the hidden items (a name starting with a dot, or hidden by the system). Default is False
 
+- `FileWatcher.take_events()` (method): The events the system sent since the last call, oldest first, for debugging: each one is a
+
+  dict time (timestamp), kind (the kind of notify, e.g. "Create(File)", "Modify(Name(From))",
+  "Remove(Any)") and paths (list[str]). All events are there, also the ones the views ignore
+  (Access). Only the last 1000 are kept between two calls
+
 - `FileWatcher.unwatch(path)` (method): Stops watching a path given to watch
 - `FileWatcher.version` (attribute): A number that increases at each change of a path the watcher watches: compare it with the
 
