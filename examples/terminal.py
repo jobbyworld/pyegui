@@ -3,13 +3,15 @@
     python examples/terminal.py [folder]
 
 The sidebar lists the files of a folder (this repository by default). A click shows the file in the
-viewer. The dock at the bottom holds a shell started in the folder and a Python prompt: they are real
-terminals (colors, vim, htop). The buttons of the top bar write commands to the shell.
+viewer. The dock at the bottom holds a shell started in the folder and a Python prompt (the most
+recent Python found, for its colors): they are real terminals (colors, vim, htop). The buttons of
+the top bar write commands to the shell.
 
 Click a terminal to type in it. Select with the mouse, copy with Cmd+C and paste with Cmd+V (Ctrl on
 Windows and Linux), scroll the history with the wheel.
 """
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -22,9 +24,20 @@ current = Str(str(files[0]) if files else "")
 started = Bool(False)
 cache = {"path": None, "text": Str("")}
 
+
+
+def newest_python():
+    """the most recent Python found: since 3.13 its prompt has colors, since 3.14 it colors the code"""
+    for minor in range(20, sys.version_info.minor, -1):
+        found = shutil.which(f"python3.{minor}")
+        if found:
+            return found
+    return sys.executable
+
+
 # the terminals are states: created once, outside the update function
 shell = Terminal(cwd=str(FOLDER))
-python = Terminal(cwd=str(FOLDER), shell=sys.executable, args=["-q"])
+python = Terminal(cwd=str(FOLDER), shell=newest_python(), args=["-q"])
 
 
 def text():
