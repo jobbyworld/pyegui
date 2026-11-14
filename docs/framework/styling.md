@@ -181,8 +181,9 @@ Blurs what is behind the window, by a radius in points: 0 is no blur. macOS only
 nothing elsewhere), with a transparent window: a backdrop or transparent=True in run_native.
 
 It adds to the blur of the backdrop: Backdrop.LIQUID_GLASS_CLEAR is barely blurred, so the
-radius sets the blur alone. It uses a private function of macOS, looked up when called: on a
-system without it, nothing happens.
+radius sets the blur alone. The blur is rounded like the corners of the window. It uses a
+private layer of macOS (the one of its glass views), looked up when called: on a system
+without it, nothing happens.
 
 **Args**
 

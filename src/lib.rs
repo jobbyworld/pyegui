@@ -479,8 +479,9 @@ impl Context {
     /// nothing elsewhere), with a transparent window: a backdrop or transparent=True in run_native.
     ///
     /// It adds to the blur of the backdrop: Backdrop.LIQUID_GLASS_CLEAR is barely blurred, so the
-    /// radius sets the blur alone. It uses a private function of macOS, looked up when called: on a
-    /// system without it, nothing happens.
+    /// radius sets the blur alone. The blur is rounded like the corners of the window. It uses a
+    /// private layer of macOS (the one of its glass views), looked up when called: on a system
+    /// without it, nothing happens.
     ///
     /// Args:
     ///     radius (float): from 0 (sharp) to about 64 (very blurred)
@@ -1501,45 +1502,91 @@ fn corner_radius(window: &impl raw_window_handle::HasWindowHandle) -> f64 {
     }
 }
 
-/// Blurs what is behind the window with CGSSetWindowBackgroundBlurRadius, a private function of
-/// the window server (used by terminals like iTerm2 and kitty), looked up at run time
+/// Blurs what is behind the window with a CABackdropLayer (the layer of the system glass views)
+/// in a view put behind the content, rounded like the window: the blur of the window server
+/// (CGSSetWindowBackgroundBlurRadius) covers the whole rectangle of the window and draws a square
+/// frame around its rounded corners. Radius 0 removes the view. The classes are looked up by name
+/// at run time: on a system without them, an error is returned and nothing changes
 #[cfg(target_os = "macos")]
 fn set_window_blur(window: &impl raw_window_handle::HasWindowHandle, radius: u32) -> Result<(), String> {
     use objc2::msg_send;
-    use objc2::runtime::AnyObject;
-    use std::ffi::{c_char, c_void};
+    use objc2::runtime::{AnyClass, AnyObject, Bool as ObjcBool};
+    use objc2_foundation::{NSRect, NSString};
 
-    extern "C" {
-        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-    }
-    const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
-    type Connection = unsafe extern "C" fn() -> u32;
-    type SetBlur = unsafe extern "C" fn(u32, u32, u32) -> i32;
-
+    let class = |name: &std::ffi::CStr| {
+        AnyClass::get(name).ok_or_else(|| format!("no class {}", name.to_string_lossy()))
+    };
     let raw_window_handle::RawWindowHandle::AppKit(handle) =
         window.window_handle().map_err(|e| e.to_string())?.as_raw()
     else {
         return Err("not an AppKit window".to_string());
     };
     unsafe {
-        let connection = dlsym(RTLD_DEFAULT, c"CGSDefaultConnectionForThread".as_ptr());
-        let set_blur = dlsym(RTLD_DEFAULT, c"CGSSetWindowBackgroundBlurRadius".as_ptr());
-        if connection.is_null() || set_blur.is_null() {
-            return Err("this macOS has no CGSSetWindowBackgroundBlurRadius".to_string());
-        }
-        let connection: Connection = std::mem::transmute(connection);
-        let set_blur: SetBlur = std::mem::transmute(set_blur);
         let view = handle.ns_view.as_ptr().cast::<AnyObject>();
-        let ns_window: *mut AnyObject = msg_send![&*view, window];
-        if ns_window.is_null() {
-            return Err("the view has no window".to_string());
+        // the frame view of the window, where the backdrops are put behind the view of egui
+        let host: *mut AnyObject = msg_send![&*view, superview];
+        if host.is_null() {
+            return Err("the window has no frame view".to_string());
         }
-        let number: isize = msg_send![&*ns_window, windowNumber];
-        match set_blur(connection(), number as u32, radius) {
-            0 => Ok(()),
-            code => Err(format!("error {}", code)),
+        let identifier = NSString::from_str("pyegui.backdrop-blur");
+
+        // the view of a previous call
+        let subviews: *mut AnyObject = msg_send![&*host, subviews];
+        let count: usize = msg_send![&*subviews, count];
+        let mut blur_view: *mut AnyObject = std::ptr::null_mut();
+        for i in 0..count {
+            let subview: *mut AnyObject = msg_send![&*subviews, objectAtIndex: i];
+            let id: *mut AnyObject = msg_send![&*subview, identifier];
+            if !id.is_null() {
+                let same: ObjcBool = msg_send![&*id, isEqualToString: &*identifier];
+                if same.as_bool() {
+                    blur_view = subview;
+                }
+            }
         }
+        if radius == 0 {
+            if !blur_view.is_null() {
+                let _: () = msg_send![&*blur_view, removeFromSuperview];
+            }
+            return Ok(());
+        }
+
+        if blur_view.is_null() {
+            let bounds: NSRect = msg_send![&*host, bounds];
+            let new: *mut AnyObject = msg_send![class(c"NSView")?, alloc];
+            let new: *mut AnyObject = msg_send![new, initWithFrame: bounds];
+            let _: () = msg_send![&*new, setIdentifier: &*identifier];
+            // the view follows the size of the window (NSViewWidthSizable | NSViewHeightSizable)
+            let _: () = msg_send![&*new, setAutoresizingMask: 18usize];
+            // a layer-hosting view: its layer is the backdrop, set before wantsLayer
+            let layer: *mut AnyObject = msg_send![class(c"CABackdropLayer")?, layer];
+            let _: () = msg_send![&*layer, setWindowServerAware: true];
+            let _: () = msg_send![&*layer, setCornerRadius: corner_radius(window)];
+            let _: () = msg_send![&*layer, setMasksToBounds: true];
+            let _: () = msg_send![&*new, setLayer: layer];
+            let _: () = msg_send![&*new, setWantsLayer: true];
+            // below every other view of the frame: under the glass and the content
+            let below: isize = -1; // NSWindowBelow
+            let nothing: *mut AnyObject = std::ptr::null_mut();
+            let _: () = msg_send![&*host, addSubview: new, positioned: below, relativeTo: nothing];
+            blur_view = new;
+        }
+
+        let layer: *mut AnyObject = msg_send![&*blur_view, layer];
+        let filter: *mut AnyObject =
+            msg_send![class(c"CAFilter")?, filterWithType: &*NSString::from_str("gaussianBlur")];
+        if filter.is_null() {
+            return Err("no gaussianBlur filter".to_string());
+        }
+        let value: *mut AnyObject = msg_send![class(c"NSNumber")?, numberWithDouble: radius as f64];
+        let _: () = msg_send![&*filter, setValue: value, forKey: &*NSString::from_str("inputRadius")];
+        // the edges of the window are not darkened by the blur
+        let yes: *mut AnyObject = msg_send![class(c"NSNumber")?, numberWithBool: true];
+        let _: () = msg_send![&*filter, setValue: yes, forKey: &*NSString::from_str("inputNormalizeEdges")];
+        let filters: *mut AnyObject = msg_send![class(c"NSArray")?, arrayWithObject: filter];
+        let _: () = msg_send![&*layer, setFilters: filters];
     }
+    Ok(())
 }
 
 /// Sets the dark mode of the window, which changes the tint of the system backdrops
