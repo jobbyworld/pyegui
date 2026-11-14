@@ -1,6 +1,6 @@
 # Themes, colors, fonts and glass
 
-Everything that changes the look is a method of the `Context`, given to the update function of the top level. Call them from the first frame; `reset_style` goes back to the defaults before a new style is applied.
+Everything that changes the look is a method of the `Context`, given to the update function of the top level. Call them from the first frame; `reset_style` goes back to the defaults before a new style is applied. `set_layout` (or `run_native(layout=dict(...))`) gives the spacing, corners, outline, background, sheet and opacity of the whole window once, and a region (`sidebar`, `topbar`, `bottombar`, `central`, `dock`) or a call overrides them.
 
 ## `Context.is_dark_theme`
 
@@ -66,6 +66,39 @@ def update_func(ctx):
 ## `Context.reset_style()`
 
 Restores the default style of both themes.
+
+
+## `Context.set_layout(**kwargs)`
+
+Sets the layout rules of the window: a few values given once, that the regions of the window
+(the sidebar, the top bar, the bottom bar, the central area and the dock) take and can override.
+Replaces the rules given before. The same dict can be given to run_native as layout.
+
+**Keyword args**
+
+- `gap` (float): space around the window and between two boxes. Default is 8
+- `rounding` (float): corner radius of the boxes. Default is 12
+- `outline` (tuple[float, color]): outline of the boxes and of the panes of the dock. Default is a
+- thin translucent grey
+- `sheet` (color): the background inside the boxes (the rounded rectangles). Default is the
+- panel color of the theme
+- `opacity` (float): from 0 to 1, multiplies the opacity of the sheet. With a backdrop or a
+- transparent window what is behind shows through. Default is 1
+- `background` (color): global only. What is seen between the boxes, in the gaps and around them.
+- Default is the panel color of the theme; (0, 0, 0, 0) shows the backdrop of the window
+- `inner_margin` (float): space between the outline of a box and its content. Default is 12 for
+- the sidebar and 8 for the others
+- sidebar, topbar, bottombar, central, dock (dict): the same values (but background) for one
+- region only
+
+A value is looked up in the call of the region (sidebar_panel(..., rounding=6)), then in the
+dict of the region, then in the global values, then in the defaults.
+
+**Example:**
+
+```python
+ctx.set_layout(gap=8, rounding=12, opacity=0.9, sidebar=dict(opacity=0.6), dock=dict(rounding=8))
+```
 
 
 ## `Context.set_accent(color)`

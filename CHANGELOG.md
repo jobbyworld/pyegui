@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- layout rules: `run_native(..., layout=dict(gap=8, rounding=12, outline=..., sheet=..., opacity=..., inner_margin=..., background=..., sidebar=dict(...), dock=dict(...)))` or `ctx.set_layout(...)` give the spacing, corners, outline and opacity of every region (`sidebar`, `central`, `dock`, `topbar`, `bottombar`); a region or a call overrides the global rules. `sidebar_panel(f)`, `topbar_panel(f)` and `bottombar_panel(f)` draw a box with these rules, keep the same gap all around the boxes and clear the macOS window buttons; `Dock` and the central area follow the same rules: the tab of a pane has the sheet of the pane, the other tabs a fainter one
 - `run_native(..., persist_id="app.name")`: the position and size of the window and what egui remembers (scroll, collapsed sections) come back at the next run
 - `ctx.save_state(obj)` and `ctx.load_state()`: the choices of the user (theme, folder, view...) as JSON, saved with the window. `examples/finder.py` uses them
 - `dock.save()` and `dock.load(layout, panes=None)`: the open panes, tabs, splits and sizes of a `Dock` as plain values, to keep with `ctx.save_state()`
@@ -11,6 +12,7 @@
 - `tree.focus(focused=True)` and `tree.keep_focus`: give the keyboard focus to a `TreeView` (once, or at every frame unless a text field is being edited), or take it away, so an app can manage the focus of its zones
 - `ctx.request_repaint(after=0.0)`: asks for another call of `update_func`, to run an animation
 - `TreeNode(..., badges=[(r, g, b, a), ...])`: colored dots at the right end of the row of a node
+- `DockPane(..., sheet=color)`: with layout rules, the background of the pane and of its tab, to give a dock its own color. The top corner of the pane under its tab is square
 - `DockPane(..., hide_tab=True)`: hides the tab bar while the pane is alone in its tabs, for this pane only
 - `pointer_pressed()`: True in the frame the primary mouse button went down, to know which zone was clicked
 - docs: the channels of `RGB` (`color_edit_button_rgb`) are between 0 and 1, not 0 and 255

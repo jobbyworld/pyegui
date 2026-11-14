@@ -16,6 +16,7 @@ use std::{fs, ptr};
 
 mod containers;
 mod icons;
+mod layout;
 mod dock;
 mod markdown;
 mod plot;
@@ -245,6 +246,48 @@ impl Context {
             None => self.0.all_styles_mut(|s| options.apply(s)),
         }
         Ok(())
+    }
+
+    /// Sets the layout rules of the window: a few values given once, that the regions of the window
+    /// (the sidebar, the top bar, the bottom bar, the central area and the dock) take and can override.
+    /// Replaces the rules given before. The same dict can be given to run_native as layout.
+    ///
+    /// Keyword args:
+    ///
+    ///     gap (float): space around the window and between two boxes. Default is 8
+    ///
+    ///     rounding (float): corner radius of the boxes. Default is 12
+    ///
+    ///     outline (tuple[float, color]): outline of the boxes and of the panes of the dock. Default is a
+    ///     thin translucent grey
+    ///
+    ///     sheet (color): the background inside the boxes (the rounded rectangles). Default is the
+    ///     panel color of the theme
+    ///
+    ///     opacity (float): from 0 to 1, multiplies the opacity of the sheet. With a backdrop or a
+    ///     transparent window what is behind shows through. Default is 1
+    ///
+    ///     background (color): global only. What is seen between the boxes, in the gaps and around them.
+    ///     Default is the panel color of the theme; (0, 0, 0, 0) shows the backdrop of the window
+    ///
+    ///     inner_margin (float): space between the outline of a box and its content. Default is 12 for
+    ///     the sidebar and 8 for the others
+    ///
+    ///     sidebar, topbar, bottombar, central, dock (dict): the same values (but background) for one
+    ///     region only
+    ///
+    /// A value is looked up in the call of the region (sidebar_panel(..., rounding=6)), then in the
+    /// dict of the region, then in the global values, then in the defaults.
+    ///
+    /// Example::
+    ///
+    ///     ctx.set_layout(gap=8, rounding=12, opacity=0.9, sidebar=dict(opacity=0.6), dock=dict(rounding=8))
+    #[pyo3(signature = (**kwargs))]
+    fn set_layout(&self, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+        match kwargs {
+            Some(kwargs) => layout::set_rules(kwargs),
+            None => Ok(()),
+        }
     }
 
     /// Restores the default style of both themes.
@@ -892,6 +935,7 @@ impl eframe::App for PyeguiApp<'_> {
             debug!("Push root UI");
             ui_stack.push(&raw mut *ui);
 
+            layout::begin_frame();
             debug!("Execute update_func");
 
             Python::attach(|py| {
@@ -970,6 +1014,13 @@ impl eframe::App for PyeguiApp<'_> {
 ///     fullsize_content (bool): macOS: the content fills the window under a transparent title bar,
 ///     keeping the window buttons at the top left. Leave about 28 points free at the top of the
 ///     first panel. Ignored on other platforms
+///
+///     layout (dict): the layout rules of the window: spacing (gap), corners (rounding), outline,
+///     background between the boxes, sheet inside the boxes, opacity and inner_margin, given once and
+///     overridden by region ("sidebar", "topbar", "bottombar", "central", "dock"). They are used by
+///     sidebar_panel, topbar_panel, bottombar_panel, the Dock and the central area. It is the same as
+///     calling set_layout on the context, see its documentation. Example:
+///     layout=dict(gap=8, rounding=12, dock=dict(opacity=0.8))
 ///
 /// Examples::
 ///
@@ -1054,7 +1105,11 @@ unsafe fn run_native(
             viewport = viewport.with_resizable(resizable.cast::<PyBool>()?.extract()?);
         }
 
+        if let Some(rules) = kwargs.get_item("layout")? {
+            layout::set_rules(rules.cast::<PyDict>()?)?;
+        }
         if kwarg::<bool>(Some(kwargs), "fullsize_content")?.unwrap_or(false) {
+            layout::set_fullsize_content(true);
             // macOS: the content goes under a transparent title bar, with the window buttons on it
             viewport = viewport
                 .with_fullsize_content_view(true)
@@ -1430,10 +1485,16 @@ unsafe fn open_central_panel(ui_stack: &mut Vec<*mut egui::Ui>) -> PyResult<()> 
     );
     panel_ui.shrink_clip_rect(outer_rect);
 
-    let mut frame = egui::Frame::central_panel(root.style());
-    // partial glass: the content is an almost opaque sheet over the glass
-    if let Some(fill) = style::sheet_fill(&root.style().visuals) {
-        frame = frame.fill(fill);
+    // the framework lays the window out when it has layout rules: the margins follow the panels
+    let ruled = layout::central_frame(root.style());
+    let has_rules = ruled.is_some();
+    let mut frame = ruled.unwrap_or_else(|| egui::Frame::central_panel(root.style()));
+    // partial glass: the content is an almost opaque sheet over the glass (with layout rules, the
+    // background of the rules decides instead)
+    if !has_rules {
+        if let Some(fill) = style::sheet_fill(&root.style().visuals) {
+            frame = frame.fill(fill);
+        }
     }
     let prepared = frame.begin(&mut panel_ui);
     let central = CENTRAL.insert(Box::new(CentralPanelState { panel_ui, prepared }));
@@ -2543,6 +2604,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(date_picker_button, m)?)?;
     m.add_function(wrap_pyfunction!(add_space, m)?)?;
     containers::register(m)?;
+    layout::register(m)?;
     table::register(m)?;
     tree::register(m)?;
     widgets::register(m)?;
