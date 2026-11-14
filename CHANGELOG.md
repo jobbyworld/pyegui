@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.1 (2026-11-14)
+
 - CI: wheels for Windows on ARM64 (`win_arm64`), built natively on GitHub's `windows-11-arm` runner, next to Windows x64 and macOS
 - Dock: the outlines of the tabs and panes are concentric with their fill (a thick outline no longer lets the fill show at the corners), a rounding larger than a tab is limited like egui limits the fill, and the title of a tab keeps clear of its corners and outline
 - Dock: a top corner of a pane under any tab of its bar (not only the active one) stays square, so no notch of background shows under an inactive tab
