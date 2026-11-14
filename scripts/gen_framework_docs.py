@@ -111,7 +111,7 @@ THEMES = [
      ["Context.is_dark_theme", "Context.is_light_theme", "Context.set_dark_theme",
       "Context.set_light_theme", "Context.set_system_theme", "Context.set_style",
       "Context.reset_style", "Context.set_layout", "Context.set_accent", "Context.set_glass_style",
-      "Context.set_backdrop", "Context.set_font"]),
+      "Context.set_backdrop", "Context.set_backdrop_blur", "Context.set_font"]),
 ]
 
 PRIVATE = {"pyegui"}

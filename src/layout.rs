@@ -6,7 +6,7 @@
 //! the rules of the region, then the global rules, then the defaults of the framework.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use eframe::egui::{self, Color32, Frame, Margin, Stroke};
@@ -196,6 +196,33 @@ impl Side {
     }
 }
 
+/// The radius of the corners of the window, read from the system (macOS), 0 when square
+static WINDOW_RADIUS: AtomicU32 = AtomicU32::new(0);
+
+pub(crate) fn set_window_radius(radius: f32) {
+    WINDOW_RADIUS.store(radius.max(0.0).to_bits(), Ordering::Relaxed);
+}
+
+/// The corners of a box: a corner that lies in a corner of the window is rounded at least like
+/// the window, which clips it; a square corner there would lose its outline
+pub(crate) fn box_corners(ctx: &egui::Context, rect: egui::Rect, rounding: f32) -> egui::CornerRadius {
+    let window = f32::from_bits(WINDOW_RADIUS.load(Ordering::Relaxed));
+    let screen = ctx.content_rect();
+    let near = |a: f32, b: f32| (a - b).abs() <= 1.0;
+    let corner = |x_edge: bool, y_edge: bool| {
+        let radius = if x_edge && y_edge { rounding.max(window) } else { rounding };
+        radius.round().clamp(0.0, 255.0) as u8
+    };
+    let (left, right) = (near(rect.left(), screen.left()), near(rect.right(), screen.right()));
+    let (top, bottom) = (near(rect.top(), screen.top()), near(rect.bottom(), screen.bottom()));
+    egui::CornerRadius {
+        nw: corner(left, top),
+        ne: corner(right, top),
+        sw: corner(left, bottom),
+        se: corner(right, bottom),
+    }
+}
+
 /// The space around a box. A side that faces the window gets the gap, a side that faces another box
 /// gets half of it, the other box gives the other half. The side of a panel that faces the central
 /// area is always shared, since the central area comes last.
@@ -275,9 +302,10 @@ unsafe fn show_region_panel(
     let py = update_fun.py();
     let title_bar = region == "sidebar" && cfg!(target_os = "macos") && FULLSIZE.load(Ordering::Relaxed);
     let content = move |ui: &mut egui::Ui| -> PyResult<()> {
+        let corners = box_corners(ui.ctx(), ui.max_rect(), values.rounding);
         let boxed = Frame::new()
             .inner_margin(values.inner_margin.round().clamp(0.0, 127.0) as i8)
-            .corner_radius(values.rounding)
+            .corner_radius(corners)
             .fill(fill)
             .stroke(values.outline);
         // the box fills the panel; its size is taken before the frame is opened, since the frame

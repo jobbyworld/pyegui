@@ -11,6 +11,7 @@ use pyo3::{
     exceptions::{PyOSError, PyRuntimeError, PyValueError},
     types::{PyAny, PyBool, PyDict, PyInt, PyString},
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{fs, ptr};
 
@@ -37,6 +38,8 @@ static mut APP_MUTEX: Mutex<()> = Mutex::new(());
 static mut CENTRAL: Option<Box<CentralPanelState>> = None;
 // backdrop requested by Context.set_backdrop, applied on the next frame
 static PENDING_BACKDROP: Mutex<Option<String>> = Mutex::new(None);
+/// the radius given to set_backdrop_blur, applied to the window at the next frame
+static PENDING_BLUR: Mutex<Option<u32>> = Mutex::new(None);
 // the state of the app as JSON: what was saved by the last run, and what the next save writes
 static LOADED_STATE: Mutex<Option<String>> = Mutex::new(None);
 static PENDING_STATE: Mutex<Option<String>> = Mutex::new(None);
@@ -135,6 +138,7 @@ impl Context {
             .insert(0, source);
 
         self.0.set_fonts(fonts);
+        MODERN_FONTS.store(style::theme_state().glass.is_some(), Ordering::Relaxed);
 
         Ok(())
     }
@@ -299,13 +303,10 @@ impl Context {
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
             self.0.set_style_of(theme, style::default_style(theme));
         }
-        let was_modern = style::theme_state().glass.is_some();
         if let Ok(mut theme) = style::THEME.lock() {
             *theme = style::ThemeState::default();
         }
-        if was_modern {
-            self.0.set_fonts(app_fonts(false));
-        }
+        // the fonts of egui come back at the end of the frame, see sync_fonts
     }
 
     /// Applies a modern style looking like frosted glass, for both themes: translucent surfaces,
@@ -323,20 +324,74 @@ impl Context {
     ///     mode (str): "partial": the panels and menus are glass, the content is an almost opaque
     ///         sheet, which is easier to read. "full": every surface is glass. Default is "partial"
     ///
+    ///     opacity (float): multiplies the opacity of every surface: below 1 more transparent, above
+    ///         1 more opaque. Default is 1, the levels of the style
+    ///
+    ///     panels (float): the opacity of the panels, the sidebars and the bars, from 0 (clear) to 1
+    ///         (opaque), instead of the level of the style
+    ///
+    ///     windows (float): the opacity of the windows, menus and popups, from 0 to 1
+    ///
+    ///     content (float): the opacity of the sheet under the content in the partial mode, from 0 to 1
+    ///
+    ///     sidebar (float): the opacity of the left and right panels, instead of panels
+    ///
+    ///     bars (float): the opacity of the top and bottom panels, instead of panels
+    ///
+    ///     central (float): the opacity of the central area (what is drawn after the panels), in both
+    ///         modes, instead of content. A DockPane(..., central=True) takes it too
+    ///
+    ///     dock (float): the opacity of the panes of the docks. Given, each pane is filled on its own and
+    ///         the central area under the dock is left clear, so the dock and the central pane can
+    ///         differ. Default: the panes are not filled, the central area is seen through them
+    ///
+    ///     background (float): the opacity of the glass under the whole window, seen in the gaps
+    ///         between the panels and the panes. Default: nothing, the backdrop is seen there
+    ///
+    /// The surfaces stay opaque with the system setting "Reduce transparency". Call it again with
+    /// other levels to change them, e.g. from a slider.
+    ///
     /// Example::
     ///
     ///     def update_func(ctx):
     ///         ctx.set_glass_style(accent="#8b5cf6")
     ///         heading("Glass")
     ///
+    ///     # more transparent everywhere, and clear panels
+    ///     ctx.set_glass_style(mode="full", opacity=0.6, panels=0.15)
+    ///
+    ///     # one level per part of the window
+    ///     ctx.set_glass_style(mode="full", sidebar=0.2, bars=0.5, central=0.85, dock=0.6, background=0.1)
+    ///
     ///     run_native("Glass", update_func, backdrop=Backdrop.ACRYLIC)
-    #[pyo3(signature = (tint=None, accent=None, mode="partial"))]
+    #[pyo3(signature = (tint=None, accent=None, mode="partial", opacity=1.0, panels=None, windows=None, content=None, sidebar=None, bars=None, central=None, dock=None, background=None))]
+    #[allow(clippy::too_many_arguments)]
     fn set_glass_style(
         &self,
         tint: Option<&Bound<'_, PyAny>>,
         accent: Option<&Bound<'_, PyAny>>,
         mode: &str,
+        opacity: f32,
+        panels: Option<f32>,
+        windows: Option<f32>,
+        content: Option<f32>,
+        sidebar: Option<f32>,
+        bars: Option<f32>,
+        central: Option<f32>,
+        dock: Option<f32>,
+        background: Option<f32>,
     ) -> PyResult<()> {
+        let levels = style::GlassLevels {
+            scale: opacity.max(0.0),
+            panels,
+            windows,
+            content,
+            sidebar,
+            bars,
+            central,
+            dock,
+            background,
+        };
         let tint = tint.map(style::extract_color).transpose()?;
         let accent = accent
             .map(style::extract_color)
@@ -353,16 +408,15 @@ impl Context {
             }
         };
 
-        let was_modern = style::theme_state().glass.is_some();
         if let Ok(mut theme) = style::THEME.lock() {
             theme.accent = Some(accent);
             theme.glass = Some(mode);
+            theme.levels = levels;
+            theme.tint = tint;
         }
-        if !was_modern {
-            self.0.set_fonts(app_fonts(true));
-        }
+        // Inter is installed at the end of the frame, see sync_fonts
         self.0
-            .all_styles_mut(|s| style::modern_glass_style(s, tint, accent, mode));
+            .all_styles_mut(|s| style::modern_glass_style(s, tint, accent, mode, levels));
         Ok(())
     }
 
@@ -417,6 +471,28 @@ impl Context {
         *PENDING_BACKDROP
             .lock()
             .map_err(|_| PyRuntimeError::new_err("backdrop lock is poisoned"))? = Some(backdrop);
+        self.0.request_repaint();
+        Ok(())
+    }
+
+    /// Blurs what is behind the window, by a radius in points: 0 is no blur. macOS only (it does
+    /// nothing elsewhere), with a transparent window: a backdrop or transparent=True in run_native.
+    ///
+    /// It adds to the blur of the backdrop: Backdrop.LIQUID_GLASS_CLEAR is barely blurred, so the
+    /// radius sets the blur alone. It uses a private function of macOS, looked up when called: on a
+    /// system without it, nothing happens.
+    ///
+    /// Args:
+    ///     radius (float): from 0 (sharp) to about 64 (very blurred)
+    ///
+    /// Example::
+    ///
+    ///     ctx.set_backdrop_blur(20)
+    ///     run_native("Glass", update_func, backdrop=Backdrop.LIQUID_GLASS_CLEAR)
+    fn set_backdrop_blur(&self, radius: f32) -> PyResult<()> {
+        *PENDING_BLUR
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("blur lock is poisoned"))? = Some(radius.max(0.0).round() as u32);
         self.0.request_repaint();
         Ok(())
     }
@@ -838,6 +914,19 @@ impl Group {
     }
 }
 
+/// True when the fonts installed are those of the glass style (Inter)
+static MODERN_FONTS: AtomicBool = AtomicBool::new(false);
+
+/// Installs the fonts of the style once the update function has run, and only when they change:
+/// reset_style followed by set_glass_style (e.g. at each move of a slider of transparency) would
+/// otherwise swap the fonts twice per frame, and the text is drawn with a font atlas being rebuilt.
+fn sync_fonts(ctx: &egui::Context) {
+    let modern = style::theme_state().glass.is_some();
+    if MODERN_FONTS.swap(modern, Ordering::Relaxed) != modern {
+        ctx.set_fonts(app_fonts(modern));
+    }
+}
+
 /// The fonts of the app: the fonts of egui, or Inter with the modern theme of set_glass_style.
 /// The "bold" family is always defined, so a style can use it in both cases.
 pub(crate) fn app_fonts(modern: bool) -> FontDefinitions {
@@ -926,6 +1015,19 @@ impl eframe::App for PyeguiApp<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx_r = Context(ui.ctx().clone());
 
+        #[cfg(target_os = "macos")]
+        if ui.ctx().cumulative_pass_nr() < 3 {
+            // the boxes in the corners of the window follow its rounded corners
+            layout::set_window_radius(corner_radius(&*frame) as f32);
+        }
+        if let Some(radius) = PENDING_BLUR.lock().ok().and_then(|mut b| b.take()) {
+            #[cfg(target_os = "macos")]
+            if let Err(err) = set_window_blur(&*frame, radius) {
+                log::warn!("Cannot blur the backdrop: {}", err);
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = radius;
+        }
         if let Some(backdrop) = PENDING_BACKDROP.lock().ok().and_then(|mut b| b.take()) {
             if let Err(err) = apply_backdrop(&*frame, &backdrop) {
                 log::warn!("Cannot apply backdrop '{}': {}", backdrop, err);
@@ -940,6 +1042,10 @@ impl eframe::App for PyeguiApp<'_> {
             ui_stack.push(&raw mut *ui);
 
             layout::begin_frame();
+            // set_glass_style(background=...): glass under everything, seen between the boxes
+            if let Some(fill) = style::background_fill(ui.visuals()) {
+                ui.painter().rect_filled(ui.max_rect(), 0.0, fill);
+            }
             debug!("Execute update_func");
 
             Python::attach(|py| {
@@ -949,6 +1055,7 @@ impl eframe::App for PyeguiApp<'_> {
             });
 
             debug!("Executed update_func");
+            sync_fonts(ui.ctx());
 
             // the central panel background must be painted even if no widget was added
             if CENTRAL.is_none() {
@@ -964,6 +1071,10 @@ impl eframe::App for PyeguiApp<'_> {
                     mut panel_ui,
                     mut prepared,
                 } = *central;
+                if dock::take_drawn() && style::dock_filled() {
+                    // the panes of the dock are filled on their own: the area under them stays clear
+                    prepared.frame.fill = egui::Color32::TRANSPARENT;
+                }
                 let content_ui = &mut prepared.content_ui;
                 content_ui.expand_to_include_rect(content_ui.max_rect());
                 let response = prepared.end(&mut panel_ui);
@@ -1312,13 +1423,15 @@ fn apply_backdrop(
         "vibrancy" => {
             apply_vibrancy(window, NSVisualEffectMaterial::UnderWindowBackground, None, None)
         }
+        // the glass is rounded like the corners of the window, which clip the content of egui:
+        // a square glass shows in the corners, around the rounded content
         #[cfg(target_os = "macos")]
-        "liquid_glass" => apply_liquid_glass(window, LiquidGlassOptions::default()),
+        "liquid_glass" => apply_liquid_glass(window, LiquidGlassOptions::default().radius(corner_radius(window))),
         // barely blurred: the windows behind stay readable
         #[cfg(target_os = "macos")]
         "liquid_glass_clear" => apply_liquid_glass(
             window,
-            LiquidGlassOptions::new(NSGlassEffectViewStyle::Clear),
+            LiquidGlassOptions::new(NSGlassEffectViewStyle::Clear).radius(corner_radius(window)),
         ),
         _ => return Err("not supported on this platform".to_string()),
     };
@@ -1361,6 +1474,72 @@ fn backdrop_host(window: &impl raw_window_handle::HasWindowHandle) -> Result<Bac
     let superview = unsafe { view.superview() }.ok_or("the window has no frame view")?;
     let ptr = std::ptr::NonNull::from(&*superview).cast();
     Ok(BackdropHost(raw_window_handle::AppKitWindowHandle::new(ptr)))
+}
+
+/// The radius of the corners of the window (16 points for a window with a title bar on macOS 26),
+/// read from the private _cornerRadius of NSWindow when it has it, else 0
+#[cfg(target_os = "macos")]
+fn corner_radius(window: &impl raw_window_handle::HasWindowHandle) -> f64 {
+    use objc2::runtime::{AnyObject, Bool as ObjcBool, Sel};
+    use objc2::{msg_send, sel};
+
+    let Ok(handle) = window.window_handle() else { return 0.0 };
+    let raw_window_handle::RawWindowHandle::AppKit(handle) = handle.as_raw() else { return 0.0 };
+    unsafe {
+        let view = handle.ns_view.as_ptr().cast::<AnyObject>();
+        let ns_window: *mut AnyObject = msg_send![&*view, window];
+        if ns_window.is_null() {
+            return 0.0;
+        }
+        let selector: Sel = sel!(_cornerRadius);
+        let responds: ObjcBool = msg_send![&*ns_window, respondsToSelector: selector];
+        if !responds.as_bool() {
+            return 0.0;
+        }
+        let radius: f64 = msg_send![&*ns_window, _cornerRadius];
+        radius.max(0.0)
+    }
+}
+
+/// Blurs what is behind the window with CGSSetWindowBackgroundBlurRadius, a private function of
+/// the window server (used by terminals like iTerm2 and kitty), looked up at run time
+#[cfg(target_os = "macos")]
+fn set_window_blur(window: &impl raw_window_handle::HasWindowHandle, radius: u32) -> Result<(), String> {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use std::ffi::{c_char, c_void};
+
+    extern "C" {
+        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    }
+    const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
+    type Connection = unsafe extern "C" fn() -> u32;
+    type SetBlur = unsafe extern "C" fn(u32, u32, u32) -> i32;
+
+    let raw_window_handle::RawWindowHandle::AppKit(handle) =
+        window.window_handle().map_err(|e| e.to_string())?.as_raw()
+    else {
+        return Err("not an AppKit window".to_string());
+    };
+    unsafe {
+        let connection = dlsym(RTLD_DEFAULT, c"CGSDefaultConnectionForThread".as_ptr());
+        let set_blur = dlsym(RTLD_DEFAULT, c"CGSSetWindowBackgroundBlurRadius".as_ptr());
+        if connection.is_null() || set_blur.is_null() {
+            return Err("this macOS has no CGSSetWindowBackgroundBlurRadius".to_string());
+        }
+        let connection: Connection = std::mem::transmute(connection);
+        let set_blur: SetBlur = std::mem::transmute(set_blur);
+        let view = handle.ns_view.as_ptr().cast::<AnyObject>();
+        let ns_window: *mut AnyObject = msg_send![&*view, window];
+        if ns_window.is_null() {
+            return Err("the view has no window".to_string());
+        }
+        let number: isize = msg_send![&*ns_window, windowNumber];
+        match set_blur(connection(), number as u32, radius) {
+            0 => Ok(()),
+            code => Err(format!("error {}", code)),
+        }
+    }
 }
 
 /// Sets the dark mode of the window, which changes the tint of the system backdrops
@@ -1496,7 +1675,9 @@ unsafe fn open_central_panel(ui_stack: &mut Vec<*mut egui::Ui>) -> PyResult<()> 
     // partial glass: the content is an almost opaque sheet over the glass (with layout rules, the
     // background of the rules decides instead)
     if !has_rules {
-        if let Some(fill) = style::sheet_fill(&root.style().visuals) {
+        let visuals = &root.style().visuals;
+        let fill = style::surface_fill(visuals, style::Surface::Central).or_else(|| style::sheet_fill(visuals));
+        if let Some(fill) = fill {
             frame = frame.fill(fill);
         }
     }

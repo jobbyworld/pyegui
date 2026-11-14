@@ -24,7 +24,7 @@ python scripts/make_app_macos.py          # macOS: ~/Applications/Finder.app, dr
 On Windows the app has to set the same AppUserModelID as the shortcut (see the end of
 `examples/finder.py`), or the taskbar groups its window under Python's icon.
 
-`make develop` is the same without `--release`. Wheels are built by CI (Windows and macOS only)
+`make develop` is the same without `--release`. Wheels are built by CI (Windows x64 and ARM64, macOS)
 and attached to the GitHub Release of a `v*` tag.
 
 ## The model in six rules
@@ -113,7 +113,7 @@ Index of all files: [docs/framework/README.md](docs/framework/README.md).
 | `markdown.py` | markdown editor with live preview and mermaid diagrams |
 | `dock_colors.py` | layout rules in a glass style: a blue dock and a green dock, semi transparent (`DockPane(sheet=...)`) |
 | `markdown_viewer_bars.py`, `markdown_viewer_glass.py`, `markdown_viewer_bars_glass.py` | the same app with a top and a bottom bar, with a glass backdrop, with both: the layout rules (`layout=dict(...)`, `sidebar_panel`, `topbar_panel`, `bottombar_panel`) |
-| `terminal.py` | a terminal in a dock: a sidebar of files, a viewer and a bottom dock with a shell and a Python prompt; buttons write commands to the shell (`term.run`) |
+| `terminal.py` | a terminal in a dock: a sidebar of files, a viewer and a bottom dock with a shell and a Python prompt; buttons write commands to the shell (`term.run`); a Réglages pane changes the layout rules (`ctx.set_layout`) and the blur of the backdrop live |
 | `files.py` | the three file views (tree, list, icons) sharing one `FileWatcher`, a preview reloaded when the file changes on the disk, a Log dock of the notify events, a `path_combo` title, a `path_breadcrumb` path bar and a slider for the size of the icons |
 | `markdown_viewer.py` | minimal app: a sidebar listing markdown files, a viewer in the middle and three docks on the right (outline, source, infos) |
 

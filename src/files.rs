@@ -18,6 +18,7 @@ use pyo3::types::PyDict;
 
 use crate::icons::icon_uri;
 use crate::watcher::{default_core, entry, expand, lock, natural_cmp, Core, Entry, FileWatcher};
+use crate::style::extract_color;
 use crate::{current_ui, kwarg, run_nested_call, UI};
 
 // what the three views share
@@ -214,6 +215,65 @@ unsafe fn run_menus(menus: Menus, menu: Option<&Bound<'_, PyAny>>) -> PyResult<(
     result
 }
 
+/// What the Python code adds to the items of a view: colored dots (badges) and, for the list,
+/// columns it draws itself
+struct Hooks<'py> {
+    badges: Option<Bound<'py, PyAny>>,
+    extras: Vec<Extra<'py>>,
+}
+
+/// A column of a list drawn by a Python function
+struct Extra<'py> {
+    title: String,
+    width: f32,
+    cell: Bound<'py, PyAny>,
+}
+
+impl<'py> Hooks<'py> {
+    fn read(kwargs: Option<&Bound<'py, PyDict>>) -> PyResult<Self> {
+        let mut extras = vec![];
+        if let Some(columns) = kwarg::<Vec<(String, f32, Bound<'py, PyAny>)>>(kwargs, "extra_columns")? {
+            for (title, width, cell) in columns {
+                extras.push(Extra { title, width, cell });
+            }
+        }
+        Ok(Hooks {
+            badges: kwarg(kwargs, "badges")?,
+            extras,
+        })
+    }
+
+    /// The colors of the dots of an item, given by the badges function. An error is printed and
+    /// gives no dot, so the view is still drawn
+    fn badges(&self, path: &Path) -> Vec<Color32> {
+        let Some(function) = &self.badges else { return vec![] };
+        let result = function
+            .call1((to_str(path),))
+            .and_then(|colors| colors.extract::<Vec<Bound<'py, PyAny>>>().map_err(Into::into))
+            .and_then(|colors| colors.iter().map(extract_color).collect::<PyResult<Vec<_>>>());
+        result.unwrap_or_else(|err| {
+            err.display(function.py());
+            vec![]
+        })
+    }
+}
+
+/// The dots of the badges, from `left` to the right, centered on `y`
+fn paint_dots(ui: &egui::Ui, colors: &[Color32], left: f32, y: f32, size: f32) {
+    for (i, color) in colors.iter().enumerate() {
+        let center = pos2(left + size / 2.0 + i as f32 * (size + 3.0), y);
+        ui.painter().circle_filled(center, size / 2.0, *color);
+    }
+}
+
+fn dots_width(colors: &[Color32], size: f32) -> f32 {
+    if colors.is_empty() {
+        0.0
+    } else {
+        colors.len() as f32 * (size + 3.0) - 3.0
+    }
+}
+
 // list and icon views: one folder
 
 #[derive(Clone, Copy, PartialEq)]
@@ -277,6 +337,10 @@ pub(crate) struct FolderView {
     folder_changed: bool,
     /// the size of the icons of the icon view
     icon_size: f32,
+    /// the items shown instead of the folder, e.g. the result of a search
+    paths: Option<Vec<PathBuf>>,
+    /// takes the keyboard focus back at every frame, unless a text field is being edited
+    keep_focus: bool,
 }
 
 impl FolderView {
@@ -315,6 +379,8 @@ impl FolderView {
             band: None,
             folder_changed: false,
             icon_size: 48.0,
+            paths: None,
+            keep_focus: false,
         })
     }
 
@@ -340,6 +406,7 @@ impl FolderView {
     }
 
     fn entered(&mut self) {
+        self.paths = None;
         self.clear_selection();
         self.folder_changed = true;
     }
@@ -417,8 +484,24 @@ impl FolderView {
 
     /// The items of the folder as the view shows them: filtered and sorted
     fn entries(&mut self, ctx: &egui::Context) -> Vec<Entry> {
-        let folder = self.folder().to_path_buf();
-        let all = lock(&self.core).list(Some(ctx), &folder);
+        let all = match &self.paths {
+            None => {
+                let folder = self.folder().to_path_buf();
+                lock(&self.core).list(Some(ctx), &folder)
+            }
+            // given paths: each one from the listing of its folder, so it stays up to date too
+            Some(paths) => {
+                let mut core = lock(&self.core);
+                let mut found = vec![];
+                for path in paths {
+                    let Some(parent) = path.parent() else { continue };
+                    if let Some(e) = core.list(Some(ctx), parent).iter().find(|e| &e.path == path) {
+                        found.push(e.clone());
+                    }
+                }
+                Arc::new(found)
+            }
+        };
         // what was removed from the disk is no longer selected
         let present: HashSet<&Path> = all.iter().map(|e| e.path.as_path()).collect();
         self.selected.retain(|p| present.contains(p.as_path()));
@@ -527,10 +610,18 @@ impl FolderView {
     }
 }
 
+/// A column of the list: one of the columns of the view, or one drawn by Python (its index in
+/// the extra columns)
+#[derive(Clone, Copy, PartialEq)]
+enum Column {
+    Sort(SortBy),
+    Extra(usize),
+}
+
 /// How the items are placed: rows of a list or tiles of a grid
 enum Shape {
     List {
-        columns: Vec<(SortBy, f32)>,
+        columns: Vec<(Column, f32)>,
         headers: [String; 4],
         date_format: String,
         row_height: f32,
@@ -582,20 +673,22 @@ impl Shape {
 }
 
 /// The columns of a list that fit the width: the name takes the rest
-fn list_columns(wanted: &[SortBy], width: f32) -> Vec<(SortBy, f32)> {
-    let width_of = |c: SortBy| match c {
-        SortBy::Name => 0.0,
-        SortBy::Modified => 150.0,
-        SortBy::Size => 80.0,
-        SortBy::Kind => 130.0,
+fn list_columns(wanted: &[Column], extras: &[Extra<'_>], width: f32) -> Vec<(Column, f32)> {
+    let width_of = |c: Column| match c {
+        Column::Sort(SortBy::Name) => 0.0,
+        Column::Sort(SortBy::Modified) => 150.0,
+        Column::Sort(SortBy::Size) => 80.0,
+        Column::Sort(SortBy::Kind) => 130.0,
+        Column::Extra(i) => extras[i].width,
     };
-    let mut others: Vec<SortBy> = wanted.iter().copied().filter(|c| *c != SortBy::Name).collect();
+    let mut others: Vec<Column> =
+        wanted.iter().copied().filter(|c| *c != Column::Sort(SortBy::Name)).collect();
     // the last columns go first when the window is narrow
     while !others.is_empty() && width - others.iter().map(|c| width_of(*c)).sum::<f32>() < 160.0 {
         others.pop();
     }
     let name = width - others.iter().map(|c| width_of(*c)).sum::<f32>();
-    std::iter::once((SortBy::Name, name))
+    std::iter::once((Column::Sort(SortBy::Name), name))
         .chain(others.into_iter().map(|c| (c, width_of(c))))
         .collect()
 }
@@ -611,29 +704,36 @@ fn paint_sort_arrow(ui: &egui::Ui, at: Pos2, ascending: bool, color: Color32) {
 }
 
 /// The header of a list: a click on a column sorts by it, a second click reverses the order
-fn list_header(ui: &mut egui::Ui, view: &mut FolderView, shape: &Shape, id: Id) {
+fn list_header(ui: &mut egui::Ui, view: &mut FolderView, shape: &Shape, hooks: &Hooks<'_>, id: Id) {
     let Shape::List { columns, headers, row_height, .. } = shape else { return };
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), *row_height), Sense::hover());
     let mut x = rect.left();
     for (i, (column, width)) in columns.iter().enumerate() {
         let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(*width, rect.height()));
         x += width;
+        let sort = match column {
+            Column::Sort(sort) => Some(*sort),
+            Column::Extra(_) => None, // a column of Python does not sort
+        };
         let response = ui.interact(cell, id.with(("header", i)), Sense::click());
-        if response.clicked() {
-            if view.sort_by == *column {
+        if let (true, Some(sort)) = (response.clicked(), sort) {
+            if view.sort_by == sort {
                 view.ascending = !view.ascending;
             } else {
-                view.sort_by = *column;
+                view.sort_by = sort;
                 view.ascending = true;
             }
         }
-        let active = view.sort_by == *column;
-        let color = if active || response.hovered() {
+        let active = sort == Some(view.sort_by);
+        let color = if active || (response.hovered() && sort.is_some()) {
             ui.visuals().strong_text_color()
         } else {
             ui.visuals().weak_text_color()
         };
-        let text = &headers[*column as usize];
+        let text = match column {
+            Column::Sort(sort) => &headers[*sort as usize],
+            Column::Extra(k) => &hooks.extras[*k].title,
+        };
         let galley = truncated(ui, text, width - 26.0, Some(color));
         let pos = pos2(cell.left() + 8.0, cell.center().y - galley.size().y / 2.0);
         let text_right = pos.x + galley.size().x;
@@ -656,19 +756,47 @@ fn list_header(ui: &mut egui::Ui, view: &mut FolderView, shape: &Shape, id: Id) 
     );
 }
 
-fn paint_list_row(ui: &egui::Ui, e: &Entry, rect: Rect, shape: &Shape, text_color: Option<Color32>) {
+#[allow(clippy::too_many_arguments)]
+fn paint_list_row(
+    ui: &mut egui::Ui,
+    e: &Entry,
+    rect: Rect,
+    shape: &Shape,
+    hooks: &Hooks<'_>,
+    badges: &[Color32],
+    text_color: Option<Color32>,
+) {
     let Shape::List { columns, date_format, .. } = shape else { return };
     let mut x = rect.left();
     for (column, width) in columns {
         let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(*width, rect.height()));
         x += width;
+        let column = match column {
+            Column::Sort(sort) => *sort,
+            Column::Extra(k) => {
+                // drawn by Python in a ui of the size of the cell
+                let mut cell_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(cell.shrink2(vec2(8.0, 0.0)))
+                        .layout(egui::Layout::left_to_right(Align::Center)),
+                );
+                cell_ui.shrink_clip_rect(cell);
+                let _ = unsafe { run_nested_call(&mut cell_ui, &hooks.extras[*k].cell, (to_str(&e.path),)) };
+                continue;
+            }
+        };
         match column {
             SortBy::Name => {
                 let side = 16.0;
                 let icon = Rect::from_center_size(pos2(cell.left() + 8.0 + side / 2.0, cell.center().y), vec2(side, side));
                 paint_icon(ui, e, icon);
                 let left = icon.right() + 6.0;
-                let galley = truncated(ui, &e.name, cell.right() - left - 6.0, text_color);
+                // the badges at the right end of the name
+                let dots = dots_width(badges, 9.0);
+                if dots > 0.0 {
+                    paint_dots(ui, badges, cell.right() - 8.0 - dots, cell.center().y, 9.0);
+                }
+                let galley = truncated(ui, &e.name, cell.right() - left - 6.0 - dots - if dots > 0.0 { 8.0 } else { 0.0 }, text_color);
                 let color = text_color.unwrap_or(ui.visuals().text_color());
                 ui.painter().galley(pos2(left, cell.center().y - galley.size().y / 2.0), galley, color);
             }
@@ -681,7 +809,7 @@ fn paint_list_row(ui: &egui::Ui, e: &Entry, rect: Rect, shape: &Shape, text_colo
                 };
                 let color = text_color.unwrap_or(ui.visuals().weak_text_color());
                 let galley = truncated(ui, &text, width - 16.0, Some(color));
-                let left = if *other == SortBy::Size {
+                let left = if other == SortBy::Size {
                     cell.right() - 8.0 - galley.size().x // numbers are right aligned
                 } else {
                     cell.left() + 8.0
@@ -692,7 +820,8 @@ fn paint_list_row(ui: &egui::Ui, e: &Entry, rect: Rect, shape: &Shape, text_colo
     }
 }
 
-fn paint_tile(ui: &egui::Ui, e: &Entry, rect: Rect, icon: f32, selected: bool, hovered: bool, focused: bool) {
+#[allow(clippy::too_many_arguments)]
+fn paint_tile(ui: &egui::Ui, e: &Entry, rect: Rect, icon: f32, badges: &[Color32], selected: bool, hovered: bool, focused: bool) {
     let icon_rect = Rect::from_center_size(pos2(rect.center().x, rect.top() + 6.0 + icon / 2.0), vec2(icon, icon));
     if selected {
         ui.painter().rect_filled(icon_rect.expand(4.0), 6.0, ui.visuals().text_color().gamma_multiply(0.12));
@@ -700,6 +829,8 @@ fn paint_tile(ui: &egui::Ui, e: &Entry, rect: Rect, icon: f32, selected: bool, h
         ui.painter().rect_filled(rect.shrink(2.0), 6.0, ui.visuals().widgets.hovered.weak_bg_fill.gamma_multiply(0.5));
     }
     paint_icon(ui, e, icon_rect);
+    // the badges on the top left corner of the icon
+    paint_dots(ui, badges, icon_rect.left() + 2.0, icon_rect.top() + 2.0 + 4.5, 9.0);
 
     let (fill, selected_text) = selection_colors(ui, focused);
     let color = if selected { selected_text } else { ui.visuals().text_color() };
@@ -718,7 +849,7 @@ fn paint_tile(ui: &egui::Ui, e: &Entry, rect: Rect, icon: f32, selected: bool, h
 }
 
 /// Draws a list or icon view. Returns the context menus to open once the view is released
-fn draw_folder(ui: &mut egui::Ui, view: &mut FolderView, mut shape: Shape, has_menu: bool) -> Menus {
+fn draw_folder(ui: &mut egui::Ui, view: &mut FolderView, mut shape: Shape, hooks: &Hooks<'_>, has_menu: bool) -> Menus {
     let id = ui.make_persistent_id(&view.id);
     let ctx = ui.ctx().clone();
     view.activated.clear();
@@ -736,20 +867,21 @@ fn draw_folder(ui: &mut egui::Ui, view: &mut FolderView, mut shape: Shape, has_m
         };
     }
     if let Shape::List { columns, .. } = &mut shape {
-        let wanted: Vec<SortBy> = columns.iter().map(|(c, _)| *c).collect();
-        *columns = list_columns(&wanted, width);
+        let wanted: Vec<Column> = columns.iter().map(|(c, _)| *c).collect();
+        *columns = list_columns(&wanted, &hooks.extras, width);
     }
 
     match view.focus.take() {
         Some(true) => ui.memory_mut(|m| m.request_focus(id)),
         Some(false) => ui.memory_mut(|m| m.surrender_focus(id)),
+        None if view.keep_focus && !ui.ctx().text_edit_focused() => ui.memory_mut(|m| m.request_focus(id)),
         None => {}
     }
     lock_arrows(ui, id);
     let focused = ui.memory(|m| m.has_focus(id));
 
     if matches!(shape, Shape::List { .. }) {
-        list_header(ui, view, &shape, id);
+        list_header(ui, view, &shape, hooks, id);
     }
     // the header may have changed the order
     let entries = view.entries(&ctx);
@@ -811,6 +943,7 @@ fn draw_folder(ui: &mut egui::Ui, view: &mut FolderView, mut shape: Shape, has_m
                     view.activate(vec![e.path.clone()]);
                 }
                 let selected = view.selected.contains(&e.path);
+                let badges = hooks.badges(&e.path);
                 if has_menu {
                     let paths = if selected { view.selected.iter().map(|p| to_str(p)).collect() } else { vec![to_str(&e.path)] };
                     menus.push((response.clone(), paths));
@@ -824,10 +957,10 @@ fn draw_folder(ui: &mut egui::Ui, view: &mut FolderView, mut shape: Shape, has_m
                         } else if i % 2 == 1 {
                             ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
                         }
-                        paint_list_row(ui, e, rect, &shape, selected.then_some(selected_text));
+                        paint_list_row(ui, e, rect, &shape, hooks, &badges, selected.then_some(selected_text));
                     }
                     Shape::Icons { icon, .. } => {
-                        paint_tile(ui, e, rect, *icon, selected, response.hovered(), focused);
+                        paint_tile(ui, e, rect, *icon, &badges, selected, response.hovered(), focused);
                     }
                 }
             }
@@ -1060,6 +1193,40 @@ macro_rules! folder_view_methods {
             fn focus(&mut self, focused: bool) {
                 self.view.focus = Some(focused);
             }
+
+            /// If True, the view takes back the keyboard focus at every frame when another widget
+            /// holds it, except a text field being edited. For an app where the view is the part of
+            /// the window the keyboard acts on
+            #[getter]
+            fn get_keep_focus(&self) -> bool {
+                self.view.keep_focus
+            }
+
+            #[setter]
+            fn set_keep_focus(&mut self, keep: bool) {
+                self.view.keep_focus = keep;
+            }
+
+            /// Scrolls just enough to show an item, at the next frame
+            fn scroll_to(&mut self, path: PathBuf) {
+                self.view.scroll_to = Some(expand(&path));
+            }
+
+            /// The items shown instead of the items of the folder, e.g. the result of a search or
+            /// the files of a tag, from any folders. They stay up to date like a folder. None (the
+            /// default) shows the folder; entering a folder sets it back to None
+            #[getter]
+            fn get_paths(&self) -> Option<Vec<String>> {
+                self.view.paths.as_ref().map(|paths| paths.iter().map(|p| to_str(p)).collect())
+            }
+
+            #[setter]
+            fn set_paths(&mut self, paths: Option<Vec<PathBuf>>) {
+                let paths: Option<Vec<PathBuf>> = paths.map(|paths| paths.iter().map(|p| expand(p)).collect());
+                if paths != self.view.paths {
+                    self.view.paths = paths;
+                }
+            }
         }
     };
 }
@@ -1170,14 +1337,16 @@ folder_view_methods!(FileIconView,
     }
 );
 
-fn parse_columns(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<(SortBy, f32)>> {
+fn parse_columns(kwargs: Option<&Bound<'_, PyDict>>, extras: usize) -> PyResult<Vec<(Column, f32)>> {
     let names = kwarg::<Vec<String>>(kwargs, "columns")?
         .unwrap_or_else(|| vec!["name".into(), "modified".into(), "size".into(), "kind".into()]);
-    let mut columns = vec![(SortBy::Name, 0.0)];
+    // the name, the columns of Python, then the others
+    let mut columns = vec![(Column::Sort(SortBy::Name), 0.0)];
+    columns.extend((0..extras).map(|i| (Column::Extra(i), 0.0)));
     for name in names {
         let column = SortBy::parse(&name)?;
         if column != SortBy::Name {
-            columns.push((column, 0.0));
+            columns.push((Column::Sort(column), 0.0));
         }
     }
     Ok(columns)
@@ -1199,6 +1368,13 @@ fn parse_columns(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<(SortBy, f3
 ///     date_format (str): format of the dates, like strftime. Default is "%d %b %Y %H:%M"
 ///
 ///     row_height (float): height of a row. Default is 24
+///
+///     extra_columns (list[tuple[str, float, callable]]): columns of your own, after the name: a
+///         title, a width and a function called with the path of the row inside the cell, to draw
+///         it with the usual widgets. They do not sort
+///
+///     badges (callable): called with the path of each row shown, returns a list of colors drawn
+///         as dots at the right end of the name, e.g. the tags of a file
 ///
 ///     context_menu (callable): called with the list of paths concerned on a right click, inside a
 ///         menu: the selection if the item clicked is in it, else the item clicked, and [] on the
@@ -1224,15 +1400,16 @@ unsafe fn file_list_view(view: &Bound<'_, FileListView>, kwargs: Option<&Bound<'
         Some(_) => return Err(PyValueError::new_err("headers needs 4 titles: name, modified, size and kind")),
         None => ["Name".into(), "Date Modified".into(), "Size".into(), "Kind".into()],
     };
+    let hooks = Hooks::read(kwargs)?;
     let shape = Shape::List {
-        columns: parse_columns(kwargs)?,
+        columns: parse_columns(kwargs, hooks.extras.len())?,
         headers,
         date_format: kwarg::<String>(kwargs, "date_format")?.unwrap_or_else(|| "%d %b %Y %H:%M".into()),
         row_height: kwarg::<f32>(kwargs, "row_height")?.unwrap_or(24.0),
     };
     let menu = kwarg::<Bound<'_, PyAny>>(kwargs, "context_menu")?;
     let ui = current_ui(&UI)?;
-    let menus = draw_folder(ui, &mut view.borrow_mut().view, shape, menu.is_some());
+    let menus = draw_folder(ui, &mut view.borrow_mut().view, shape, &hooks, menu.is_some());
     run_menus(menus, menu.as_ref())
 }
 
@@ -1244,6 +1421,9 @@ unsafe fn file_list_view(view: &Bound<'_, FileListView>, kwargs: Option<&Bound<'
 ///
 /// Keyword args:
 ///     icon_size (float): size of the icons, instead of view.icon_size. Default is view.icon_size
+///
+///     badges (callable): called with the path of each tile shown, returns a list of colors drawn
+///         as dots on the top left corner of the icon, e.g. the tags of a file
 ///
 ///     context_menu (callable): called with the list of paths concerned on a right click, inside a
 ///         menu, like for file_list_view
@@ -1258,6 +1438,7 @@ unsafe fn file_list_view(view: &Bound<'_, FileListView>, kwargs: Option<&Bound<'
 #[pyo3(signature = (view, **kwargs))]
 unsafe fn file_icon_view(view: &Bound<'_, FileIconView>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
     let size = view.borrow().view.icon_size;
+    let hooks = Hooks::read(kwargs)?;
     let shape = Shape::Icons {
         icon: kwarg::<f32>(kwargs, "icon_size")?.unwrap_or(size).clamp(ICON_SIZES.0, ICON_SIZES.1),
         tile: Vec2Size { w: 1.0, h: 1.0 },
@@ -1265,7 +1446,7 @@ unsafe fn file_icon_view(view: &Bound<'_, FileIconView>, kwargs: Option<&Bound<'
     };
     let menu = kwarg::<Bound<'_, PyAny>>(kwargs, "context_menu")?;
     let ui = current_ui(&UI)?;
-    let menus = draw_folder(ui, &mut view.borrow_mut().view, shape, menu.is_some());
+    let menus = draw_folder(ui, &mut view.borrow_mut().view, shape, &hooks, menu.is_some());
     run_menus(menus, menu.as_ref())
 }
 
@@ -1296,6 +1477,10 @@ unsafe fn file_icon_view(view: &Bound<'_, FileIconView>, kwargs: Option<&Bound<'
 ///
 ///     dirs_first (bool): folders before files. Default is True
 ///
+///     activatable_dirs (bool): a double click or Enter on a folder activates it, like a file (see
+///         activated). Its arrow still opens and closes it. Default is False: a double click opens
+///         and closes the folder
+///
 /// Usage::
 ///
 ///     tree = FileTreeView("tree", "~/projects/app")
@@ -1325,13 +1510,17 @@ pub(crate) struct FileTreeView {
     known_dirs: HashSet<String>,
     activated: Vec<String>,
     focus: Option<bool>,
+    keep_focus: bool,
     scroll_to: Option<String>,
+    activatable_dirs: bool,
+    /// the items at the top instead of the items of the root
+    paths: Option<Vec<PathBuf>>,
 }
 
 #[pymethods]
 impl FileTreeView {
     #[new]
-    #[pyo3(signature = (id, root=PathBuf::from("."), watcher=None, show_hidden=false, multi_select=true, show_root=false, dirs_first=true))]
+    #[pyo3(signature = (id, root=PathBuf::from("."), watcher=None, show_hidden=false, multi_select=true, show_root=false, dirs_first=true, activatable_dirs=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         id: String,
@@ -1341,6 +1530,7 @@ impl FileTreeView {
         multi_select: bool,
         show_root: bool,
         dirs_first: bool,
+        activatable_dirs: bool,
     ) -> Self {
         FileTreeView {
             id,
@@ -1359,7 +1549,10 @@ impl FileTreeView {
             known_dirs: HashSet::new(),
             activated: vec![],
             focus: None,
+            keep_focus: false,
             scroll_to: None,
+            activatable_dirs,
+            paths: None,
         }
     }
 
@@ -1386,7 +1579,8 @@ impl FileTreeView {
         self.pending_selected = Some(self.selected.clone());
     }
 
-    /// Paths of the files activated during the last frame by a double click or Enter
+    /// Paths activated during the last frame by a double click or Enter: files, and folders when
+    /// activatable_dirs is True
     #[getter]
     fn activated(&self) -> Vec<String> {
         self.activated.clone()
@@ -1469,12 +1663,43 @@ impl FileTreeView {
     fn focus(&mut self, focused: bool) {
         self.focus = Some(focused);
     }
+
+    /// If True, the tree takes back the keyboard focus at every frame when another widget holds
+    /// it, except a text field being edited
+    #[getter]
+    fn get_keep_focus(&self) -> bool {
+        self.keep_focus
+    }
+
+    #[setter]
+    fn set_keep_focus(&mut self, keep: bool) {
+        self.keep_focus = keep;
+    }
+
+    /// Scrolls just enough to show an item, at the next frame. It has to be shown: its folders open
+    fn scroll_to(&mut self, path: PathBuf) {
+        self.scroll_to = Some(to_str(&expand(&path)));
+    }
+
+    /// The items at the top of the tree instead of the items of the root, e.g. the result of a
+    /// search or the files of a tag, from any folders; their folders still open. None (the
+    /// default) shows the root
+    #[getter]
+    fn get_paths(&self) -> Option<Vec<String>> {
+        self.paths.as_ref().map(|paths| paths.iter().map(|p| to_str(p)).collect())
+    }
+
+    #[setter]
+    fn set_paths(&mut self, paths: Option<Vec<PathBuf>>) {
+        self.paths = paths.map(|paths| paths.iter().map(|p| expand(p)).collect());
+    }
 }
 
 /// A node of the tree, built before it is drawn
 struct Node {
     entry: Entry,
     id: String,
+    badges: Vec<Color32>,
     /// the items of an open folder
     children: Option<Vec<Node>>,
 }
@@ -1528,7 +1753,27 @@ fn tree_node(
     } else {
         None
     };
-    Node { entry, id, children }
+    Node { entry, id, badges: vec![], children }
+}
+
+/// The badges of the nodes, asked to Python once the view is free again
+fn fill_badges(nodes: &mut [Node], hooks: &Hooks<'_>) {
+    for node in nodes {
+        node.badges = hooks.badges(&node.entry.path);
+        if let Some(children) = &mut node.children {
+            fill_badges(children, hooks);
+        }
+    }
+}
+
+fn with_tree_badges(b: NodeBuilder<'_, String>, badges: Vec<Color32>) -> NodeBuilder<'_, String> {
+    if badges.is_empty() {
+        return b;
+    }
+    b.accessory(move |ui| {
+        let (rect, _) = ui.allocate_exact_size(vec2(dots_width(&badges, 9.0) + 4.0, 12.0), Sense::hover());
+        paint_dots(ui, &badges, rect.left(), rect.center().y, 9.0);
+    })
 }
 
 fn with_tree_icon(b: NodeBuilder<'_, String>, uri: Option<String>, side: f32) -> NodeBuilder<'_, String> {
@@ -1541,7 +1786,13 @@ fn with_tree_icon(b: NodeBuilder<'_, String>, uri: Option<String>, side: f32) ->
     }
 }
 
-fn add_tree_nodes(builder: &mut TreeViewBuilder<'_, String>, nodes: &[Node], ctx: &egui::Context, open_by_default: bool) {
+fn add_tree_nodes(
+    builder: &mut TreeViewBuilder<'_, String>,
+    nodes: &[Node],
+    ctx: &egui::Context,
+    open_by_default: bool,
+    activatable_dirs: bool,
+) {
     for node in nodes {
         let side = 16.0;
         let uri = icon_uri(ctx, &node.id, side);
@@ -1549,16 +1800,16 @@ fn add_tree_nodes(builder: &mut TreeViewBuilder<'_, String>, nodes: &[Node], ctx
             Some(_) => node.entry.name.clone(),
             None => format!("{}  {}", emoji(&node.entry), node.entry.name),
         };
-        let with_icon = |b| with_tree_icon(b, uri.clone(), side);
+        let with_icon = |b| with_tree_badges(with_tree_icon(b, uri.clone(), side), node.badges.clone());
         if node.entry.is_dir {
             builder.node(with_icon(
                 NodeBuilder::dir(node.id.clone())
                     .default_open(open_by_default)
-                    .activatable(false)
+                    .activatable(activatable_dirs)
                     .label(label),
             ));
             if let Some(children) = &node.children {
-                add_tree_nodes(builder, children, ctx, false);
+                add_tree_nodes(builder, children, ctx, false, activatable_dirs);
             }
             builder.close_dir();
         } else {
@@ -1594,6 +1845,9 @@ fn tree_row(nodes: &[Node], id: &str, row: &mut usize) -> Option<usize> {
 ///         right-clicked, inside a menu: the selection if the item clicked is in it, else the item
 ///         clicked. Build the menu in it
 ///
+///     badges (callable): called with the path of each item, returns a list of colors drawn as
+///         dots at the right end of its row, e.g. the tags of a file
+///
 /// Example::
 ///
 ///     tree = FileTreeView("tree", "~/projects")
@@ -1605,10 +1859,11 @@ fn tree_row(nodes: &[Node], id: &str, row: &mut usize) -> Option<usize> {
 #[pyo3(signature = (view, **kwargs))]
 unsafe fn file_tree_view(py: Python<'_>, view: &Bound<'_, FileTreeView>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
     let menu = kwarg::<Bound<'_, PyAny>>(kwargs, "context_menu")?;
+    let hooks = Hooks::read(kwargs)?;
     let ui = current_ui(&UI)?;
     let ctx = ui.ctx().clone();
 
-    let (mut state, nodes, id, multi_select, show_root, scroll_to) = {
+    let (mut state, mut nodes, id, multi_select, show_root, activatable_dirs, scroll_to) = {
         let mut v = view.borrow_mut();
         let mut state = std::mem::take(&mut v.state);
         for (path, open) in std::mem::take(&mut v.pending_open) {
@@ -1630,7 +1885,18 @@ unsafe fn file_tree_view(py: Python<'_>, view: &Bound<'_, FileTreeView>, kwargs:
         let core = v.core.clone();
         let mut core = lock(&core);
         let mut known = std::mem::take(&mut v.known_dirs);
-        let nodes = if v.show_root {
+        let nodes = if let Some(paths) = v.paths.clone() {
+            // given paths at the top: each one from the listing of its folder
+            let mut top = vec![];
+            for path in &paths {
+                let Some(parent) = path.parent() else { continue };
+                let found = core.list(Some(&ctx), parent).iter().find(|e| &e.path == path).cloned();
+                if let Some(e) = found.filter(|e| options.show_hidden || !e.hidden) {
+                    top.push(tree_node(&mut core, &ctx, e, &options, &state, &mut known, false));
+                }
+            }
+            top
+        } else if v.show_root {
             match entry(&v.root) {
                 Some(root) => vec![tree_node(&mut core, &ctx, root, &options, &state, &mut known, true)],
                 None => vec![],
@@ -1643,10 +1909,12 @@ unsafe fn file_tree_view(py: Python<'_>, view: &Bound<'_, FileTreeView>, kwargs:
         match v.focus.take() {
             Some(true) => ui.memory_mut(|m| m.request_focus(id)),
             Some(false) => ui.memory_mut(|m| m.surrender_focus(id)),
+            None if v.keep_focus && !ctx.text_edit_focused() => ui.memory_mut(|m| m.request_focus(id)),
             None => {}
         }
-        (state, nodes, id, v.multi_select, v.show_root, v.scroll_to.take())
+        (state, nodes, id, v.multi_select, v.show_root, v.activatable_dirs, v.scroll_to.take())
     };
+    fill_badges(&mut nodes, &hooks);
 
     if let Some(target) = &scroll_to {
         // the rows out of the window are not drawn, so the row is placed from its index
@@ -1667,7 +1935,7 @@ unsafe fn file_tree_view(py: Python<'_>, view: &Bound<'_, FileTreeView>, kwargs:
             menu_result = run_nested_call(menu_ui, menu_fun, (ids.clone(),));
         });
     }
-    let (_, actions) = tree.show_state(ui, &mut state, |builder| add_tree_nodes(builder, &nodes, &ctx, show_root));
+    let (_, actions) = tree.show_state(ui, &mut state, |builder| add_tree_nodes(builder, &nodes, &ctx, show_root, activatable_dirs));
 
     let mut v = view.borrow_mut();
     v.activated.clear();
