@@ -65,6 +65,7 @@ from pyegui import (
     frame,
     grid,
     horizontal,
+    horizontal_centered,
     image,
     image_button_clicked,
     interactive,
@@ -125,7 +126,7 @@ EDGE = (
     1,
     (127, 127, 127, 60),
 )  # the one outline of every box: the same width and color
-GAP = 4  # between two boxes, and (with the 8 points the window already leaves) around the window
+GAP = 4  # between two boxes
 H = GAP // 2  # each box gives half of the gap on the sides that face another box
 TREE, LIST, ICONS = 0, 1, 2  # the order of the segmented control of the toolbar
 LIGHT, DARK, SYSTEM = 0, 1, 2
@@ -269,6 +270,14 @@ GLASS_SURFACES = [
     ("windows", "Fenêtres et menus", 0.8),
     ("background", "Fond (entre les boîtes)", 0.2),
 ]
+# the unified layout, like the window of the Claude app: the sidebar runs along the whole height of
+# the window, without gap nor corners; it and the body are cut in three bands of the same heights
+# (top, content, bottom) whose lines continue from one to the other. False: the boxes of before
+unified = Bool(True)
+unified_gap = Float(8)  # the gap of the unified layout, around the dock and between its panes
+TOP_H, BOTTOM_H = 52, 44  # the heights of the top and bottom bands, in the sidebar and the body
+CLEAR = (0, 0, 0, 0)
+LINE = (1, (127, 127, 127, 70))  # the lines between the bands and between the sidebar and the body
 sidebar_gap = Float(GAP)  # the space between the sidebar and the rest, set in the Transparence pane
 # the margins outside the sidebar (0 sticks it to the border of the window) and its corners
 sidebar_box = {"left": Float(0), "top": Float(0), "bottom": Float(0), "rounding": Float(12)}
@@ -477,12 +486,27 @@ def transparency_pane():
             slider_float(value, low, high, "")
             end_row()
 
-    small("Barre latérale")
-    grid("sidebar_box", sidebar_rows, num_columns=2, spacing=(12, 6))
-    if small_button_clicked("Barre latérale collée (tout à 0)"):
-        sidebar_gap.value = 0
-        for value in sidebar_box.values():
-            value.value = 0
+    before_layout = unified.value
+    toggle_value(unified, "Disposition unifiée (comme l'app Claude)")
+    if unified.value != before_layout:
+        apply_gaps()
+    if unified.value:
+
+        def gap_row():
+            weak("Écart")
+            before = unified_gap.value
+            slider_float(unified_gap, 0, 24, "")
+            if unified_gap.value != before:
+                apply_gaps()
+
+        horizontal(gap_row)
+    else:  # the boxes: their gaps and corners
+        small("Barre latérale")
+        grid("sidebar_box", sidebar_rows, num_columns=2, spacing=(12, 6))
+        if small_button_clicked("Barre latérale collée (tout à 0)"):
+            sidebar_gap.value = 0
+            for value in sidebar_box.values():
+                value.value = 0
     add_space(4)
 
     if MACOS:
@@ -706,7 +730,16 @@ def apply_style():
     else:
         ctx.set_accent(ACCENTS[accent_name.value])
     dock.set_style(tab_style="pill" if pill_tabs.value else "classic")
+    apply_gaps()
     ctx.set_backdrop_blur(backdrop_blur.value)  # macOS only, added to the blur of the backdrop
+
+
+def apply_gaps():
+    """the unified layout lays out the gaps itself: no margin in the central panel, and the gap of
+    the dock between its panes; the boxes layout keeps the margin of egui and its own gap"""
+    ctx = context[0]
+    ctx.set_central_margin(0 if unified.value else 8)
+    dock.set_style(gap_width=unified_gap.value if unified.value else GAP)
 
 
 def snapshot():
@@ -722,6 +755,8 @@ def snapshot():
         "terminals": True,  # the layout has the dock of the terminals
         "transparency_pane": True,
         "sidebar_gap": sidebar_gap.value,
+        "unified_gap": unified_gap.value,
+        "unified": unified.value,
         "sidebar_box": {name: value.value for name, value in sidebar_box.items()},
         "backdrop_blur": backdrop_blur.value,  # and the Transparence pane next to them
         "accent": accent_name.value,
@@ -745,6 +780,8 @@ def restore(saved):
     glass.value = saved.get("glass", glass.value)
     glass_opacity.value = float(saved.get("glass_opacity", glass_opacity.value))
     sidebar_gap.value = float(saved.get("sidebar_gap", sidebar_gap.value))
+    unified.value = bool(saved.get("unified", unified.value))
+    unified_gap.value = float(saved.get("unified_gap", unified_gap.value))
     box = saved.get("sidebar_box")
     for name, value in (box.items() if isinstance(box, dict) else []):
         if name in sidebar_box and isinstance(value, (int, float)):
@@ -1298,12 +1335,75 @@ def locations():
 
 
 def sidebar():
+    if unified.value:
+        # three bands, the top and bottom ones as high as the bars of the body; without lines in the
+        # sidebar, only the body has them
+        top_panel("sidebar_top", sidebar_top, exact_size=TOP_H, resizable=False, fill=CLEAR, inner_margin=(12, 0, 12, 0), show_separator_line=False)
+        bottom_panel("sidebar_bottom", sidebar_bottom, exact_size=BOTTOM_H, resizable=False, fill=CLEAR, inner_margin=(12, 0, 12, 0), show_separator_line=False)
+        frame(lambda: scroll_area_vertical(sidebar_content), inner_margin=12)
+        return
     if MACOS:
         add_space(26)  # the window buttons are over the sidebar
     scroll_area_vertical(
         sidebar_content
     )  # many tags: the sidebar scrolls instead of overflowing
 
+
+def settings_menu():
+    """the menu of the settings button: theme, glass, accent, tabs, layout, and the Transparence pane"""
+
+    def choices(title, items, current_value, setter):
+        small(title)
+        for value, label in items:
+            if selectable_label_clicked(current_value == value, label):
+                setter(value)
+                close_menu()
+
+    choices("Thème", [(LIGHT, "Clair"), (DARK, "Sombre"), (SYSTEM, "Système")], theme.value, set_theme)
+    separator()
+    choices("Vitre", [(NO_GLASS, "Sans vitre"), (PARTIAL, "Partielle"), (FULL, "Complète")], glass.value, set_glass)
+    separator()
+    accents = {"Blue": "Bleu", "Violet": "Violet", "Green": "Vert", "Orange": "Orange"}
+    choices("Accent", list(accents.items()), accent_name.value, set_accent_name)
+    separator()
+    choices("Onglets", [(False, "Classiques"), (True, "En pilule")], pill_tabs.value, set_tab_style)
+    separator()
+    before_layout = unified.value
+    toggle_value(unified, "Disposition unifiée")
+    if unified.value != before_layout:
+        apply_gaps()
+    if button_clicked("Transparence…"):
+        # the pane of the fine settings, brought back if it was closed
+        if TRANSPARENCY not in dock.titles:
+            dock.add_pane(DockPane(TRANSPARENCY, ALL_PANES[TRANSPARENCY], closable=True))
+        show_dock.value = True
+        close_menu()
+
+
+def sidebar_top():
+    """the top band of the sidebar: the window buttons, then the settings at the right"""
+
+    def row():
+        add_space(max(available_width() - 28, 0))  # at the right of the band
+        menu_image_button(svg("gear"), settings_menu, size=16, tint=icon_tint())
+
+    horizontal_centered(row)
+
+
+def sidebar_bottom():
+    """the bottom band of the sidebar: the drive of the folder shown and its free space"""
+    try:
+        anchor = Path(current().anchor or "/")
+        usage = shutil.disk_usage(anchor)
+    except OSError:
+        return
+
+    def row():
+        image(svg("drive"), size=16, tint=icon_tint())
+        strong(place_name(anchor))
+        weak(f"{usage.free / 1e9:.0f} Go libres")
+
+    horizontal_centered(row)
 
 def sidebar_content():
     accent = ACCENTS[accent_name.value]
@@ -1334,13 +1434,7 @@ def sidebar_content():
         place(icon_name, name, path)
     add_space(12)
 
-    def tags_title():
-        weak("Tags")
-        add_space(max(available_width() - 40, 4))
-        if image_button_clicked(svg("gear"), size=14, tint=icon_tint()):
-            tag_manager_open.value = True
-
-    horizontal(tags_title)
+    weak("Tags")  # managed from the Tags pane and the tag picker ("Gérer les tags…")
     all_tags = tag_data()["all"]
     with_children = {t["parent"] for t in all_tags}
     hidden_below = None  # depth of the folded tag whose children are being skipped
@@ -1378,6 +1472,11 @@ def sidebar_content():
 
 def svg(name):
     return (ICONS_DIR / f"{name}.svg").as_uri()
+
+
+def toggle_tint(on):
+    """the icon of a toggle button: white on the accent color when on, like a selected item"""
+    return (255, 255, 255) if on else icon_tint()
 
 
 def icon_tint():
@@ -1510,14 +1609,15 @@ def toolbar():
                 set_width(search_width)
                 text_edit_singleline(search, hint_text="Search")
 
-            vertical(search_field)
+            # in the unified layout the field is centered in the band like the other buttons
+            (horizontal_centered if unified.value else vertical)(search_field)
         measure(
             "panes",
             lambda: menu_image_button(svg("panes"), panes_menu, size=18, tint=tint),
             last=True,
         )
 
-    horizontal(bar)
+    (horizontal_centered if unified.value else horizontal)(bar)
 
 
 # views
@@ -2289,7 +2389,7 @@ def path_menu(path):
 def path_bar():
     def crumbs():
         if image_button_clicked(
-            svg("sidebar"), size=16, tint=icon_tint(), selected=show_sidebar.value
+            svg("sidebar"), size=16, tint=toggle_tint(show_sidebar.value), selected=show_sidebar.value
         ):
             show_sidebar.value = not show_sidebar.value
         add_space(4)
@@ -2315,13 +2415,13 @@ def path_bar():
                 weak(text)
                 add_space(4)
             if image_button_clicked(
-                svg("dock"), size=16, tint=icon_tint(), selected=show_dock.value
+                svg("dock"), size=16, tint=toggle_tint(show_dock.value), selected=show_dock.value
             ):
                 show_dock.value = not show_dock.value
 
         measure(key, right, last=True)
 
-    horizontal(crumbs)
+    (horizontal_centered if unified.value else horizontal)(crumbs)
 
 
 def in_zone(zone, ui):
@@ -2467,6 +2567,50 @@ def update_func(ctx):
     action_keys()
     follow_in_shell()
     edge = EDGE
+    if unified.value:
+        unified_layout()
+    else:
+        boxes_layout(edge)
+    if renaming.value:
+        rename_dialog()
+    if palette_open.value:
+        action_palette()
+    if tag_picker_open.value:
+        tag_picker()
+    if tag_manager_open.value:
+        tag_manager()
+    ctx.save_state(snapshot())  # written to disk by pyegui, see persist_id below
+
+
+def unified_layout():
+    """like the Claude app: a sidebar along the whole height, a line between it and the body, and in
+    both a top band, a content and a bottom band whose lines continue from one to the other"""
+    left_panel(
+        "sidebar",
+        in_zone("sidebar", sidebar),
+        expanded=show_sidebar,
+        default_size=240,
+        min_size=200,
+        inner_margin=0,
+        outer_margin=0,
+        rounding=0,
+        show_separator_line=True,  # the line between the sidebar and the body
+        separator_stroke=LINE,
+    )
+    top_panel("toolbar", toolbar, exact_size=TOP_H, resizable=False, inner_margin=(8, 0, 12, 0), rounding=0, show_separator_line=True, separator_stroke=LINE)
+    bottom_panel("path", path_bar, exact_size=BOTTOM_H, resizable=False, inner_margin=(8, 0, 12, 0), rounding=0, show_separator_line=True, separator_stroke=LINE)
+    # one gap everywhere: a side of the dock that faces a neighbour without gap (the line of the
+    # sidebar, of the bars, the border of the window) gets the whole gap, and the dock puts the same
+    # gap between its panes. The central panel adds no margin of its own (set_central_margin)
+    gap = unified_gap.value
+    frame(
+        lambda: dock_area(dock) if show_dock.value else frame(central_ui, stroke=EDGE, rounding=6),
+        outer_margin=gap,
+    )
+
+
+def boxes_layout(edge):
+    """the layout of before: the sidebar, the bars and the dock are rounded boxes with gaps"""
     # the gap between the sidebar and the boxes on its right: each side gives its half, up to H
     left_gap = min(H, sidebar_gap.value)
     left_panel(
@@ -2514,15 +2658,6 @@ def update_func(ctx):
         ),  # what the dock draws around its panes
         outer_margin=(left_gap, H, 0, H),  # the same as the bars: the panes line up with them
     )
-    if renaming.value:
-        rename_dialog()
-    if palette_open.value:
-        action_palette()
-    if tag_picker_open.value:
-        tag_picker()
-    if tag_manager_open.value:
-        tag_manager()
-    ctx.save_state(snapshot())  # written to disk by pyegui, see persist_id below
 
 
 if __name__ == "__main__":
