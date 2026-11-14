@@ -83,6 +83,16 @@ THEMES = [
      "`DockPane` or anywhere else. Create it once, outside the update function; the shell starts "
      "the first time it is drawn.",
      ["Terminal", "terminal"]),
+    ("files", "File views and watcher",
+     "Ready made views of the disk: `FileListView` (a list with sortable columns), `FileIconView` "
+     "(a grid of icons) and `FileTreeView` (a tree of folders), drawn by `file_list_view`, "
+     "`file_icon_view` and `file_tree_view`. They are state objects: create them once, outside the "
+     "update function. Their folders are listed through a `FileWatcher` that the system notifies of "
+     "every change, so a file created, renamed, modified or removed by any program shows at the "
+     "next frame. Give the same watcher to all the views of an app. `path_breadcrumb` and "
+     "`path_combo` show where a folder is and go to one of its ancestors.",
+     ["FileListView", "FileIconView", "FileTreeView", "file_list_view", "file_icon_view",
+      "file_tree_view", "FileWatcher", "path_breadcrumb", "path_combo"]),
     ("images", "Images and icons",
      "Images are given as uri: `file://` followed by a path, or an `http(s)` url. SVG icons stay "
      "sharp at any size and can be tinted.",
