@@ -129,6 +129,13 @@ fn replace_mermaid<'a>(ctx: &egui::Context, text: &'a str, theme: &str) -> Cow<'
 ///     mermaid_theme (str): theme of the mermaid diagrams: "default", "dark", "forest", "neutral" or "base".
 ///     Default follows the theme of the app
 ///
+///     open_links (bool): a click on a link opens it in the browser. False: it is only returned, so
+///         that the app opens it itself, e.g. a link to another markdown file. Default is True
+///
+/// Returns:
+///     str | None: the url of the link clicked during this frame, as written in the text (a relative
+///     path stays relative), else None
+///
 /// Code blocks marked ``mermaid`` are drawn as diagrams: flowcharts, sequence, class, state, ER, pie,
 /// gantt and more. A diagram that does not parse shows its error and its source.
 ///
@@ -153,7 +160,7 @@ fn replace_mermaid<'a>(ctx: &egui::Context, text: &'a str, theme: &str) -> Cow<'
 ///     ''')
 #[pyfunction]
 #[pyo3(signature = (text, **kwargs))]
-unsafe fn markdown(text: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+unsafe fn markdown(text: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Option<String>> {
     let ui = current_ui(&UI)?;
     let mut viewer = CommonMarkViewer::new();
 
@@ -181,6 +188,9 @@ unsafe fn markdown(text: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<(
 
     let scrollable = kwarg::<bool>(kwargs, "scrollable")?.unwrap_or(false);
     let id = kwarg::<String>(kwargs, "id")?.unwrap_or_else(|| "markdown".to_string());
+    let open_links = kwarg::<bool>(kwargs, "open_links")?.unwrap_or(true);
+    // a click on a link asks egui to open its url: the commands added while the text is drawn
+    let before = ui.ctx().output(|o| o.commands.len());
 
     CACHE.with_borrow_mut(|cache| {
         if scrollable {
@@ -195,7 +205,23 @@ unsafe fn markdown(text: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<(
             viewer.show(ui, cache, text);
         }
     });
-    Ok(())
+
+    let mut clicked = None;
+    ui.ctx().output_mut(|o| {
+        let mut index = 0;
+        o.commands.retain(|command| {
+            let added = index >= before;
+            index += 1;
+            match command {
+                egui::OutputCommand::OpenUrl(open) if added => {
+                    clicked.get_or_insert_with(|| open.url.clone());
+                    open_links // kept for the browser, or left to the app
+                }
+                _ => true,
+            }
+        });
+    });
+    Ok(clicked)
 }
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

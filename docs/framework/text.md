@@ -188,6 +188,12 @@ Shows markdown text: headings, lists, tables, quotes, code blocks, links and ima
 - `default_width` (int): width of the text, default is the available width
 - `mermaid_theme` (str): theme of the mermaid diagrams: "default", "dark", "forest", "neutral" or "base".
 - Default follows the theme of the app
+- `open_links` (bool): a click on a link opens it in the browser. False: it is only returned, so that the app opens it itself, e.g. a link to another markdown file. Default is True
+
+**Returns**
+
+- str | None: the url of the link clicked during this frame, as written in the text (a relative
+- path stays relative), else None
 
 Code blocks marked ``mermaid`` are drawn as diagrams: flowcharts, sequence, class, state, ER, pie,
 gantt and more. A diagram that does not parse shows its error and its source.
