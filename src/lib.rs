@@ -20,6 +20,7 @@ mod layout;
 mod dock;
 mod files;
 mod markdown;
+mod path;
 mod plot;
 mod style;
 mod table;
@@ -2619,5 +2620,6 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     terminal::register(m)?;
     watcher::register(m)?;
     files::register(m)?;
+    path::register(m)?;
     Ok(())
 }

@@ -275,6 +275,8 @@ pub(crate) struct FolderView {
     /// where the rubber band started, from the top left of the content, and the selection kept
     band: Option<(Pos2, Vec<PathBuf>)>,
     folder_changed: bool,
+    /// the size of the icons of the icon view
+    icon_size: f32,
 }
 
 impl FolderView {
@@ -312,6 +314,7 @@ impl FolderView {
             typed_at: None,
             band: None,
             folder_changed: false,
+            icon_size: 48.0,
         })
     }
 
@@ -899,9 +902,11 @@ fn rubber_band(
 
 /// The methods the list and the icon views share
 macro_rules! folder_view_methods {
-    ($class:ident) => {
+    ($class:ident $(, $($extra:tt)*)?) => {
         #[pymethods]
         impl $class {
+            $($($extra)*)?
+
             #[new]
             #[pyo3(signature = (id, folder=PathBuf::from("."), watcher=None, show_hidden=false, multi_select=true, navigate=true, dirs_first=true, sort_by="name"))]
             #[allow(clippy::too_many_arguments)]
@@ -1129,12 +1134,17 @@ folder_view_methods!(FileListView);
 ///
 ///     sort_by (str): "name", "modified", "size" or "kind". Default is "name"
 ///
+/// The size of the grid is icon_size, which can change at any time, e.g. from a slider.
+///
 /// Usage::
 ///
 ///     icons = FileIconView("icons", "~/Pictures")
+///     size = Float(64)
 ///
 ///     def update_func(ctx):
-///         file_icon_view(icons, icon_size=64)
+///         slider_float(size, 16, 256, "")
+///         icons.icon_size = size.value  # the grid follows the slider
+///         file_icon_view(icons)
 ///         if icons.selected:
 ///             label(f"{len(icons.selected)} selected")
 #[pyclass]
@@ -1142,7 +1152,23 @@ pub(crate) struct FileIconView {
     view: FolderView,
 }
 
-folder_view_methods!(FileIconView);
+/// The smallest and the largest icons of an icon view
+const ICON_SIZES: (f32, f32) = (16.0, 256.0);
+
+folder_view_methods!(FileIconView,
+    /// The size of the icons, between 16 and 256: the tiles of the grid grow with it, so there
+    /// are fewer of them on a row. Default is 48. Give it a slider to let the user choose, like the
+    /// Finder. The icon_size keyword arg of file_icon_view wins over it
+    #[getter]
+    fn get_icon_size(&self) -> f32 {
+        self.view.icon_size
+    }
+
+    #[setter]
+    fn set_icon_size(&mut self, size: f32) {
+        self.view.icon_size = size.clamp(ICON_SIZES.0, ICON_SIZES.1);
+    }
+);
 
 fn parse_columns(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<(SortBy, f32)>> {
     let names = kwarg::<Vec<String>>(kwargs, "columns")?
@@ -1217,7 +1243,7 @@ unsafe fn file_list_view(view: &Bound<'_, FileListView>, kwargs: Option<&Bound<'
 ///     view (FileIconView): the state of the view
 ///
 /// Keyword args:
-///     icon_size (float): size of the icons. Default is 48
+///     icon_size (float): size of the icons, instead of view.icon_size. Default is view.icon_size
 ///
 ///     context_menu (callable): called with the list of paths concerned on a right click, inside a
 ///         menu, like for file_list_view
@@ -1227,12 +1253,13 @@ unsafe fn file_list_view(view: &Bound<'_, FileListView>, kwargs: Option<&Bound<'
 ///     icons = FileIconView("icons", "~/Desktop")
 ///
 ///     def update_func(ctx):
-///         file_icon_view(icons, icon_size=64)
+///         file_icon_view(icons)
 #[pyfunction]
 #[pyo3(signature = (view, **kwargs))]
 unsafe fn file_icon_view(view: &Bound<'_, FileIconView>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+    let size = view.borrow().view.icon_size;
     let shape = Shape::Icons {
-        icon: kwarg::<f32>(kwargs, "icon_size")?.unwrap_or(48.0).clamp(8.0, 512.0),
+        icon: kwarg::<f32>(kwargs, "icon_size")?.unwrap_or(size).clamp(ICON_SIZES.0, ICON_SIZES.1),
         tile: Vec2Size { w: 1.0, h: 1.0 },
         per_row: 1,
     };

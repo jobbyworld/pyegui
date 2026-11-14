@@ -1,6 +1,6 @@
 # File views and watcher
 
-Ready made views of the disk: `FileListView` (a list with sortable columns), `FileIconView` (a grid of icons) and `FileTreeView` (a tree of folders), drawn by `file_list_view`, `file_icon_view` and `file_tree_view`. They are state objects: create them once, outside the update function. Their folders are listed through a `FileWatcher` that the system notifies of every change, so a file created, renamed, modified or removed by any program shows at the next frame. Give the same watcher to all the views of an app.
+Ready made views of the disk: `FileListView` (a list with sortable columns), `FileIconView` (a grid of icons) and `FileTreeView` (a tree of folders), drawn by `file_list_view`, `file_icon_view` and `file_tree_view`. They are state objects: create them once, outside the update function. Their folders are listed through a `FileWatcher` that the system notifies of every change, so a file created, renamed, modified or removed by any program shows at the next frame. Give the same watcher to all the views of an app. `path_breadcrumb` and `path_combo` show where a folder is and go to one of its ancestors.
 
 ## `FileListView`
 
@@ -90,13 +90,18 @@ arrows move in the grid) and the folder is watched while it is shown.
 - `dirs_first` (bool): folders before files. Default is True
 - `sort_by` (str): "name", "modified", "size" or "kind". Default is "name"
 
+The size of the grid is icon_size, which can change at any time, e.g. from a slider.
+
 **Usage:**
 
 ```python
 icons = FileIconView("icons", "~/Pictures")
+size = Float(64)
 
 def update_func(ctx):
-    file_icon_view(icons, icon_size=64)
+    slider_float(size, 16, 256, "")
+    icons.icon_size = size.value  # the grid follows the slider
+    file_icon_view(icons)
     if icons.selected:
         label(f"{len(icons.selected)} selected")
 ```
@@ -122,6 +127,11 @@ def update_func(ctx):
 
 - `FileIconView.forward()` (method): Goes forward in the history, after back
 - `FileIconView.go(folder)` (method): Enters a folder, kept in the history of back and forward
+- `FileIconView.icon_size` (attribute): The size of the icons, between 16 and 256: the tiles of the grid grow with it, so there
+
+  are fewer of them on a row. Default is 48. Give it a slider to let the user choose, like the
+  Finder. The icon_size keyword arg of file_icon_view wins over it
+
 - `FileIconView.items` (attribute): Paths of the items shown at the last frame, in their order
 - `FileIconView.reveal(path)` (method): Selects one item and scrolls to it
 - `FileIconView.selected` (attribute): Paths of the selected items, in the order they were selected
@@ -223,7 +233,7 @@ the ui and scrolls; only the visible tiles are drawn.
 
 **Keyword args**
 
-- `icon_size` (float): size of the icons. Default is 48
+- `icon_size` (float): size of the icons, instead of view.icon_size. Default is view.icon_size
 - `context_menu` (callable): called with the list of paths concerned on a right click, inside a menu, like for file_list_view
 
 **Example:**
@@ -232,7 +242,7 @@ the ui and scrolls; only the visible tiles are drawn.
 icons = FileIconView("icons", "~/Desktop")
 
 def update_func(ctx):
-    file_icon_view(icons, icon_size=64)
+    file_icon_view(icons)
 ```
 
 
@@ -323,3 +333,82 @@ def update_func(ctx):
 
 - `FileWatcher.watch(path)` (method): Watches a file or a folder until unwatch, even when no view shows it. See changed
 - `FileWatcher.watched` (attribute): The paths watched now, the ones the views show included
+
+## `path_breadcrumb(path, **kwargs)`
+
+Shows a path as the list of its folders from the root, like the path bar of the Finder: the
+icon and the name of each one, separated by ›. When the room is missing the ancestors are
+shortened, the longest names first, and the mouse over a shortened one shows it in full. A
+click on a folder returns its path.
+
+**Args**
+
+- `path` (str): the path shown, ~ is the home folder
+
+**Keyword args**
+
+- `root` (str): the first folder shown, an ancestor of path. Default is the root of the disk
+- `max_width` (float): the widest it can be. Default is the width left in the ui
+- `icons` (bool): shows the icons of the folders. Default is True
+- `id` (str): id of the breadcrumb, needed if there are several in the same ui
+- `on_click` (callable): called with the path of the element clicked
+- `on_double_click` (callable): called with the path of the element double clicked (after on_click for its first click)
+- `on_right_click` (callable): called with the path of the element right-clicked
+- `on_middle_click` (callable): called with the path of the element clicked with the middle button, e.g. to open it in a new tab
+- `context_menu` (callable): called with the path of the element right-clicked, inside a menu: build the menu in it, like for file_list_view
+
+Returns the path clicked during this frame, None otherwise: the return value or on_click,
+whichever reads better.
+
+**Example:**
+
+```python
+folder = Str(str(Path.home() / "Documents"))
+
+def update_func(ctx):
+    clicked = path_breadcrumb(folder.value)
+    if clicked:
+        folder.value = clicked
+
+    # or with functions, and a menu on right click
+    def menu(path):
+        if button_clicked("Copy path"):
+            ctx.copy_text(path)
+            close_menu()
+
+    path_breadcrumb(folder.value, on_double_click=open_folder, context_menu=menu)
+```
+
+
+## `path_combo(path, **kwargs)`
+
+Shows the name of a folder as a title that is also a menu of its ancestors, like the title of
+a Finder window: under the mouse the icon of the folder and the arrow of a menu show, and a
+click opens the list of the folder and its ancestors up to the root, the folder checked.
+Choosing one returns its path.
+
+**Args**
+
+- `path` (str): the folder shown, ~ is the home folder
+
+**Keyword args**
+
+- `size` (float): size of the text. Default is 17
+- `root` (str): the last ancestor of the list. Default is the root of the disk
+- `id` (str): id of the combo, needed if there are several in the same ui
+- `on_right_click` (callable): called with the path of the folder when the title is right-clicked
+- `on_middle_click` (callable): called with the path of the folder when the title is clicked with the middle button
+- `context_menu` (callable): called with the path of the folder on a right click on the title, inside a menu: build the menu in it. A left click opens the list of the ancestors
+
+Returns the path chosen in the list during this frame, None otherwise.
+
+**Example:**
+
+```python
+folder = Str(str(Path.home() / "Documents"))
+
+def update_func(ctx):
+    chosen = path_combo(folder.value)
+    if chosen:
+        folder.value = chosen
+```

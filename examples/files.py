@@ -29,6 +29,7 @@ preview_state = {"path": None, "text": ""}
 last_tree_selection = []
 events = deque(maxlen=500)  # the events of the watcher, newest first
 paused = Bool(False)
+icon_size = Float(56)  # the size of the grid of the icon view, set by the slider of the bottom bar
 
 
 def shown():
@@ -64,7 +65,10 @@ def toolbar():
         add_enabled(view_now.can_go_forward, lambda: button_clicked("▶") and view_now.forward())
         if button_clicked("⬆"):
             view_now.up()
-        label(Path(view_now.folder).name or view_now.folder, truncate=True)
+        # the name of the folder; under the mouse a menu of its ancestors, like a Finder window
+        chosen = path_combo(view_now.folder, context_menu=path_menu)
+        if chosen:
+            view_now.go(chosen)
         if segmented_control(view, [(None, "List"), (None, "Icons")]):
             # the other view takes the place of the first one, at the same folder and selection
             shown().go(other().folder)
@@ -75,12 +79,53 @@ def toolbar():
     horizontal_centered(row)
 
 
+def path_menu(path):
+    """the menu of an element of the path, on a right click on the breadcrumb or the title"""
+    strong(Path(path).name or path)
+    separator()
+    if button_clicked("Open"):
+        go_or_reveal(path)
+        close_menu()
+    if button_clicked("Show in Finder" if sys.platform == "darwin" else "Show in the file manager"):
+        target = path if Path(path).is_dir() else str(Path(path).parent)
+        context[0].open_url(Path(target).as_uri())
+        close_menu()
+    if button_clicked("Copy path"):
+        context[0].copy_text(path)
+        close_menu()
+
+
+def go_or_reveal(path):
+    """a folder is entered, a file is selected in its folder"""
+    if Path(path).is_dir():
+        shown().go(path)
+    else:
+        shown().go(str(Path(path).parent))
+        shown().reveal(path)
+
+
 def statusbar():
-    view_now = shown()
-    small(
-        f"{len(view_now.items)} items, {len(view_now.selected)} selected"
-        f"  ·  {len(watcher.watched)} folders watched, {watcher.version} changes seen"
-    )
+    def row():
+        view_now = shown()
+        # the path bar of the Finder: the selected item if there is one, else the folder
+        selected = view_now.selected
+        path = selected[-1] if len(selected) == 1 else view_now.folder
+        right = 130 + (200 if view.value == 1 else 0)  # the room of what is at the right
+        path_breadcrumb(
+            path,
+            max_width=available_width() - right,
+            on_click=go_or_reveal,  # the events of the mouse call functions
+            context_menu=path_menu,  # a right click opens this menu
+        )
+        add_space(max(available_width() - right, 8))
+        small(f"{len(view_now.items)} items, {len(selected)} selected")
+        if view.value == 1:
+            # the size of the grid, at the right like in the Finder
+            add_space(12)
+            small("Size")
+            slider_float(icon_size, 16, 256, "")
+
+    horizontal_centered(row)
 
 
 # the middle: the files, and a preview of the selected one
@@ -103,7 +148,8 @@ def files_pane():
     if view.value == 0:
         file_list_view(files, context_menu=menu)
     else:
-        file_icon_view(icons, icon_size=56, context_menu=menu)
+        icons.icon_size = icon_size.value
+        file_icon_view(icons, context_menu=menu)
     for path in view_now.activated:
         context[0].open_url(Path(path).as_uri())  # a file opens with its app
 
@@ -158,7 +204,7 @@ def log_pane():
         if button_clicked("Clear"):
             events.clear()
         checkbox(paused, "Pause")
-        weak(f"{len(events)} events")
+        weak(f"{len(events)} events · {len(watcher.watched)} folders watched")
 
     horizontal(bar)
     separator()
