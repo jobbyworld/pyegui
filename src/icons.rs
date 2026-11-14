@@ -8,7 +8,7 @@ use std::hash::{Hash, Hasher};
 use image::ImageEncoder;
 use pyo3::prelude::*;
 
-use crate::{current_ui, UI};
+use crate::{panel_parent_ui, UI};
 
 thread_local! {
     // (path, pixels) -> uri of the icon given to the image loaders, None if there is no icon
@@ -143,7 +143,7 @@ fn native_icon_png(_path: &str, _pixels: u32) -> Option<Vec<u8>> {
 #[pyfunction]
 #[pyo3(signature = (path, size=32.0))]
 unsafe fn file_icon(path: &str, size: f32) -> PyResult<Option<String>> {
-    let ctx = current_ui(&UI)?.ctx().clone();
+    let ctx = panel_parent_ui(&UI)?.ctx().clone(); // no widget: the central panel is not opened
     Ok(icon_uri(&ctx, path, size))
 }
 

@@ -38,6 +38,8 @@ static mut APP_MUTEX: Mutex<()> = Mutex::new(());
 static mut CENTRAL: Option<Box<CentralPanelState>> = None;
 // backdrop requested by Context.set_backdrop, applied on the next frame
 static PENDING_BACKDROP: Mutex<Option<String>> = Mutex::new(None);
+/// the inner margin of the central panel given to set_central_margin, else the 8 points of egui
+static CENTRAL_MARGIN: Mutex<Option<egui::Margin>> = Mutex::new(None);
 /// the radius given to set_backdrop_blur, applied to the window at the next frame
 static PENDING_BLUR: Mutex<Option<u32>> = Mutex::new(None);
 // the state of the app as JSON: what was saved by the last run, and what the next save writes
@@ -471,6 +473,27 @@ impl Context {
         *PENDING_BACKDROP
             .lock()
             .map_err(|_| PyRuntimeError::new_err("backdrop lock is poisoned"))? = Some(backdrop);
+        self.0.request_repaint();
+        Ok(())
+    }
+
+    /// Sets the inner margin of the central panel: the space between the panels and what is drawn
+    /// after them. Default is the 8 points of egui; 0 lets the content (a Dock for example) reach
+    /// the panels, and its own margins decide the gaps. Not used with layout rules, which lay out
+    /// the central area themselves.
+    ///
+    /// Args:
+    ///     margin (float | tuple[float, float, float, float]): the four sides, or (left, top, right, bottom)
+    ///
+    /// Example::
+    ///
+    ///     ctx.set_central_margin(0)
+    ///     frame(lambda: dock_area(dock), outer_margin=6)  # the same gap on every side
+    fn set_central_margin(&self, margin: &Bound<'_, PyAny>) -> PyResult<()> {
+        let margin = style::extract_margin(margin, "margin")?;
+        *CENTRAL_MARGIN
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("margin lock is poisoned"))? = Some(margin);
         self.0.request_repaint();
         Ok(())
     }
@@ -1719,6 +1742,11 @@ unsafe fn open_central_panel(ui_stack: &mut Vec<*mut egui::Ui>) -> PyResult<()> 
     let ruled = layout::central_frame(root.style());
     let has_rules = ruled.is_some();
     let mut frame = ruled.unwrap_or_else(|| egui::Frame::central_panel(root.style()));
+    if !has_rules {
+        if let Some(margin) = CENTRAL_MARGIN.lock().ok().and_then(|m| *m) {
+            frame = frame.inner_margin(margin);
+        }
+    }
     // partial glass: the content is an almost opaque sheet over the glass (with layout rules, the
     // background of the rules decides instead)
     if !has_rules {

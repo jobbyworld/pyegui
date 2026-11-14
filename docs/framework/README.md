@@ -14,4 +14,4 @@ Generated from the docstrings by `scripts/gen_framework_docs.py`, do not edit by
 - [File views and watcher](files.md): 9 names
 - [Images and icons](images.md): 4 names
 - [Keyboard, mouse and drag and drop](interaction.md): 10 names
-- [Themes, colors, fonts and glass](styling.md): 13 names
+- [Themes, colors, fonts and glass](styling.md): 14 names
