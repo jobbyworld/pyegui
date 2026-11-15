@@ -11,7 +11,19 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::style::{kwarg_color, kwarg_stroke};
+use crate::style::Surface;
 use crate::{current_ui, kwarg, run_nested_call, run_nested_update_func, UI};
+
+/// a dock was drawn this frame, see take_drawn
+static DRAWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// True when a dock was drawn since the last call: the central area under it may be left clear
+pub(crate) fn take_drawn() -> bool {
+    DRAWN.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// with layout rules, the share of the opacity of the sheet kept by the tabs that are not active
+const INACTIVE_SHEET: f32 = 0.45;
 
 /// A pane of a Dock, shown as a tab.
 ///
@@ -25,9 +37,17 @@ use crate::{current_ui, kwarg, run_nested_call, run_nested_update_func, UI};
 ///     hide_tab (bool): hide the tab bar while the pane is alone in its tabs, like hide_single_tab_bar
 ///         but for this pane only. The tab is back as soon as another pane joins it. Default is False
 ///
+///     sheet (color): with layout rules, the background of the pane and of its tab, instead of the
+///         sheet of the dock. Its opacity is multiplied by the opacity of the dock. Default is the
+///         sheet of the dock
+///
+///     central (bool): the pane is the main content of the window: with set_glass_style(dock=...),
+///         it is filled with the level of the central area, not the one of the dock. Default is False
+///
 /// Usage::
 ///
 ///     DockPane("Editor", editor_ui, closable=True)
+///     DockPane("Notes", notes_ui, sheet=(59, 130, 246, 200))  # a blue sheet, with layout rules
 #[pyclass]
 pub(crate) struct DockPane {
     #[pyo3(get, set)]
@@ -38,19 +58,31 @@ pub(crate) struct DockPane {
     closable: bool,
     #[pyo3(get, set)]
     hide_tab: bool,
+    sheet: Option<Color32>,
+    #[pyo3(get, set)]
+    central: bool,
 }
 
 #[pymethods]
 impl DockPane {
     #[new]
-    #[pyo3(signature = (title, update_func, closable=false, hide_tab=false))]
-    fn new(title: String, update_func: Py<PyAny>, closable: bool, hide_tab: bool) -> Self {
-        DockPane {
+    #[pyo3(signature = (title, update_func, closable=false, hide_tab=false, sheet=None, central=false))]
+    fn new(
+        title: String,
+        update_func: Py<PyAny>,
+        closable: bool,
+        hide_tab: bool,
+        sheet: Option<Bound<'_, PyAny>>,
+        central: bool,
+    ) -> PyResult<Self> {
+        Ok(DockPane {
             title,
             update_func,
             closable,
             hide_tab,
-        }
+            central,
+            sheet: sheet.map(|color| crate::style::extract_color(&color)).transpose()?,
+        })
     }
 }
 
@@ -85,6 +117,8 @@ struct Pane {
     update_func: Py<PyAny>,
     closable: bool,
     hide_tab: bool,
+    sheet: Option<Color32>,
+    central: bool,
 }
 
 impl Pane {
@@ -94,6 +128,8 @@ impl Pane {
             update_func: self.update_func.clone_ref(py),
             closable: self.closable,
             hide_tab: self.hide_tab,
+            sheet: self.sheet,
+            central: self.central,
         }
     }
 
@@ -103,6 +139,8 @@ impl Pane {
             update_func: pane.update_func.clone_ref(py),
             closable: pane.closable,
             hide_tab: pane.hide_tab,
+            sheet: pane.sheet,
+            central: pane.central,
         }
     }
 }
@@ -437,8 +475,10 @@ impl DockStyle {
     }
 
     fn active_tab_stroke(&self, visuals: &Visuals) -> Stroke {
-        self.active_tab_stroke
-            .unwrap_or(Stroke::new(1.0, Self::border(visuals, 45)))
+        self.active_tab_stroke.unwrap_or_else(|| match crate::layout::dock_rules() {
+            Some(rules) => rules.outline,
+            None => Stroke::new(1.0, Self::border(visuals, 45)),
+        })
     }
 
     fn pane_stroke(&self, visuals: &Visuals) -> Stroke {
@@ -675,14 +715,63 @@ fn tab_outline(rect: egui::Rect, radius: f32) -> Vec<egui::Pos2> {
     points
 }
 
+/// The sheet of a pane: its own color if it has one, else the one of the dock, with the opacity of the dock
+fn pane_sheet(rules: &crate::layout::Resolved, own: Option<Color32>, visuals: &Visuals) -> Color32 {
+    own.map_or_else(|| rules.sheet_fill(visuals), |color| color.gamma_multiply(rules.opacity))
+}
+
+/// With set_glass_style(dock=...), the fill of a pane on its own: the level of the central area
+/// for a central pane, of the dock for the others. None when the panes are not filled
+fn glass_pane_fill(central: bool, visuals: &Visuals) -> Option<Color32> {
+    if !crate::style::dock_filled() {
+        return None;
+    }
+    let surface = if central { Surface::Central } else { Surface::Dock };
+    Some(
+        crate::style::surface_fill(visuals, surface)
+            .or_else(|| crate::style::sheet_fill(visuals))
+            .unwrap_or(visuals.panel_fill),
+    )
+}
+
+/// The fill of a tile that is a pane, filled on its own with set_glass_style(dock=...)
+fn glass_tile_fill(tiles: &Tiles<Pane>, tile_id: TileId, visuals: &Visuals) -> Option<Color32> {
+    match tiles.get(tile_id) {
+        Some(Tile::Pane(pane)) => glass_pane_fill(pane.central, visuals),
+        _ => None,
+    }
+}
+
+/// The top corners of a pane that stay square: those under a tab of its bar (active or not), so
+/// the tabs sit on a straight edge, without a notch of background between a tab and a rounded corner
+fn square_top_corners(tabs: &[egui::Rect], rect: egui::Rect, radius: f32) -> (bool, bool) {
+    let mut square = (false, false);
+    for tab in tabs {
+        let on_top = tab.width() > 0.0 && tab.max.y <= rect.min.y + 0.5 && tab.max.y >= rect.min.y - 2.0;
+        if !on_top || tab.right() <= rect.left() || tab.left() >= rect.right() {
+            continue;
+        }
+        square.0 |= tab.left() - rect.left() < radius;
+        square.1 |= rect.right() - tab.right() < radius;
+    }
+    square
+}
+
 /// Points of the outline of a pane: rounded corners, open at the top under its tab.
 /// A top corner touched by the tab stays square, so the sides of the tab continue into the pane
-fn pane_outline(rect: egui::Rect, tab: Option<egui::Rect>, radius: f32, width: f32) -> Vec<egui::Pos2> {
+fn pane_outline(
+    rect: egui::Rect,
+    tab: Option<egui::Rect>,
+    square: (bool, bool),
+    radius: f32,
+    width: f32,
+) -> Vec<egui::Pos2> {
     use egui::pos2;
     use std::f32::consts::FRAC_PI_2;
 
     let inner = rect.shrink(width / 2.0);
-    let radius = radius.min(inner.width() / 2.0).min(inner.height() / 2.0).max(0.0);
+    // concentric with the corners of the fill (radius on rect): the line is half its width inside
+    let radius = (radius - width / 2.0).min(inner.width() / 2.0).min(inner.height() / 2.0).max(0.0);
     let steps = (radius.ceil() as usize).clamp(1, 8);
     let mut points = vec![];
 
@@ -702,8 +791,8 @@ fn pane_outline(rect: egui::Rect, tab: Option<egui::Rect>, radius: f32, width: f
         ),
         None => (inner.center().x, inner.center().x),
     };
-    let round_left = gap_left - inner.left() >= radius;
-    let round_right = inner.right() - gap_right >= radius;
+    let round_left = !square.0 && gap_left - inner.left() >= radius;
+    let round_right = !square.1 && inner.right() - gap_right >= radius;
 
     if tab.is_some() {
         // joins the bottom of the left side of the tab
@@ -1003,6 +1092,8 @@ struct Behavior<'py> {
     hidden_alone: std::collections::HashSet<TileId>,
     /// Rect of the tab of the active panes, where their outline is open
     active_tabs: std::collections::HashMap<TileId, egui::Rect>,
+    /// every tab drawn this frame, active or not: a corner of a pane under a tab stays square
+    tab_rects: Vec<egui::Rect>,
 }
 
 impl Behavior<'_> {
@@ -1045,8 +1136,43 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
     fn pane_ui(&mut self, ui: &mut egui::Ui, tile_id: TileId, pane: &mut Pane) -> UiResponse {
         self.panes.insert(tile_id);
         let update_func = pane.update_func.bind(self.py).clone();
-        let margin = self.style.pane_margin.unwrap_or(6.0);
+        let margin = self
+            .style
+            .pane_margin
+            .unwrap_or_else(|| crate::layout::dock_rules().map_or(6.0, |rules| rules.inner_margin));
 
+        if let Some(rules) = crate::layout::dock_rules() {
+            // the pane is a box of the rules: filled with the opacity of the region, with its corners
+            let fill = pane_sheet(&rules, pane.sheet, ui.visuals());
+            let rect = ui.max_rect();
+            let radius = rules.rounding.round().clamp(0.0, 255.0) as u8;
+            // a top corner under a tab of the bar stays square, like in the outline
+            let (square_left, square_right) = square_top_corners(&self.tab_rects, rect, rules.rounding);
+            let corners = CornerRadius {
+                nw: if square_left { 0 } else { radius },
+                ne: if square_right { 0 } else { radius },
+                sw: radius,
+                se: radius,
+            };
+            ui.painter().rect_filled(rect, corners, fill);
+        } else {
+            // set_glass_style(dock=...): each pane is a piece of glass, rounded like its outline
+            if let Some(fill) = glass_pane_fill(pane.central, ui.visuals()) {
+                let visuals = ui.visuals();
+                let rect = ui.max_rect();
+                let radius = visuals.widgets.inactive.corner_radius.sw;
+                // a top corner under a tab of the bar stays square, like in the outline
+                let r = f32::from(radius);
+                let (square_left, square_right) = square_top_corners(&self.tab_rects, rect, r);
+                let corners = CornerRadius {
+                    nw: if square_left { 0 } else { radius },
+                    ne: if square_right { 0 } else { radius },
+                    sw: radius,
+                    se: radius,
+                };
+                ui.painter().rect_filled(rect, corners, fill);
+            }
+        }
         let result = egui::Frame::new()
             .inner_margin(margin)
             .show(ui, |ui| unsafe { run_nested_update_func(ui, update_func) })
@@ -1077,7 +1203,17 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         let font_id = TextStyle::Button.resolve(ui.style());
         let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, font_id);
 
-        let x_margin = self.tab_title_spacing(ui.visuals());
+        let x_margin = if self.style.pill {
+            self.tab_title_spacing(ui.visuals())
+        } else {
+            // the title keeps clear of the rounded corners and of the outline, however thick:
+            // with a large rounding or a thick outline it would touch the sides of the tab
+            let radius = crate::layout::dock_rules()
+                .map_or_else(|| f32::from(ui.visuals().widgets.inactive.corner_radius.nw), |rules| rules.rounding);
+            let stroke = self.tab_outline_stroke(ui.visuals(), tiles, tile_id, state).width;
+            let radius = radius.min(ui.available_height() / 2.0);
+            self.tab_title_spacing(ui.visuals()).max(radius * 0.6) + stroke
+        };
         let spacing = self.style.tab_spacing();
 
         let button_width = galley.size().x
@@ -1111,9 +1247,16 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
             self.active_tabs
                 .insert(tile_id, tab_rect.intersect(ui.clip_rect()));
         }
+        if !self.style.pill && !state.is_being_dragged {
+            self.tab_rects.push(tab_rect.intersect(ui.clip_rect()));
+        }
 
         // show a gap when dragged
         if ui.is_rect_visible(tab_rect) && !state.is_being_dragged {
+            let own_sheet = match tiles.get(tile_id) {
+                Some(Tile::Pane(pane)) => pane.sheet,
+                _ => None,
+            };
             let mut bg_color = self.tab_bg_color(ui.visuals(), tiles, tile_id, state);
             if !state.active && tab_response.hovered() {
                 bg_color = self
@@ -1121,6 +1264,10 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
                     .hovered_tab_fill
                     .unwrap_or(if self.style.pill {
                         ui.visuals().widgets.hovered.weak_bg_fill
+                    } else if let Some(rules) = crate::layout::dock_rules() {
+                        pane_sheet(&rules, own_sheet, ui.visuals()).gamma_multiply(0.5 * (1.0 + INACTIVE_SHEET))
+                    } else if let Some(fill) = glass_tile_fill(tiles, tile_id, ui.visuals()) {
+                        fill.gamma_multiply(0.5 * (1.0 + INACTIVE_SHEET))
                     } else {
                         DockStyle::inactive_tint(ui.visuals(), true)
                     });
@@ -1139,7 +1286,12 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
                 );
             } else {
                 // the radius of the theme, set with ctx.set_style(rounding=...)
-                let radius = ui.visuals().widgets.inactive.corner_radius.nw;
+                let radius = crate::layout::dock_rules().map_or(ui.visuals().widgets.inactive.corner_radius.nw, |rules| {
+                    rules.rounding.round().clamp(0.0, 255.0) as u8
+                });
+                // egui rounds a rectangle at most by half its smaller side: the outline uses the
+                // same radius, so a rounding larger than the tab keeps the fill and the line together
+                let radius = (f32::from(radius)).min(tab_rect.width() / 2.0).min(tab_rect.height() / 2.0).floor() as u8;
                 let corners = CornerRadius {
                     nw: radius,
                     ne: radius,
@@ -1150,7 +1302,12 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
                 if stroke.width > 0.0 {
                     // open at the bottom, so the tab connects with its pane
                     ui.painter().add(egui::Shape::line(
-                        tab_outline(tab_rect.shrink(stroke.width / 2.0), f32::from(radius)),
+                        // the line runs half its width inside the fill: its corners are concentric with
+                        // the ones of the fill, else the fill shows outside a thick outline
+                        tab_outline(
+                            tab_rect.shrink(stroke.width / 2.0),
+                            (f32::from(radius) - stroke.width / 2.0).max(0.0),
+                        ),
                         stroke,
                     ));
                 }
@@ -1242,7 +1399,8 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         if stroke.width <= 0.0 {
             return;
         }
-        let radius = f32::from(style.visuals.widgets.inactive.corner_radius.sw);
+        let radius = crate::layout::dock_rules()
+            .map_or_else(|| f32::from(style.visuals.widgets.inactive.corner_radius.sw), |rules| rules.rounding);
         let tab = self
             .active_tabs
             .get(&tile_id)
@@ -1254,7 +1412,7 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
             rect.expand2(egui::vec2(0.0, stroke.width)),
         );
         painter.add(egui::Shape::line(
-            pane_outline(rect, tab.copied(), radius, stroke.width),
+            pane_outline(rect, tab.copied(), square_top_corners(&self.tab_rects, rect, radius), radius, stroke.width),
             stroke,
         ));
     }
@@ -1271,14 +1429,23 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
     }
 
     fn gap_width(&self, _style: &egui::Style) -> f32 {
-        self.style.gap_width.unwrap_or(if self.style.glass { 6.0 } else { 1.0 })
+        self.style.gap_width.unwrap_or_else(|| match crate::layout::dock_rules() {
+            Some(rules) => rules.gap,
+            None => {
+                if self.style.glass {
+                    6.0
+                } else {
+                    1.0
+                }
+            }
+        })
     }
 
     fn resize_stroke(&self, style: &egui::Style, resize_state: ResizeState) -> Stroke {
         match (resize_state, self.style.resize_stroke) {
             (ResizeState::Idle, Some(stroke)) => stroke,
             // the gap stays see-through, the line only shows when hovered or dragged
-            (ResizeState::Idle, None) if self.style.glass => Stroke::NONE,
+            (ResizeState::Idle, None) if self.style.glass || crate::layout::dock_rules().is_some() => Stroke::NONE,
             (ResizeState::Idle, None) => Stroke::new(
                 self.gap_width(style),
                 style.visuals.widgets.noninteractive.bg_stroke.color,
@@ -1300,20 +1467,30 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
     fn tab_bg_color(
         &self,
         visuals: &Visuals,
-        _tiles: &Tiles<Pane>,
-        _tile_id: TileId,
+        tiles: &Tiles<Pane>,
+        tile_id: TileId,
         state: &TabState,
     ) -> Color32 {
+        let own = match tiles.get(tile_id) {
+            Some(Tile::Pane(pane)) => pane.sheet,
+            _ => None,
+        };
         match (state.active, self.style.pill) {
             // pill: the active tab is filled with the selection color, the others are bare
             (true, true) => self.style.active_tab_fill.unwrap_or(visuals.selection.bg_fill),
             (false, true) => self.style.inactive_tab_fill.unwrap_or(Color32::TRANSPARENT),
             // classic: the active tab has the background of its pane, the others are tinted
-            (true, false) => self.style.active_tab_fill.unwrap_or(Color32::TRANSPARENT),
-            (false, false) => self
-                .style
-                .inactive_tab_fill
-                .unwrap_or(DockStyle::inactive_tint(visuals, false)),
+            // with layout rules: the sheet of the pane, and a fainter one for the others
+            (true, false) => self.style.active_tab_fill.unwrap_or_else(|| match crate::layout::dock_rules() {
+                Some(rules) => pane_sheet(&rules, own, visuals),
+                // a pane filled with its glass level: its tab is the top of the same sheet
+                None => glass_tile_fill(tiles, tile_id, visuals).unwrap_or(Color32::TRANSPARENT),
+            }),
+            (false, false) => self.style.inactive_tab_fill.unwrap_or_else(|| match crate::layout::dock_rules() {
+                Some(rules) => pane_sheet(&rules, own, visuals).gamma_multiply(INACTIVE_SHEET),
+                None => glass_tile_fill(tiles, tile_id, visuals)
+                    .map_or_else(|| DockStyle::inactive_tint(visuals, false), |fill| fill.gamma_multiply(INACTIVE_SHEET)),
+            }),
         }
     }
 
@@ -1338,7 +1515,10 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         } else {
             self.style
                 .inactive_tab_stroke
-                .unwrap_or(Stroke::new(1.0, DockStyle::border(visuals, 25)))
+                .unwrap_or_else(|| match crate::layout::dock_rules() {
+                    Some(rules) => rules.outline,
+                    None => Stroke::new(1.0, DockStyle::border(visuals, 25)),
+                })
         }
     }
 
@@ -1394,6 +1574,7 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
 ///         dock_area(dock)
 #[pyfunction]
 unsafe fn dock_area(py: Python<'_>, dock: Py<Dock>) -> PyResult<()> {
+    DRAWN.store(true, std::sync::atomic::Ordering::Relaxed);
     let ui = current_ui(&UI)?;
     let (mut tree, style, callbacks) = {
         let mut dock = dock.borrow_mut(py);
@@ -1419,6 +1600,7 @@ unsafe fn dock_area(py: Python<'_>, dock: Py<Dock>) -> PyResult<()> {
         panes: Default::default(),
         hidden_alone,
         active_tabs: Default::default(),
+        tab_rects: Default::default(),
     };
     tree.ui(&mut behavior, ui);
 

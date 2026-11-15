@@ -1,4 +1,4 @@
-# Build wheels (Windows + macOS only). No publication to PyPI.
+# Build wheels (Windows x64 and ARM64, macOS x86_64 and arm64). No publication to PyPI.
 # A pushed tag v* also publishes the wheels as a GitHub Release.
 name: CI
 
@@ -18,10 +18,20 @@ permissions:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        target: [x64]
+        include:
+          - runner: windows-latest
+            target: x64
+            python-arch: x64
+            sccache: true
+          # Windows on ARM (Snapdragon PCs): built natively on GitHub's ARM64 runner (public repos),
+          # where setup-python installs an ARM64 Python for --find-interpreter
+          - runner: windows-11-arm
+            target: aarch64
+            python-arch: arm64
+            sccache: false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,13 +39,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
-          architecture: ${{ matrix.target }}
+          architecture: ${{ matrix.python-arch }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
-          sccache: true
+          sccache: ${{ matrix.sccache }}
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:

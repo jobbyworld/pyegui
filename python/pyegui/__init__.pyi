@@ -126,6 +126,7 @@ class Context:
         monospace_size: float = ...,
         animation_time: float = ...,
     ) -> None: ...
+    def set_layout(self, **kwargs: Any) -> None: ...
     def reset_style(self) -> None: ...
     def set_glass_style(
         self,
@@ -222,7 +223,12 @@ class DockPane:
     closable: bool
     hide_tab: bool
     def __init__(
-        self, title: str, update_func: Callable[[], Any], closable: bool = False, hide_tab: bool = False
+        self,
+        title: str,
+        update_func: Callable[[], Any],
+        closable: bool = False,
+        hide_tab: bool = False,
+        sheet: Color | None = None,
     ) -> None: ...
 
 class DockContainer:
@@ -465,6 +471,7 @@ def run_native(
     backdrop: str | None = ...,
     fullsize_content: bool | None = ...,
     persist_id: str | None = ...,
+    layout: dict[str, Any] | None = ...,
 ) -> None:
     """Creates a window and runs update_func. This is an entrypoint for your GUI application."""
     ...
@@ -611,6 +618,54 @@ def frame(
 
 # panels / windows / menus --------------------------------------------------
 
+def sidebar_panel(update_func: Callable[[], Any],
+    *,
+    id: str = ...,
+    resizable: bool = ...,
+    default_size: float = ...,
+    min_size: float = ...,
+    max_size: float = ...,
+    exact_size: float = ...,
+    expanded: Bool = ...,
+    gap: float = ...,
+    rounding: float = ...,
+    outline: Stroke | None = ...,
+    sheet: Color = ...,
+    opacity: float = ...,
+    inner_margin: float = ...,
+) -> None: ...
+def topbar_panel(update_func: Callable[[], Any],
+    *,
+    id: str = ...,
+    resizable: bool = ...,
+    default_size: float = ...,
+    min_size: float = ...,
+    max_size: float = ...,
+    exact_size: float = ...,
+    expanded: Bool = ...,
+    gap: float = ...,
+    rounding: float = ...,
+    outline: Stroke | None = ...,
+    sheet: Color = ...,
+    opacity: float = ...,
+    inner_margin: float = ...,
+) -> None: ...
+def bottombar_panel(update_func: Callable[[], Any],
+    *,
+    id: str = ...,
+    resizable: bool = ...,
+    default_size: float = ...,
+    min_size: float = ...,
+    max_size: float = ...,
+    exact_size: float = ...,
+    expanded: Bool = ...,
+    gap: float = ...,
+    rounding: float = ...,
+    outline: Stroke | None = ...,
+    sheet: Color = ...,
+    opacity: float = ...,
+    inner_margin: float = ...,
+) -> None: ...
 def left_panel(
     id: str,
     update_func: Callable[[], Any],

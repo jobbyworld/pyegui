@@ -34,7 +34,7 @@ THEMES = [
      ["Str", "Int", "Float", "Bool", "Date", "RGB", "RGBA", "Response"]),
     ("text", "Text, links and markdown",
      "Functions that show text. They are called every frame, in the order the text appears.",
-     ["heading", "label", "small", "strong", "weak", "monospace", "code", "colored_label",
+     ["heading", "label", "small", "strong", "weak", "monospace", "code", "code_view", "colored_label",
       "badge", "hyperlink", "hyperlink_to", "link_clicked", "label_response", "markdown"]),
     ("inputs", "Buttons and input widgets",
      "Widgets the user acts on. Buttons and toggles return True during the frame they are "
@@ -44,7 +44,7 @@ THEMES = [
       "toggle_value", "switch", "segmented_control", "combo_box", "slider_int", "slider_float", "drag_int",
       "drag_float", "drag_angle", "text_edit_singleline", "text_edit_multiline", "code_editor",
       "date_picker_button", "color_edit_button_rgb", "color_edit_button_rgba", "progress",
-      "spinner"]),
+      "spinner", "Tags", "tags_edit", "TagTreeView", "tag_tree_view"]),
     ("layout", "Layout, sizes and scrolling",
      "Update functions can be nested: a function given to `horizontal`, `group`, `frame`... "
      "draws in a child ui with its own layout and style. Panels must be added before any other "
@@ -60,8 +60,11 @@ THEMES = [
     ("panels", "Panels, windows, menus and popups",
      "Side, top and bottom panels are placed on the borders of the window, the rest is the "
      "central panel. Call the panels first in the update function: a panel added after a widget "
-     "is placed inside the current ui.",
-     ["left_panel", "right_panel", "top_panel", "bottom_panel", "window", "modal", "tooltip",
+     "is placed inside the current ui. `sidebar_panel`, `topbar_panel` and `bottombar_panel` are the "
+     "panels of the layout rules: boxes with the same gap, rounding, outline and sheet, laid out for "
+     "you (see `Context.set_layout`).",
+     ["sidebar_panel", "topbar_panel", "bottombar_panel", "left_panel", "right_panel", "top_panel",
+      "bottom_panel", "window", "modal", "tooltip",
       "tooltip_ui", "context_menu", "menu_bar", "menu_button", "menu_image_button",
       "menu_image_text_button", "close_menu"]),
     ("data", "Tables, tree views and plots",
@@ -74,6 +77,22 @@ THEMES = [
      "A `Dock` holds panes shown as tabs that the user can resize, rearrange by dragging and "
      "close. Create it once, add the panes, then show it with `dock_area` every frame.",
      ["Dock", "DockPane", "DockContainer", "DockTabBar", "dock_area"]),
+    ("terminal", "Terminal",
+     "A `Terminal` is a shell running in a pseudo terminal, drawn by `terminal`: a real terminal "
+     "(colors, cursor, full screen programs, history, selection, copy and paste) to put in a "
+     "`DockPane` or anywhere else. Create it once, outside the update function; the shell starts "
+     "the first time it is drawn.",
+     ["Terminal", "terminal"]),
+    ("files", "File views and watcher",
+     "Ready made views of the disk: `FileListView` (a list with sortable columns), `FileIconView` "
+     "(a grid of icons) and `FileTreeView` (a tree of folders), drawn by `file_list_view`, "
+     "`file_icon_view` and `file_tree_view`. They are state objects: create them once, outside the "
+     "update function. Their folders are listed through a `FileWatcher` that the system notifies of "
+     "every change, so a file created, renamed, modified or removed by any program shows at the "
+     "next frame. Give the same watcher to all the views of an app. `path_breadcrumb` and "
+     "`path_combo` show where a folder is and go to one of its ancestors.",
+     ["FileListView", "FileIconView", "FileTreeView", "file_list_view", "file_icon_view",
+      "file_tree_view", "FileWatcher", "path_breadcrumb", "path_combo"]),
     ("images", "Images and icons",
      "Images are given as uri: `file://` followed by a path, or an `http(s)` url. SVG icons stay "
      "sharp at any size and can be tinted.",
@@ -86,11 +105,13 @@ THEMES = [
     ("styling", "Themes, colors, fonts and glass",
      "Everything that changes the look is a method of the `Context`, given to the update "
      "function of the top level. Call them from the first frame; `reset_style` goes back to the "
-     "defaults before a new style is applied.",
+     "defaults before a new style is applied. `set_layout` (or `run_native(layout=dict(...))`) gives the "
+     "spacing, corners, outline, background, sheet and opacity of the whole window once, and a region "
+     "(`sidebar`, `topbar`, `bottombar`, `central`, `dock`) or a call overrides them.",
      ["Context.is_dark_theme", "Context.is_light_theme", "Context.set_dark_theme",
       "Context.set_light_theme", "Context.set_system_theme", "Context.set_style",
-      "Context.reset_style", "Context.set_accent", "Context.set_glass_style",
-      "Context.set_backdrop", "Context.set_font"]),
+      "Context.reset_style", "Context.set_layout", "Context.set_accent", "Context.set_glass_style",
+      "Context.set_backdrop", "Context.set_backdrop_blur", "Context.set_central_margin", "Context.set_font"]),
 ]
 
 PRIVATE = {"pyegui"}

@@ -2,7 +2,7 @@ use eframe::egui;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
 
-use crate::style::{apply_frame_kwargs, has_frame_kwargs, kwarg_color};
+use crate::style::{self, apply_frame_kwargs, has_frame_kwargs, kwarg_color, kwarg_stroke};
 use crate::{
     current_ui, kwarg, panel_parent_ui, run_nested_update_func, with_bool_copy, Bool, UI,
 };
@@ -11,6 +11,7 @@ use crate::{
 
 unsafe fn show_panel(
     mut panel: egui::Panel,
+    surface: style::Surface,
     update_fun: Bound<'_, PyAny>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<()> {
@@ -35,11 +36,24 @@ unsafe fn show_panel(
 
     let ui = panel_parent_ui(&UI)?;
 
-    if has_frame_kwargs(kwargs)? {
-        panel = panel.frame(apply_frame_kwargs(egui::Frame::side_top_panel(ui.style()), kwargs)?);
+    // a level of glass given to set_glass_style for this side, unless the call gives a fill
+    let glass = style::surface_fill(&ui.style().visuals, surface);
+    if has_frame_kwargs(kwargs)? || glass.is_some() {
+        let mut frame = egui::Frame::side_top_panel(ui.style());
+        if let Some(fill) = glass {
+            frame = frame.fill(fill);
+        }
+        panel = panel.frame(apply_frame_kwargs(frame, kwargs)?);
     }
 
-    match kwarg::<Py<Bool>>(kwargs, "expanded")? {
+    // the line between the panel and the rest is drawn with the stroke of the noninteractive
+    // widgets: given, it is that stroke while the panel is shown (its content draws with it too)
+    let separator = kwarg_stroke(kwargs, "separator_stroke")?;
+    let previous = ui.visuals().widgets.noninteractive.bg_stroke;
+    if let Some(stroke) = separator {
+        ui.visuals_mut().widgets.noninteractive.bg_stroke = stroke;
+    }
+    let result = match kwarg::<Py<Bool>>(kwargs, "expanded")? {
         Some(expanded) => with_bool_copy(update_fun.py(), &expanded, |is_expanded| {
             panel
                 .show_collapsible(ui, is_expanded, |ui| run_nested_update_func(ui, update_fun))
@@ -50,7 +64,11 @@ unsafe fn show_panel(
                 .show(ui, |ui| run_nested_update_func(ui, update_fun))
                 .inner
         }
+    };
+    if separator.is_some() {
+        ui.visuals_mut().widgets.noninteractive.bg_stroke = previous;
     }
+    result
 }
 
 /// A panel on the left side of the window. The rest of the window is the central panel.
@@ -62,6 +80,9 @@ unsafe fn show_panel(
 ///     resizable (bool): whether the user can resize the panel. Default is True
 ///
 ///     show_separator_line (bool): show a line between the panel and the rest of the window
+///
+///     separator_stroke (tuple[float, color]): width and color of that line. Default is the line of
+///         the theme
 ///
 ///     default_size (float): the initial width of the panel
 ///
@@ -87,7 +108,7 @@ unsafe fn left_panel(
     update_fun: Bound<'_, PyAny>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<()> {
-    show_panel(egui::Panel::left(id), update_fun, kwargs)
+    show_panel(egui::Panel::left(id), style::Surface::Sidebar, update_fun, kwargs)
 }
 
 /// A panel on the right side of the window. Accepts the same keyword args as left_panel.
@@ -104,7 +125,7 @@ unsafe fn right_panel(
     update_fun: Bound<'_, PyAny>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<()> {
-    show_panel(egui::Panel::right(id), update_fun, kwargs)
+    show_panel(egui::Panel::right(id), style::Surface::Sidebar, update_fun, kwargs)
 }
 
 /// A panel on the top of the window. Accepts the same keyword args as left_panel, sizes being heights.
@@ -121,7 +142,7 @@ unsafe fn top_panel(
     update_fun: Bound<'_, PyAny>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<()> {
-    show_panel(egui::Panel::top(id), update_fun, kwargs)
+    show_panel(egui::Panel::top(id), style::Surface::Bars, update_fun, kwargs)
 }
 
 /// A panel on the bottom of the window. Accepts the same keyword args as left_panel, sizes being heights.
@@ -138,7 +159,7 @@ unsafe fn bottom_panel(
     update_fun: Bound<'_, PyAny>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<()> {
-    show_panel(egui::Panel::bottom(id), update_fun, kwargs)
+    show_panel(egui::Panel::bottom(id), style::Surface::Bars, update_fun, kwargs)
 }
 
 // windows

@@ -109,3 +109,39 @@ partial glass, accent color, Inter font, unified title bar on macOS, badges, swi
 
 .. image:: _static/app.png
    :alt: app screenshot
+
+markdown viewer with bars (layout rules)
+-----------------------------------------
+
+A sidebar, a top bar, a bottom bar and a dock, laid out with the same gap and corners by ``layout=dict(...)``.
+
+.. literalinclude:: ../examples/markdown_viewer_bars.py
+   :language: python
+   :linenos:
+
+.. image:: _static/markdown_viewer_bars.jpg
+   :alt: markdown viewer with bars screenshot
+
+glass (layout rules)
+-------------------------
+
+The same app over a glass backdrop: ``background`` is what is seen between the boxes, ``sheet`` what is seen inside them.
+
+.. literalinclude:: ../examples/markdown_viewer_bars_glass.py
+   :language: python
+   :linenos:
+
+.. image:: _static/markdown_viewer_bars_glass.jpg
+   :alt: glass screenshot
+
+dock colors
+-------------
+
+A blue dock and a green dock, semi transparent, with ``DockPane(sheet=...)``.
+
+.. literalinclude:: ../examples/dock_colors.py
+   :language: python
+   :linenos:
+
+.. image:: _static/dock_colors.jpg
+   :alt: dock colors screenshot

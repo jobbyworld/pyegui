@@ -397,3 +397,183 @@ A spinner widget used to indicate loading.
 ```python
 spinner()
 ```
+
+
+## `Tags`
+
+
+A list of tags and their colors. Create it once, outside the update function, and draw it with
+tags_edit().
+
+A tag has one or more levels separated by "/": "projet/web/front". Only its last level is shown
+("front"); the mouse over it shows the full path. Each level has its own color, kept by its
+path: "projet" and "projet/web" can have different colors, and the full path is shown with the
+color of each of its levels. A level without a color gets one chosen from its path.
+
+**Args**
+
+- `tags` (list[str]): the tags at the start
+- `colors` (dict[str, color]): the colors of levels, by path, e.g. {"projet": "#3b82f6", "projet/web": (16, 185, 129)}
+
+**Usage:**
+
+```python
+tags = Tags(["projet/web", "perso"], colors={"projet": "#3b82f6"})
+
+def update_func(ctx):
+    if tags_edit(tags):
+        print(tags.tags)
+```
+
+
+- `Tags.add(tag)` (method): Adds a tag. False when it is empty or already there.
+
+
+  **Args**
+
+  - `tag` (str): the full path, e.g. "projet/web"
+
+- `Tags.color(path)` (method): The color of a level, "#rrggbb": the one given, or the one chosen from its path.
+
+
+  **Args**
+
+  - `path` (str): the path of the level, e.g. "projet" or "projet/web"
+
+- `Tags.colors` (attribute): The colors given to levels, by path, as "#rrggbb": what to save to restore them. The
+
+  levels without a color are not in it. Setting it replaces them.
+
+- `Tags.remove(tag)` (method): Removes a tag. False when it was not there.
+
+
+  **Args**
+
+  - `tag` (str): the full path
+
+- `Tags.set_color(path, color)` (method): Gives a color to a level; None goes back to the one chosen from its path.
+
+
+  **Args**
+
+  - `path` (str): the path of the level, e.g. "projet" or "projet/web"
+  - `color` (tuple | str | None): (r, g, b), (r, g, b, a) or "#rrggbb[aa]"
+
+- `Tags.tags` (attribute): The tags, full paths, in the order they were added. Setting it replaces them.
+
+## `tags_edit(tags, **kwargs)`
+
+Shows tags as chips, each one with its last level, its full path in the colors of its levels
+on hover. With editable (the default) a cross removes a tag, a right click changes the color of
+each of its levels, and a field adds one: "projet/web" then Enter. Backspace in the empty field
+removes the last tag.
+
+**Args**
+
+- `tags` (Tags): the state, changed by the widget
+
+**Keyword args**
+
+- `editable` (bool): the cross, the menu and the field, True by default
+- `hint_text` (str): the text of the empty field, "Add a tag" by default
+- `suggestions` (list[str]): tags offered under the field while typing, e.g. all the known ones; those already there are left out
+- `field_width` (float): the width of the field, 120 by default
+- `compact` (bool): only a dot per tag in its color, the full path on hover, e.g. in a row of a list; read only
+- `dot_size` (float): the diameter of the dots of compact, 10 by default
+- `muted` (list[str]): tags drawn with their colors desaturated, e.g. those an item inherits
+- `small` (bool): smaller chips, with the small text, e.g. in a row of a list or of a tree
+- `max_visible` (int): with more tags, only the first ones are shown and then "+5": the mouse over it lists the others, a click shows them all (and "−" shows the first ones again)
+- `id` (str): to tell apart two widgets of the same Tags
+
+**Returns**
+
+- `bool`: True when a tag was added or removed, or a color changed
+
+**Example:**
+
+```python
+tags = Tags(["projet/web", "perso"])
+known = ["projet/web", "projet/app", "perso", "perso/santé"]
+
+def update_func(ctx):
+    if tags_edit(tags, suggestions=known):
+        save(tags.tags, tags.colors)
+    tags_edit(tags, compact=True, id="row")  # the dots only
+```
+
+
+## `TagTreeView`
+
+
+The state of a tree of tags: the levels folded shut and the one selected. Create it once,
+outside the update function, and draw it with tag_tree_view().
+
+The tree has a node for every level of the tags: "projet/web" and "projet/app" make a node
+"projet" with two children. Each node shows the last level in the color of its path.
+
+**Args**
+
+- `selected` (str): the path of the level selected at the start
+- `folded` (list[str]): the paths of the levels folded shut at the start; the others are open
+
+**Usage:**
+
+```python
+tree = TagTreeView()
+
+def update_func(ctx):
+    clicked = tag_tree_view(tree, tags)
+    if clicked:
+        show_items_tagged(clicked)
+```
+
+
+- `TagTreeView.collapse_all(tags)` (method): Folds every level that has children, among the levels of tags
+
+
+  **Args**
+
+  - `tags` (Tags): the tags of the tree
+
+- `TagTreeView.expand_all()` (method): Opens every level
+- `TagTreeView.folded` (attribute): The paths of the levels folded shut, sorted: what to save to restore them. Setting it
+
+  replaces them.
+
+- `TagTreeView.selected` (attribute): The path of the level selected, or None
+
+## `tag_tree_view(view, tags, **kwargs)`
+
+Shows the tags as a tree: a node for every level, its last level in the color of its path,
+the full path on hover. A click selects a level, the arrow (or a double click) folds or opens
+it. A right click changes the color of the level or removes it from the tags, with the tags
+under it.
+
+**Args**
+
+- `view` (TagTreeView): the state: the folded levels and the selection
+- `tags` (Tags): the tags shown, changed when one is removed or a color changes
+
+**Keyword args**
+
+- `counts` (dict[str, int]): a number shown at the right of a level, e.g. the items tagged
+- `editable` (bool): the menu of the right click, True by default
+- `removable` (bool): the Remove entry of that menu, True by default; False keeps only the colors, e.g. when removing a tag would take it off many items
+
+**Returns**
+
+- str | None: the path of the level clicked during the frame (it is now view.selected)
+
+**Example:**
+
+```python
+library = Tags(["projet/web", "projet/app", "perso/santé"])
+tree = TagTreeView()
+
+def update_func(ctx):
+    def sidebar():
+        clicked = tag_tree_view(tree, library, counts={"projet": 12, "projet/web": 5})
+        if clicked:
+            print("show", clicked)
+    left_panel("tags", sidebar)
+```

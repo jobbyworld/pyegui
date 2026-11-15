@@ -33,8 +33,8 @@ Issues = "https://github.com/GachiLord/pyegui/issues"
 
 
 [dependency-groups]
-# what the scripts of examples/ import besides pyegui (finder_watch.py, finder_pdf.py)
-examples = ["watchdog>=4", "pypdf[crypto]>=5"]
+# what the scripts of examples/ import besides pyegui (finder_pdf.py)
+examples = ["pypdf[crypto]>=5"]
 
 [tool.uv]
 # `uv run examples/finder.py` installs the examples group too

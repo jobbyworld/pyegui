@@ -1,6 +1,6 @@
 # Themes, colors, fonts and glass
 
-Everything that changes the look is a method of the `Context`, given to the update function of the top level. Call them from the first frame; `reset_style` goes back to the defaults before a new style is applied.
+Everything that changes the look is a method of the `Context`, given to the update function of the top level. Call them from the first frame; `reset_style` goes back to the defaults before a new style is applied. `set_layout` (or `run_native(layout=dict(...))`) gives the spacing, corners, outline, background, sheet and opacity of the whole window once, and a region (`sidebar`, `topbar`, `bottombar`, `central`, `dock`) or a call overrides them.
 
 ## `Context.is_dark_theme`
 
@@ -68,6 +68,39 @@ def update_func(ctx):
 Restores the default style of both themes.
 
 
+## `Context.set_layout(**kwargs)`
+
+Sets the layout rules of the window: a few values given once, that the regions of the window
+(the sidebar, the top bar, the bottom bar, the central area and the dock) take and can override.
+Replaces the rules given before. The same dict can be given to run_native as layout.
+
+**Keyword args**
+
+- `gap` (float): space around the window and between two boxes. Default is 8
+- `rounding` (float): corner radius of the boxes. Default is 12
+- `outline` (tuple[float, color]): outline of the boxes and of the panes of the dock. Default is a
+- thin translucent grey
+- `sheet` (color): the background inside the boxes (the rounded rectangles). Default is the
+- panel color of the theme
+- `opacity` (float): from 0 to 1, multiplies the opacity of the sheet. With a backdrop or a
+- transparent window what is behind shows through. Default is 1
+- `background` (color): global only. What is seen between the boxes, in the gaps and around them.
+- Default is the panel color of the theme; (0, 0, 0, 0) shows the backdrop of the window
+- `inner_margin` (float): space between the outline of a box and its content. Default is 12 for
+- the sidebar and 8 for the others
+- sidebar, topbar, bottombar, central, dock (dict): the same values (but background) for one
+- region only
+
+A value is looked up in the call of the region (sidebar_panel(..., rounding=6)), then in the
+dict of the region, then in the global values, then in the defaults.
+
+**Example:**
+
+```python
+ctx.set_layout(gap=8, rounding=12, opacity=0.9, sidebar=dict(opacity=0.6), dock=dict(rounding=8))
+```
+
+
 ## `Context.set_accent(color)`
 
 Changes the accent color: selection, links, text cursor, active pill tabs and the plot
@@ -80,7 +113,7 @@ ctx.set_accent("#22c55e")
 ```
 
 
-## `Context.set_glass_style(tint=None, accent=None, mode='partial')`
+## `Context.set_glass_style(tint=None, accent=None, mode='partial', opacity=1.0, panels=None, windows=None, content=None, sidebar=None, bars=None, central=None, dock=None, background=None)`
 
 Applies a modern style looking like frosted glass, for both themes: translucent surfaces,
 the Inter font with semibold titles, and an accent color for the selection, links, active
@@ -94,6 +127,18 @@ It can be customized afterwards with set_style. reset_style removes it.
 - `tint` (color): color of the glass. Default is white on light theme and smoked on dark theme
 - `accent` (color): color of the selection, links, active tabs and plots. Default is blue
 - `mode` (str): "partial": the panels and menus are glass, the content is an almost opaque sheet, which is easier to read. "full": every surface is glass. Default is "partial"
+- `opacity` (float): multiplies the opacity of every surface: below 1 more transparent, above 1 more opaque. Default is 1, the levels of the style
+- `panels` (float): the opacity of the panels, the sidebars and the bars, from 0 (clear) to 1 (opaque), instead of the level of the style
+- `windows` (float): the opacity of the windows, menus and popups, from 0 to 1
+- `content` (float): the opacity of the sheet under the content in the partial mode, from 0 to 1
+- `sidebar` (float): the opacity of the left and right panels, instead of panels
+- `bars` (float): the opacity of the top and bottom panels, instead of panels
+- `central` (float): the opacity of the central area (what is drawn after the panels), in both modes, instead of content. A DockPane(..., central=True) takes it too
+- `dock` (float): the opacity of the panes of the docks. Given, each pane is filled on its own and the central area under the dock is left clear, so the dock and the central pane can differ. Default: the panes are not filled, the central area is seen through them
+- `background` (float): the opacity of the glass under the whole window, seen in the gaps between the panels and the panes. Default: nothing, the backdrop is seen there
+
+The surfaces stay opaque with the system setting "Reduce transparency". Call it again with
+other levels to change them, e.g. from a slider.
 
 **Example:**
 
@@ -101,6 +146,12 @@ It can be customized afterwards with set_style. reset_style removes it.
 def update_func(ctx):
     ctx.set_glass_style(accent="#8b5cf6")
     heading("Glass")
+
+# more transparent everywhere, and clear panels
+ctx.set_glass_style(mode="full", opacity=0.6, panels=0.15)
+
+# one level per part of the window
+ctx.set_glass_style(mode="full", sidebar=0.2, bars=0.5, central=0.85, dock=0.6, background=0.1)
 
 run_native("Glass", update_func, backdrop=Backdrop.ACRYLIC)
 ```
@@ -121,6 +172,47 @@ The window must have been created with a backdrop: run_native(..., backdrop=Back
 ```python
 ctx.set_dark_theme()
 ctx.set_backdrop(Backdrop.MICA_DARK)
+```
+
+
+## `Context.set_backdrop_blur(radius)`
+
+Blurs what is behind the window, by a radius in points: 0 is no blur. macOS only (it does
+nothing elsewhere), with a transparent window: a backdrop or transparent=True in run_native.
+
+It adds to the blur of the backdrop: Backdrop.LIQUID_GLASS_CLEAR is barely blurred, so the
+radius sets the blur alone. The blur is rounded like the corners of the window. It uses a
+private layer of macOS (the one of its glass views), looked up when called: on a system
+without it, nothing happens.
+
+**Args**
+
+- `radius` (float): from 0 (sharp) to about 64 (very blurred)
+
+**Example:**
+
+```python
+ctx.set_backdrop_blur(20)
+run_native("Glass", update_func, backdrop=Backdrop.LIQUID_GLASS_CLEAR)
+```
+
+
+## `Context.set_central_margin(margin)`
+
+Sets the inner margin of the central panel: the space between the panels and what is drawn
+after them. Default is the 8 points of egui; 0 lets the content (a Dock for example) reach
+the panels, and its own margins decide the gaps. Not used with layout rules, which lay out
+the central area themselves.
+
+**Args**
+
+- `margin` (float | tuple[float, float, float, float]): the four sides, or (left, top, right, bottom)
+
+**Example:**
+
+```python
+ctx.set_central_margin(0)
+frame(lambda: dock_area(dock), outer_margin=6)  # the same gap on every side
 ```
 
 
