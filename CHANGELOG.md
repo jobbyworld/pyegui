@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.0 (2026-11-15)
+
 - Finder example: a Last Opened column in the list and tree views (the hour today, Yesterday, the day, the year when older), for the files opened with their app or in the viewer and the folders entered; a Recent pane in the dock, the last 30 items opened, the latest first, with when and where: a click shows the item in its folder. `TagStore.opened_dates()` reads all the dates in one query
 - `path_breadcrumb` is never wider than `max_width`: the ancestors that do not fit even shortened are left out from the root, then the last folder is cut. A deep path in a narrow bar used to push what followed it out of the row, and a row that measures itself (the bottom bar of the Finder) kept changing its width and repainting
 - Finder example: the bottom bar no longer goes back and forth when the breadcrumb is shortened: the space before its right side had a minimum of 4 points that pushed it out of the row at every other frame
