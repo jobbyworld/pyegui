@@ -1554,6 +1554,68 @@ def view_menu(paths):
     open_palette()
 
 
+# when the items were last opened: the files opened with their app or in the viewer, the folders
+# entered. Kept in the base of the tags (finder_tags.py), read again when it changed
+
+opened_cache = {"version": -1, "dates": {}, "recent": []}
+RECENT_LIMIT = 30  # the items of the Recent pane
+OPENED_COLUMN = 112  # the width of the Last Opened column
+
+
+def opened_data():
+    if opened_cache["version"] != tags.version:
+        opened_cache.update(
+            version=tags.version,
+            dates=tags.opened_dates(),
+            recent=tags.recently_opened(RECENT_LIMIT),
+        )
+    return opened_cache
+
+
+def short_date(when):
+    """a date that fits a narrow column: the hour today, Yesterday, the day this year, else the year"""
+    moment, today = datetime.fromtimestamp(when), datetime.now().date()
+    if moment.date() == today:
+        return moment.strftime("%H:%M")
+    if (today - moment.date()).days == 1:
+        return "Yesterday"
+    if moment.year == today.year:
+        return moment.strftime("%d %b")
+    return moment.strftime("%d %b %Y")
+
+
+def opened_cell(path):
+    """the Last Opened column of the list and of the tree"""
+    when = opened_data()["dates"].get(tag_key(Path(path)))
+    if when:
+        weak(short_date(when))
+
+
+def recent_panel():
+    """the Recent pane: the items last opened, the latest first. A click shows the item in its
+    folder (or enters the folder), the mouse over it gives its path"""
+    items = [(Path(p), when) for p, when in opened_data()["recent"] if Path(p).exists()]
+    if not items:
+        weak("Les fichiers et dossiers ouverts s'afficheront ici")
+        return
+    for path, when in items:
+
+        def row(path=path, when=when):
+            uri = file_icon(str(path), 20)
+            if uri:
+                image(uri, size=20)
+
+            def text():
+                # the name, then when and where under it: a narrow pane cuts nothing important
+                if selectable_label_clicked(selected.value == str(path), path.name or str(path)):
+                    go_or_select(path)
+                small(f"{short_date(when)} · {path.parent.name or path.parent}")
+
+            vertical(text)
+
+        tooltip(str(path).replace(str(HOME), "~"), lambda row=row: horizontal(row))
+
+
 def note_cell(path):
     """the Notes column of the list: an icon when the item has a note"""
     if tag_key(Path(path)) in tag_data()["noted"]:
@@ -1726,7 +1788,11 @@ def content():
     before_view(v)
     if view.value == TREE:
         scroll_area_both(
-            lambda: file_tree_view(tree, extra_columns=[("Tags", TAGS_COLUMN, tags_cell)], context_menu=view_menu)
+            lambda: file_tree_view(
+                tree,
+                extra_columns=[("Tags", TAGS_COLUMN, tags_cell), ("Last Opened", OPENED_COLUMN, opened_cell)],
+                context_menu=view_menu,
+            )
         )
     elif view.value == LIST:
         file_list_view(
@@ -1734,7 +1800,7 @@ def content():
             headers=["Name", "Date Modified", "Size", "Kind"],
             # columns drawn by the Finder: the notes, and the tags as in the tree (editable on the
             # selected row)
-            extra_columns=[("Notes", 50, note_cell), ("Tags", TAGS_COLUMN, tags_cell)],
+            extra_columns=[("Notes", 50, note_cell), ("Tags", TAGS_COLUMN, tags_cell), ("Last Opened", OPENED_COLUMN, opened_cell)],
             context_menu=view_menu,
         )
     else:
@@ -2503,6 +2569,7 @@ PANES = {
     "Preview": zone_pane("dock", lambda: scroll_area_vertical(preview)),
     "Notes": zone_pane("dock", notes_panel),
     "Tags": zone_pane("dock", lambda: scroll_area_vertical(tags_panel)),
+    "Recent": zone_pane("dock", lambda: scroll_area_vertical(recent_panel)),
 }
 # the dock at the bottom, under the files
 BOTTOM_PANES = {
