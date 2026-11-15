@@ -3,9 +3,11 @@
 ## Unreleased
 
 - `key_pressed`, `typed_text`, `modifiers`, `pointer_pos`, `pointer_pressed` and `file_icon` no longer open the central panel: called before the panels of `update_func`, they used to put the panels inside it, 8 points from the borders of the window
+- `code_view(text, language)`: source code with syntax highlighting (Python, JavaScript/TypeScript, Rust, shell, PowerShell as shell, C/C++, JSON, SQL, TOML, YAML), line numbers, selection, in a scroll area
 - `markdown(...)` returns the url of the link clicked during the frame; `open_links=False` leaves it to the app instead of the browser, e.g. to open a linked markdown file
 - `ctx.set_central_margin(margin)`: the inner margin of the central panel (8 points in egui), e.g. 0 so that the content lays out its own gaps
 - Panels: `separator_stroke=(width, color)` sets the line between a panel and the rest of the window; `inner_margin` takes `(left, top, right, bottom)` like `outer_margin`
+- Finder example: a double click (or Enter) on a markdown or source file (.py, .js, .ts, .rs, .ps1, .sh...) shows it in the central view, reloaded when saved, its links to other markdown files opened there; Fermer, Escape, Back or another folder go back to the files
 - Finder and markdown viewer examples: a segmented control of icons (light, dark, system) in the bottom band of the sidebar; new icons `sun`, `moon` and `theme-system`
 - `examples/markdown_finder.py`: a markdown viewer in the unified layout of the Finder example, with a `FileTreeView` of the markdown files of a folder for the navigation; a click on a heading of the outline scrolls the document to it; a link to a markdown file opens it in the viewer, at its heading for `file.md#heading`, `#heading` scrolls the document, another file opens with its app and the web in the browser
 - Finder example: the panes menu no longer has the transparency slider, it is in the Transparence pane (Global)

@@ -224,7 +224,71 @@ unsafe fn markdown(text: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<O
     Ok(clicked)
 }
 
+/// The language given to the highlighter of egui_extras: a name or the extension of a file
+fn highlight_language(language: &str) -> &str {
+    match language.trim_start_matches('.').to_lowercase().as_str() {
+        // no PowerShell in egui_extras: the shell one knows its comments, strings and $variables
+        "ps1" | "psm1" | "psd1" | "powershell" | "pwsh" => "sh",
+        "mjs" | "cjs" => "js",
+        "pyw" => "py",
+        _ => language.trim_start_matches('.'),
+    }
+}
+
+/// Shows source code with syntax highlighting and line numbers, in a scroll area. The text can be
+/// selected and copied.
+///
+/// Highlighted languages: Python, JavaScript and TypeScript, Rust, shell (bash, zsh, and
+/// PowerShell as shell), C and C++, JSON, SQL, TOML and YAML. Another language is shown plain.
+///
+/// Args:
+///     text (str): the code
+///
+///     language (str): the language or the extension of the file: "python", "py", ".rs", "ps1"...
+///
+/// Keyword args:
+///
+///     line_numbers (bool): the numbers of the lines in a column at the left. Default is True
+///
+///     id (str): id of the scroll area, needed if there are several code views. Default is "code_view"
+///
+/// Example::
+///
+///     code_view(Path("app.py").read_text(), "py")
+#[pyfunction]
+#[pyo3(signature = (text, language="", **kwargs))]
+unsafe fn code_view(text: &str, language: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+    let ui = current_ui(&UI)?;
+    let line_numbers = kwarg::<bool>(kwargs, "line_numbers")?.unwrap_or(true);
+    let id = kwarg::<String>(kwargs, "id")?.unwrap_or_else(|| "code_view".to_string());
+
+    let style = ui.style().clone();
+    let theme = egui_extras::syntax_highlighting::CodeTheme::from_style(&style);
+    // memoized by egui_extras: cheap to call at every frame
+    let mut job = egui_extras::syntax_highlighting::highlight(ui.ctx(), &style, &theme, text, highlight_language(language));
+    job.wrap.max_width = f32::INFINITY; // code is not wrapped: the area scrolls sideways
+
+    egui::ScrollArea::both()
+        .id_salt(id)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                if line_numbers {
+                    let count = text.lines().count().max(1);
+                    let numbers = (1..=count).map(|n| n.to_string()).collect::<Vec<_>>().join("\n");
+                    let font = egui::TextStyle::Monospace.resolve(ui.style());
+                    let color = ui.visuals().weak_text_color();
+                    ui.add(egui::Label::new(egui::RichText::new(numbers).font(font).color(color)).selectable(false));
+                    ui.add_space(8.0);
+                }
+                ui.add(egui::Label::new(job).selectable(true).extend());
+            });
+        });
+    Ok(())
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(markdown, m)?)?;
+    m.add_function(wrap_pyfunction!(code_view, m)?)?;
     Ok(())
 }

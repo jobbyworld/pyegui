@@ -84,7 +84,7 @@ an example. They are generated from the docstrings, see "Keeping the reference u
 |---|---|---|
 | Application and context | [app.md](docs/framework/app.md) | `run_native`, `Context` (clipboard, open_url), `Backdrop`, `pixels_per_point` |
 | Values | [values.md](docs/framework/values.md) | `Str`, `Int`, `Float`, `Bool`, `Date`, `RGB`, `RGBA`, `Response` |
-| Text | [text.md](docs/framework/text.md) | headings, labels, code, links, badges, markdown with mermaid |
+| Text | [text.md](docs/framework/text.md) | headings, labels, code, code_view (syntax highlighting), links, badges, markdown with mermaid |
 | Buttons and inputs | [inputs.md](docs/framework/inputs.md) | buttons, checkbox, radio, switch, sliders, text edits, color and date pickers, progress |
 | Layout | [layout.md](docs/framework/layout.md) | horizontal/vertical, grid, columns, group, frame, sizes, scroll areas, enable/disable |
 | Panels and popups | [panels.md](docs/framework/panels.md) | `sidebar_panel`/`topbar_panel`/`bottombar_panel`, side/top/bottom panels, window, modal, menus, tooltips, context menu |

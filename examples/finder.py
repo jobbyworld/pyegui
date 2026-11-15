@@ -24,7 +24,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 from finder_tags import TagStore
 from finder_tags import key as tag_key
@@ -51,6 +51,7 @@ from pyegui import (
     button_clicked,
     close_menu,
     code,
+    code_view,
     color_edit_button_rgb,
     colored_label,
     columns,
@@ -84,6 +85,7 @@ from pyegui import (
     right_panel,
     run_native,
     scroll_area_both,
+    markdown,
     scroll_area_vertical,
     scroll_to_rect,
     segmented_control,
@@ -294,6 +296,8 @@ listing_cache = {}  # folder -> (version of the watcher, entries): read again wh
 
 # the views of the files: state objects of pyegui, sharing one watcher of the disk
 watcher = FileWatcher()
+reading = Str("")  # a markdown file shown in the central view instead of the files, "" for none
+reading_cache = {"path": None, "text": ""}
 tree = FileTreeView("tree", start, watcher=watcher, activatable_dirs=True)
 # navigate=False: a double click or Enter comes back in activated, the Finder opens it itself
 files_list = FileListView("list", start, watcher=watcher, navigate=False)
@@ -583,6 +587,7 @@ def transparency_pane():
 
 def go(folder):
     folder = Path(folder)
+    close_reader()  # moving to a folder shows its files
     tag_filter.value = 0  # leaving a tag view
     if folder == current() or not folder.is_dir():
         return
@@ -595,6 +600,9 @@ def go(folder):
 
 
 def back():
+    if reading.value:  # back from the markdown viewer to the files first
+        close_reader()
+        return
     if position.value > 0:
         position.value -= 1
         deselect()
@@ -691,6 +699,7 @@ def keyboard():
     if key_pressed("Cmd+CloseBracket"):
         forward()
     if key_pressed("Escape", when_typing=True):
+        close_reader()  # back to the files from the markdown viewer
         search.value = ""
         deselect()
         focus_zone.value = "content"  # back to the list, even from the search field
@@ -1688,6 +1697,8 @@ def after_view(v):
     opened = [p for p in (entry(Path(p)) for p in v.activated) if p]
     if len(opened) == 1 and opened[0]["is_dir"]:
         open_item(opened[0])  # into the folder
+    elif len(opened) == 1 and (is_markdown(opened[0]["path"]) or is_code(opened[0]["path"])):
+        open_reader(opened[0]["path"])  # shown here, in the central view
     elif opened:
         action_open()  # the files with their app, like the Open button
 
@@ -1707,7 +1718,99 @@ def seed_tree_selection():
         tree.focus(False)
 
 
+def is_markdown(path):
+    return Path(path).suffix.lower() in (".md", ".markdown")
+
+
+# the source files shown by the viewer of the central view, with their colors (code_view)
+CODE_EXTENSIONS = {".py", ".pyw", ".js", ".mjs", ".cjs", ".ts", ".rs", ".ps1", ".psm1", ".sh", ".bash", ".zsh"}
+READER_MAX = 2_000_000  # a larger file opens with its app
+
+
+def is_code(path):
+    return Path(path).suffix.lower() in CODE_EXTENSIONS
+
+
+def open_reader(path):
+    """shows a markdown or source file in the central view, read again when an editor saves it"""
+    try:
+        if Path(path).stat().st_size > READER_MAX:
+            context[0].open_url(Path(path).as_uri())
+            return
+    except OSError:
+        return
+    close_reader()
+    reading.value = str(path)
+    watcher.watch(reading.value)
+    watcher.changed(reading.value)  # starts counting the changes
+    reading_cache["path"] = None
+    tags.opened(Path(path))  # remembered in the base, like a file opened with its app
+
+
+def close_reader():
+    if reading.value:
+        watcher.unwatch(reading.value)
+        reading.value = ""
+
+
+def reader_text():
+    path = reading.value
+    if reading_cache["path"] != path or watcher.changed(path):
+        try:
+            reading_cache["text"] = Path(path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            reading_cache["text"] = f"*Cannot read this file: {error}*"
+        reading_cache["path"] = path
+    return reading_cache["text"]
+
+
+def follow_link(url):
+    """a link of the markdown viewer: a markdown file opens here, the web in the browser, another
+    file with its app"""
+    parts = urlsplit(url)
+    if parts.scheme in ("http", "https", "mailto"):
+        context[0].open_url(url)
+        return
+    if not parts.path:
+        return  # an anchor in the same file: the viewer shows the whole text
+    target = Path(unquote(parts.path)) if parts.scheme == "file" else (Path(reading.value).parent / unquote(parts.path)).resolve()
+    if target.is_file() and is_markdown(target):
+        open_reader(target)
+    elif target.exists():
+        context[0].open_url(target.as_uri())
+
+
+def reader():
+    """the markdown viewer of the central view: a bar to go back to the files, then the text"""
+    tint = icon_tint()
+
+    def bar():
+        if image_button_clicked(svg("chevron-left"), "Fermer", size=16, tint=tint):
+            close_reader()
+            return
+        add_space(6)
+        strong(Path(reading.value).name)
+        add_space(max(available_width() - 150, 4))
+        if small_button_clicked("Ouvrir avec l'app"):
+            context[0].open_url(Path(reading.value).as_uri())
+
+    horizontal(bar)  # a row at the top: horizontal_centered would take the whole height
+    if not reading.value:
+        return  # closed by the bar
+    separator()
+    if is_code(reading.value):
+        # the colors of the language, from the extension (.ps1 is shown with those of the shell)
+        code_view(reader_text(), Path(reading.value).suffix, id=f"reader {reading.value}")
+        return
+    url = markdown(reader_text(), scrollable=True, id=f"reader {reading.value}", open_links=False)
+    if url:
+        follow_link(url)
+
+
 def content():
+    if reading.value:
+        reader()
+        return
     tag_header()
     if not listing_here() or (search.value and not visible_entries()):
         weak("No items" if not search.value else f"No items match “{search.value}”")

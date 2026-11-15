@@ -4,7 +4,7 @@ Generated from the docstrings by `scripts/gen_framework_docs.py`, do not edit by
 
 - [Application, window and context](app.md): 4 names
 - [Values that widgets edit](values.md): 8 names
-- [Text, links and markdown](text.md): 14 names
+- [Text, links and markdown](text.md): 15 names
 - [Buttons and input widgets](inputs.md): 25 names
 - [Layout, sizes and scrolling](layout.md): 41 names
 - [Panels, windows, menus and popups](panels.md): 17 names

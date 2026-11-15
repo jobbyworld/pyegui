@@ -88,6 +88,31 @@ code("print(42 + 27)")
 ```
 
 
+## `code_view(text, language='', **kwargs)`
+
+Shows source code with syntax highlighting and line numbers, in a scroll area. The text can be
+selected and copied.
+
+Highlighted languages: Python, JavaScript and TypeScript, Rust, shell (bash, zsh, and
+PowerShell as shell), C and C++, JSON, SQL, TOML and YAML. Another language is shown plain.
+
+**Args**
+
+- `text` (str): the code
+- `language` (str): the language or the extension of the file: "python", "py", ".rs", "ps1"...
+
+**Keyword args**
+
+- `line_numbers` (bool): the numbers of the lines in a column at the left. Default is True
+- `id` (str): id of the scroll area, needed if there are several code views. Default is "code_view"
+
+**Example:**
+
+```python
+code_view(Path("app.py").read_text(), "py")
+```
+
+
 ## `colored_label(color, text)`
 
 Shows a text in the given color.
