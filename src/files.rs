@@ -93,6 +93,9 @@ fn date(time: Option<SystemTime>, format: &str) -> String {
     }
 }
 
+/// How much of its color a hidden item keeps in the views
+const HIDDEN_OPACITY: f32 = 0.5;
+
 fn emoji(e: &Entry) -> &'static str {
     if e.is_dir {
         "📁"
@@ -948,6 +951,9 @@ fn draw_folder(ui: &mut egui::Ui, view: &mut FolderView, mut shape: Shape, hooks
                     let paths = if selected { view.selected.iter().map(|p| to_str(p)).collect() } else { vec![to_str(&e.path)] };
                     menus.push((response.clone(), paths));
                 }
+                // a hidden item (a name with a dot, a hidden flag) is drawn faded: its icon, its name
+                // and the columns of Python, not the background of its row
+                let opacity = ui.opacity();
                 match &shape {
                     Shape::List { .. } => {
                         if selected {
@@ -957,12 +963,19 @@ fn draw_folder(ui: &mut egui::Ui, view: &mut FolderView, mut shape: Shape, hooks
                         } else if i % 2 == 1 {
                             ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
                         }
+                        if e.hidden {
+                            ui.multiply_opacity(HIDDEN_OPACITY);
+                        }
                         paint_list_row(ui, e, rect, &shape, hooks, &badges, selected.then_some(selected_text));
                     }
                     Shape::Icons { icon, .. } => {
+                        if e.hidden {
+                            ui.multiply_opacity(HIDDEN_OPACITY);
+                        }
                         paint_tile(ui, e, rect, *icon, &badges, selected, response.hovered(), focused);
                     }
                 }
+                ui.set_opacity(opacity);
             }
             if view.folder_changed {
                 return; // a double click entered a folder
@@ -1815,9 +1828,12 @@ fn tree_header(ui: &mut egui::Ui, extras: &[Extra<'_>]) {
     ui.painter().hline(rect.x_range(), rect.bottom(), egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
 }
 
-fn with_tree_icon(b: NodeBuilder<'_, String>, uri: Option<String>, side: f32) -> NodeBuilder<'_, String> {
+fn with_tree_icon(b: NodeBuilder<'_, String>, uri: Option<String>, side: f32, hidden: bool) -> NodeBuilder<'_, String> {
     match uri {
         Some(uri) => b.icon(move |ui| {
+            if hidden {
+                ui.multiply_opacity(HIDDEN_OPACITY);
+            }
             ui.add(egui::Image::new(uri.as_str()).fit_to_exact_size(vec2(side, side)));
             ui.add_space(4.0);
         }),
@@ -1840,7 +1856,15 @@ fn add_tree_nodes<'a>(
             Some(_) => node.entry.name.clone(),
             None => format!("{}  {}", emoji(&node.entry), node.entry.name),
         };
-        let with_icon = |b| with_tree_accessory(with_tree_icon(b, uri.clone(), side), node.badges.clone(), &node.id, hooks);
+        // a hidden item: its name faded and in italics, like its icon
+        let label = if node.entry.hidden {
+            egui::RichText::new(label).weak().italics()
+        } else {
+            egui::RichText::new(label)
+        };
+        let with_icon = |b| {
+            with_tree_accessory(with_tree_icon(b, uri.clone(), side, node.entry.hidden), node.badges.clone(), &node.id, hooks)
+        };
         if node.entry.is_dir {
             builder.node(with_icon(
                 NodeBuilder::dir(node.id.clone())

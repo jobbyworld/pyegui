@@ -73,7 +73,9 @@ from pyegui import (
     image_button_clicked,
     interactive,
     key_pressed,
+    heading,
     label,
+    progress,
     left_panel,
     markdown,
     menu_image_button,
@@ -260,6 +262,7 @@ WATCH_COLORS = {
     CREATED: (34, 197, 94), MODIFIED: (234, 179, 8), DELETED: (239, 68, 68), RENAMED: (59, 130, 246),
 }
 WATCH_PANES = ("Dossiers surveillés", "Activités")  # closed until a folder is watched
+JOB_PANES = ("Indexation",)  # closed until an indexation starts
 indexing = {"running": False, "count": 0, "folder": "", "result": None}  # the folder index job
 note_text = Str("")  # the text of the Notes pane, for the item it holds
 note_of = {"path": ""}  # the item the Notes pane holds
@@ -274,6 +277,10 @@ scroll_target = Str("")  # path of the item the view has to scroll to this frame
 view = Int(TREE)
 search = Str("")
 show_sidebar = Bool(True)
+show_hidden = Bool(False)  # the hidden items (a name with a dot, a hidden flag), faded when shown
+path_editing = Bool(False)  # the path bar is a text field holding the full path
+path_text = Str("")
+path_edit = {"focus": False, "error": False}  # the focus is asked at the first frame of the field
 ZONES = ["sidebar", "content", "dock"]  # F6 goes through them, left to right
 focus_zone = Str(
     "content"
@@ -358,13 +365,16 @@ def entry(path):
 def listing(folder):
     """the items of a folder, from the watcher: read again only when something changed on the disk"""
     cached = listing_cache.get(folder)
-    if cached is None or cached[0] != watcher.version:
+    stamp = (watcher.version, show_hidden.value)
+    if cached is None or cached[0] != stamp:
         entries = [
-            e for e in (entry(Path(d["path"])) for d in watcher.list_dir(folder)) if e
+            e
+            for e in (entry(Path(d["path"])) for d in watcher.list_dir(folder, hidden=show_hidden.value))
+            if e
         ]
         # folders first, then by name like the Finder
         listing_cache[folder] = (
-            watcher.version,
+            stamp,
             sorted(entries, key=lambda e: (not e["is_dir"], e["name"].lower())),
         )
     return listing_cache[folder][1]
@@ -749,6 +759,7 @@ def snapshot():
         "view": view.value,
         "show_sidebar": show_sidebar.value,
         "show_dock": show_dock.value,
+        "show_hidden": show_hidden.value,
         "folded": sorted(folded),
         "tag_tree_folded": tag_tree.folded,
         "folder": str(current()),
@@ -771,6 +782,7 @@ def restore(saved):
     view.value = saved.get("view", view.value)
     show_sidebar.value = saved.get("show_sidebar", show_sidebar.value)
     show_dock.value = saved.get("show_dock", show_dock.value)
+    set_hidden(bool(saved.get("show_hidden", show_hidden.value)))
     folded.update(saved.get("folded", []))
     tag_tree.folded = [p for p in saved.get("tag_tree_folded", []) if isinstance(p, str)]
     tree.open_folders = [p for p in saved.get("tree_open", []) if isinstance(p, str)]
@@ -784,6 +796,35 @@ def restore(saved):
     folder = Path(saved.get("folder", ""))
     if len(sys.argv) < 2 and is_dir_within(folder):  # a folder given on the command line wins
         history[:] = [folder]
+
+
+def set_hidden(show):
+    """shows or hides the hidden items in the three views and in the lists of the Finder"""
+    show_hidden.value = show
+    tree.show_hidden = files_list.show_hidden = files_icons.show_hidden = show
+    listing_cache.clear()
+
+
+def edit_path():
+    """the path bar becomes a field holding the full path of the selected item or of the folder"""
+    path_text.value = selected.value if len(picked) == 1 else str(current())
+    path_edit.update(focus=True, error=False)
+    path_editing.value = True
+
+
+def apply_path():
+    """enters the folder typed in the path bar, or shows the file in its folder; False if it does not exist"""
+    text = path_text.value.strip()
+    if not text:
+        return False
+    path = Path(text).expanduser()
+    if is_dir_within(path):
+        go(path)
+    elif path.exists() and is_dir_within(path.parent):
+        go_or_select(path)
+    else:
+        return False
+    return True
 
 
 def set_theme(value):
@@ -1402,8 +1443,6 @@ def find_panel():
             weak("Recherche en cours…")
 
         horizontal(searching)
-    elif index_status():
-        weak(index_status())
     elif stale:
         weak(f"Recherche en cours… ({count})" if find_auto.value else f"{count} · critères modifiés")
     else:
@@ -1902,6 +1941,7 @@ def measure(key, draw, last=False):
         context[0].request_repaint()  # the next frame is laid out with the new width
 
 
+EDIT_BUTTON = 34  # the room of the "…" that ends the path: the button and its spacing
 SLACK = 1  # room kept in a row, to see that what is at its right grew
 SEARCH_WIDTH, SEARCH_MIN = (
     240,
@@ -2536,13 +2576,31 @@ def read_pdfs_action():
     start_index_job(None, "l'index", walk=False)
 
 
+index_queue = []  # the jobs waiting, (folder, name, walk), run one after the other: SQLite has one writer
+index_history = []  # what the last jobs gave, newest last: (name, text)
+
+
 def start_index_job(folder, name, walk):
-    """the thread of an indexation: the walk of a folder (if walk), then the reading of its PDF"""
+    """queues an indexation: the walk of a folder (if walk), then the reading of its PDF. It starts
+    at once when nothing runs, else it waits for the ones before it"""
+    job = (folder, name, walk)
     if indexing["running"]:
+        waiting = [(f, w) for f, _, w in index_queue]
+        if (folder, walk) not in waiting and not (indexing.get("job") == (folder, walk)):
+            index_queue.append(job)
+        show_pane("Indexation")
         return
+    run_index_job(*job)
+
+
+def run_index_job(folder, name, walk):
+    """the thread of one indexation of the queue; at its end it starts the next one"""
     indexing.update(
-        running=True, count=0, folder=name, result=None, pdf=None, pdfs=None, walk=walk
+        running=True, count=0, folder=name, result=None, pdf=None, pdfs=None, walk=walk,
+        current="", pdf_current="", started=time.time(), cancel=False, done_at=None,
+        job=(folder, walk),
     )
+    show_pane("Indexation")
 
     def progress(count):
         indexing["count"] = count
@@ -2550,19 +2608,130 @@ def start_index_job(folder, name, walk):
     def pdf_progress(done, total):
         indexing["pdf"] = (done, total)
 
+    def on_folder(path):
+        indexing["current"] = path
+
+    def on_file(path):
+        indexing["pdf_current"] = path
+
+    def cancelled():
+        return indexing["cancel"]
+
     def work():
         try:
-            indexing["result"] = tags.index_folder(folder, progress) if walk else (0, 0)
+            indexing["result"] = (
+                tags.index_folder(folder, progress, cancelled, on_folder=on_folder) if walk else (0, 0)
+            )
             try:  # then what the PDF say of themselves: only the new or changed ones are read
-                indexing["pdfs"] = tags.index_pdfs(folder, pdf_progress)
+                if indexing["result"] is not None:  # a cancelled walk stops the whole job
+                    indexing["pdfs"] = tags.index_pdfs(folder, pdf_progress, cancelled, on_file)
             except ImportError:
                 indexing["pdfs"] = "pypdf"  # not installed: the files are indexed all the same
         except Exception as error:  # a base that is locked, a disk that is full...
             indexing["result"] = error
+        result = indexing["result"]
+        if isinstance(result, Exception):
+            text = f"impossible : {result}"
+        elif result is None:
+            text = "annulée"
+        else:
+            text = f"{result[0]} éléments" if walk else "PDF lus"
+            pdfs = indexing.get("pdfs")
+            if isinstance(pdfs, tuple) and pdfs[0]:
+                text += f", {pdfs[0]} PDF lus"
+        index_history.append((name, text))
+        del index_history[:-10]
         indexing["done_at"] = time.time()
-        indexing["running"] = False
+        if index_queue:  # the next one, without a moment where nothing runs
+            run_index_job(*index_queue.pop(0))
+        else:
+            indexing["running"] = False
 
     threading.Thread(target=work, daemon=True).start()
+
+
+def index_panel():
+    """the dock pane of the indexation: the folder being walked, the count, the elapsed time, then
+    the reading of the PDF with its progress; Annuler stops the job"""
+    state = indexing
+    if state["running"]:
+        elapsed = time.time() - state["started"]
+        pdf = state.get("pdf")
+        heading("Indexation en cours" if not pdf else "Lecture des PDF")
+        label(f"Dossier : {state['folder']}")
+        if pdf:
+            progress(pdf[0] / max(pdf[1], 1))
+            label(f"{pdf[0]} / {pdf[1]} PDF")
+            weak(state.get("pdf_current") or "")
+        else:
+            horizontal(lambda: (spinner(), label(f"{state['count']:,} éléments".replace(",", " "))))
+            weak("En cours : " + (state.get("current") or "…"))
+        rate = state["count"] / elapsed if elapsed > 1 else 0
+        weak(f"{int(elapsed // 60)} min {int(elapsed % 60):02d} s" + (f" · {rate:,.0f} éléments/s".replace(",", " ") if rate else ""))
+        def buttons():
+            if state["cancel"]:
+                weak("Annulation…")
+            elif button_clicked("Annuler"):
+                state["cancel"] = True
+            if index_queue and button_clicked("Tout annuler"):
+                index_queue.clear()
+                state["cancel"] = True
+
+        horizontal(buttons)
+        index_queue_section()
+        index_history_section()
+        return
+    index_idle_section()
+    index_history_section()
+
+
+def index_queue_section():
+    """the jobs waiting behind the one that runs, each with a cross to take it out"""
+    if not index_queue:
+        return
+    add_space(6)
+    heading(f"En attente ({len(index_queue)})")
+    for job in list(index_queue):
+        def row(job=job):
+            label(job[1] + ("" if job[2] else " (PDF)"))
+            if image_button_clicked(svg("close"), size=12, tint=icon_tint()) and job in index_queue:
+                index_queue.remove(job)
+
+        horizontal(row)
+
+
+def index_history_section():
+    """what the last jobs gave, the newest first"""
+    if not index_history:
+        return
+    add_space(6)
+    heading("Terminées")
+    for name, text in reversed(index_history):
+        weak(f"{name} : {text}")
+
+
+def index_idle_section():
+    """the end of the last job, when nothing runs"""
+    state = indexing
+    if not state.get("done_at"):
+        weak("Aucune indexation : action Outils › Indexer le dossier dans SQLite.")
+        return
+    result = state["result"]
+    if isinstance(result, Exception):
+        heading("Indexation impossible")
+        weak(str(result))
+    elif result is None:
+        heading("Indexation annulée")
+        weak("Rien n'a été enregistré de ce parcours.")
+    else:
+        heading("Indexation terminée")
+        label(f"{state['folder']} : {result[0]} éléments" + (f", {result[1]} retirés" if result[1] else ""))
+        pdfs = state.get("pdfs")
+        if pdfs == "pypdf":
+            weak("PDF non lus : pip install pypdf")
+        elif pdfs and pdfs[0]:
+            weak(f"{pdfs[0]} PDF lus" + (f" dont {pdfs[1]} illisibles" if pdfs[1] else ""))
+    weak(f"Terminée à {time.strftime('%H:%M:%S', time.localtime(state['done_at']))}")
 
 
 def index_status():
@@ -2784,7 +2953,7 @@ ACTIONS = [
         "Indexer le dossier dans SQLite",
         "folder-plus",
         None,
-        lambda: not indexing["running"],
+        lambda: True,  # while one runs, the new one waits in the queue
         index_folder_action,
     ),
     (
@@ -2792,7 +2961,7 @@ ACTIONS = [
         "Lire les PDF de l'index",
         "refresh",
         None,
-        lambda: not indexing["running"],
+        lambda: True,
         read_pdfs_action,
     ),
     (
@@ -2819,6 +2988,23 @@ ACTIONS = [
         lambda: True,
         reveal,
     ),
+    (
+        "Affichage",
+        "Afficher les fichiers cachés",
+        "eye",
+        "Cmd+Shift+Period",
+        lambda: not show_hidden.value,
+        lambda: set_hidden(True),
+    ),
+    (
+        "Affichage",
+        "Masquer les fichiers cachés",
+        "eye-off",
+        "Cmd+Shift+Period",
+        lambda: show_hidden.value,
+        lambda: set_hidden(False),
+    ),
+    ("Affichage", "Modifier le chemin", "open", "Cmd+L", lambda: True, edit_path),
     ("Affichage", "Thème clair", "gear", None, lambda: True, lambda: set_theme(LIGHT)),
     ("Affichage", "Thème sombre", "gear", None, lambda: True, lambda: set_theme(DARK)),
     (
@@ -2911,6 +3097,7 @@ ACTIONS = [
             "Tags",
             "Recherche",
             *WATCH_PANES,
+            *JOB_PANES,
             "Terminal",
             "Python",
         )  # ALL_PANES is defined further down
@@ -3129,18 +3316,39 @@ def path_bar():
 
         count = len(visible_entries())
         text = index_status() or f"{count} item{'s' if count != 1 else ''}"
+        if path_editing.value and path_edit["error"]:
+            text = "Chemin introuvable"
         with_text = (
             available_width() >= widths["count"] + SLACK
         )  # the count goes first when narrow
         key = "count" if with_text else "dock"
         # the folders down to the selected item, the parents shortened when the room is missing
         here = selected.value if len(picked) == 1 else str(current())
-        path_breadcrumb(
-            here,
-            max_width=available_width() - widths[key] - SLACK - 8,
-            on_click=go_or_select,
-            context_menu=path_menu,
-        )
+        if path_editing.value:
+            def field():
+                set_width(max(available_width() - widths[key] - SLACK - 8, 100))
+                # at the first frame: the focus and the whole path selected, to paste over it
+                text_edit_singleline(
+                    path_text, request_focus=path_edit["focus"], select_all=path_edit["focus"]
+                )
+                path_edit["focus"] = False
+
+            (horizontal_centered if unified.value else vertical)(field)  # centered like the search
+            if key_pressed("Escape", when_typing=True):
+                path_editing.value = False
+            elif key_pressed("Enter", when_typing=True):
+                path_edit["error"] = not apply_path()
+                path_editing.value = path_edit["error"]  # a path that does not exist stays to be fixed
+        else:
+            path_breadcrumb(
+                here,
+                max_width=available_width() - widths[key] - SLACK - 8 - EDIT_BUTTON,
+                on_click=go_or_select,
+                context_menu=path_menu,
+            )
+            # the last element of the path: its full text, to type or paste a path
+            if small_button_clicked("…"):
+                edit_path()
         # no minimum: when the breadcrumb takes all its max_width, what is left is exactly the width
         # of the right side; a few more points would push it out, measure() would widen it, the
         # breadcrumb shrink, and the row would go back and forth at every frame
@@ -3218,6 +3426,7 @@ PANES = {
     "Recherche": zone_pane("dock", lambda: scroll_area_vertical(find_panel)),
     "Dossiers surveillés": zone_pane("dock", lambda: scroll_area_vertical(watched_panel)),
     "Activités": zone_pane("dock", lambda: scroll_area_vertical(activity_panel)),
+    "Indexation": zone_pane("dock", lambda: scroll_area_vertical(index_panel)),
 }
 # the dock at the bottom, under the files
 BOTTOM_PANES = {
@@ -3242,7 +3451,7 @@ dock = Dock(
             ),
             DockContainer(
                 "vertical",
-                [DockPane(title, ui, closable=True) for title, ui in PANES.items() if title not in WATCH_PANES],
+                [DockPane(title, ui, closable=True) for title, ui in PANES.items() if title not in WATCH_PANES + JOB_PANES],
             ),
         ],
     ),
