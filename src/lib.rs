@@ -25,6 +25,7 @@ mod path;
 mod plot;
 mod style;
 mod table;
+mod tags;
 mod terminal;
 mod tree;
 mod watcher;
@@ -2918,5 +2919,6 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     watcher::register(m)?;
     files::register(m)?;
     path::register(m)?;
+    tags::register(m)?;
     Ok(())
 }

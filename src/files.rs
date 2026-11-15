@@ -1766,14 +1766,53 @@ fn fill_badges(nodes: &mut [Node], hooks: &Hooks<'_>) {
     }
 }
 
-fn with_tree_badges(b: NodeBuilder<'_, String>, badges: Vec<Color32>) -> NodeBuilder<'_, String> {
-    if badges.is_empty() {
+/// The right end of a row of the tree: the columns drawn by Python, then the badges at their left
+fn with_tree_accessory<'a>(
+    b: NodeBuilder<'a, String>,
+    badges: Vec<Color32>,
+    path: &'a str,
+    hooks: &'a Hooks<'_>,
+) -> NodeBuilder<'a, String> {
+    if badges.is_empty() && hooks.extras.is_empty() {
         return b;
     }
     b.accessory(move |ui| {
-        let (rect, _) = ui.allocate_exact_size(vec2(dots_width(&badges, 9.0) + 4.0, 12.0), Sense::hover());
-        paint_dots(ui, &badges, rect.left(), rect.center().y, 9.0);
+        // the ui goes from right to left: the last column first
+        for extra in hooks.extras.iter().rev() {
+            let (cell, _) = ui.allocate_exact_size(vec2(extra.width, ui.available_height()), Sense::hover());
+            let mut cell_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(cell.shrink2(vec2(4.0, 0.0)))
+                    .layout(egui::Layout::left_to_right(Align::Center)),
+            );
+            cell_ui.shrink_clip_rect(cell);
+            if let Err(err) = unsafe { run_nested_call(&mut cell_ui, &extra.cell, (path.to_owned(),)) } {
+                err.display(extra.cell.py());
+            }
+        }
+        if !badges.is_empty() {
+            let (rect, _) = ui.allocate_exact_size(vec2(dots_width(&badges, 9.0) + 4.0, 12.0), Sense::hover());
+            paint_dots(ui, &badges, rect.left(), rect.center().y, 9.0);
+        }
     })
+}
+
+/// The titles of the columns of Python above the tree, over the cells of the rows
+fn tree_header(ui: &mut egui::Ui, extras: &[Extra<'_>]) {
+    let width = ui.available_width();
+    if extras.is_empty() || !width.is_finite() {
+        return;
+    }
+    let height = ui.text_style_height(&egui::TextStyle::Small) + 6.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    let color = ui.visuals().weak_text_color();
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    let mut right = rect.right();
+    for extra in extras.iter().rev() {
+        right -= extra.width;
+        ui.painter().text(pos2(right + 4.0, rect.center().y), Align2::LEFT_CENTER, &extra.title, font.clone(), color);
+    }
+    ui.painter().hline(rect.x_range(), rect.bottom(), egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
 }
 
 fn with_tree_icon(b: NodeBuilder<'_, String>, uri: Option<String>, side: f32) -> NodeBuilder<'_, String> {
@@ -1786,12 +1825,13 @@ fn with_tree_icon(b: NodeBuilder<'_, String>, uri: Option<String>, side: f32) ->
     }
 }
 
-fn add_tree_nodes(
+fn add_tree_nodes<'a>(
     builder: &mut TreeViewBuilder<'_, String>,
-    nodes: &[Node],
+    nodes: &'a [Node],
     ctx: &egui::Context,
     open_by_default: bool,
     activatable_dirs: bool,
+    hooks: &'a Hooks<'_>,
 ) {
     for node in nodes {
         let side = 16.0;
@@ -1800,7 +1840,7 @@ fn add_tree_nodes(
             Some(_) => node.entry.name.clone(),
             None => format!("{}  {}", emoji(&node.entry), node.entry.name),
         };
-        let with_icon = |b| with_tree_badges(with_tree_icon(b, uri.clone(), side), node.badges.clone());
+        let with_icon = |b| with_tree_accessory(with_tree_icon(b, uri.clone(), side), node.badges.clone(), &node.id, hooks);
         if node.entry.is_dir {
             builder.node(with_icon(
                 NodeBuilder::dir(node.id.clone())
@@ -1809,7 +1849,7 @@ fn add_tree_nodes(
                     .label(label),
             ));
             if let Some(children) = &node.children {
-                add_tree_nodes(builder, children, ctx, false, activatable_dirs);
+                add_tree_nodes(builder, children, ctx, false, activatable_dirs, hooks);
             }
             builder.close_dir();
         } else {
@@ -1847,6 +1887,10 @@ fn tree_row(nodes: &[Node], id: &str, row: &mut usize) -> Option<usize> {
 ///
 ///     badges (callable): called with the path of each item, returns a list of colors drawn as
 ///         dots at the right end of its row, e.g. the tags of a file
+///
+///     extra_columns (list[tuple[str, float, callable]]): columns of your own at the right end of
+///         the rows: a title (shown above the tree), a width, and a function called with the path
+///         of each row to draw its cell, e.g. ("Tags", 160, lambda path: tags_edit(...))
 ///
 /// Example::
 ///
@@ -1935,7 +1979,9 @@ unsafe fn file_tree_view(py: Python<'_>, view: &Bound<'_, FileTreeView>, kwargs:
             menu_result = run_nested_call(menu_ui, menu_fun, (ids.clone(),));
         });
     }
-    let (_, actions) = tree.show_state(ui, &mut state, |builder| add_tree_nodes(builder, &nodes, &ctx, show_root, activatable_dirs));
+    tree_header(ui, &hooks.extras);
+    let (_, actions) =
+        tree.show_state(ui, &mut state, |builder| add_tree_nodes(builder, &nodes, &ctx, show_root, activatable_dirs, &hooks));
 
     let mut v = view.borrow_mut();
     v.activated.clear();

@@ -41,6 +41,8 @@ from pyegui import (
     FileWatcher,
     Int,
     Str,
+    TagTreeView,
+    Tags,
     Terminal,
     add_enabled,
     add_space,
@@ -91,6 +93,8 @@ from pyegui import (
     small,
     small_button_clicked,
     strong,
+    tag_tree_view,
+    tags_edit,
     terminal,
     text_edit_multiline,
     text_edit_singleline,
@@ -245,7 +249,6 @@ focus_zone = Str(
 )  # the part of the window the keyboard acts on, see keyboard()
 show_dock = Bool(True)  # the dock around the files: Actions, Preview, Notes and Tags
 folded = {"Outils", "Ouvrir", "Système", "Édition"}  # categories of the Actions panel folded shut
-tags_folded = set()  # ids of the tags of the sidebar whose children are hidden
 renaming = Str("")  # path being renamed, or ""
 new_name = Str("")
 palette_open = Bool(False)  # the action palette: a searchable list of the actions below
@@ -651,7 +654,7 @@ def snapshot():
         "show_sidebar": show_sidebar.value,
         "show_dock": show_dock.value,
         "folded": sorted(folded),
-        "tags_folded": sorted(tags_folded),
+        "tag_tree_folded": tag_tree.folded,
         "folder": str(current()),
         "tree_open": tree.open_folders,
         "dock": dock.save(),  # the panes still open, their tabs and sizes
@@ -672,7 +675,7 @@ def restore(saved):
     show_sidebar.value = saved.get("show_sidebar", show_sidebar.value)
     show_dock.value = saved.get("show_dock", show_dock.value)
     folded.update(saved.get("folded", []))
-    tags_folded.update(i for i in saved.get("tags_folded", []) if isinstance(i, int))
+    tag_tree.folded = [p for p in saved.get("tag_tree_folded", []) if isinstance(p, str)]
     tree.open_folders = [p for p in saved.get("tree_open", []) if isinstance(p, str)]
     layout = saved.get("dock")
     if layout:
@@ -853,6 +856,102 @@ def create_tag_path(parts):
             existing = tags.create(part, color, parent)
         parent = existing
     return parent
+
+
+# the tags of the store as Tags objects of pyegui: tag_tree_view in the sidebar, tags_edit in the
+# preview. A tag is a path of names, "Work/Invoice"; the store keeps the ids, the colors and the items
+
+library = Tags()  # every tag of the store, in its color
+library_state = {"version": -1, "ids": {}, "counts": {}}  # path -> id, path -> items tagged
+tag_tree = TagTreeView()  # the tags of the sidebar: the levels folded and the one selected
+item_tags = Tags()  # the own tags of the item of the preview
+item_tags_of = {"path": None, "version": -1}
+
+
+def sync_library():
+    """library, the ids of its paths and the counts, read again when the store changed"""
+    if library_state["version"] == tags.version:
+        return
+    by_id = tag_data()["by_id"]
+    ids = {"/".join(tag_path(t["id"])): t["id"] for t in tag_data()["all"]}
+    library.tags = list(ids)
+    library.colors = {path: by_id[i]["color"] for path, i in ids.items()}
+    counts = {path: len(tags.tagged_with(i)) for path, i in ids.items()}
+    library_state.update(version=tags.version, ids=ids, counts=counts)
+
+
+def store_colors(widget):
+    """the colors changed in a widget (its right click menu), written to the store"""
+    sync_library()
+    by_id = tag_data()["by_id"]
+    levels = {"/".join(t.split("/")[: i + 1]) for t in widget.tags for i in range(t.count("/") + 1)}
+    for path in levels:
+        tag_id = library_state["ids"].get(path)
+        if tag_id is not None and widget.color(path) != by_id[tag_id]["color"].lower():
+            tags.recolor(tag_id, widget.color(path))
+
+
+def tags_tree():
+    """the tags of the sidebar: a click shows the items of a tag, a right click recolors it"""
+    sync_library()
+    paths = {i: path for path, i in library_state["ids"].items()}
+    tag_tree.selected = paths.get(tag_filter.value)
+    # removable=False: deleting a tag takes it off all its items, that is done in the tag manager
+    clicked = tag_tree_view(tag_tree, library, counts=library_state["counts"], removable=False)
+    if clicked:
+        tag_filter.value = library_state["ids"][clicked]
+        deselect()
+    store_colors(library)
+
+
+def edit_own_tags(path, **widget):
+    """the own tags of an item in a tags_edit: Enter adds one (made with its levels when new), the
+    cross removes it, the right click recolors a level; written to the store at once. The preview
+    and the Tags cell of the selected row of the tree share it"""
+    sync_library()
+    ids = library_state["ids"]
+    if item_tags_of["path"] != path or item_tags_of["version"] != tags.version:
+        own = tags.own(path)
+        item_tags.tags = [p for p, i in ids.items() if i in own]
+        item_tags.colors = library.colors
+        item_tags_of.update(path=path, version=tags.version)
+    before = set(item_tags.tags)
+    if tags_edit(item_tags, suggestions=list(ids), **widget):
+        now = set(item_tags.tags)
+        for added in now - before:
+            tags.tag(path, create_tag_path(split_tag_path(added)))
+        for removed in before - now:
+            if removed in ids:
+                tags.untag(path, ids[removed])
+        store_colors(item_tags)
+
+
+def item_tags_ui(path):
+    """the tags of the item of the preview: its own ones to edit, then those of its folders"""
+    edit_own_tags(path, hint_text="Ajouter un tag", field_width=140, id="preview")
+    inherited = ["/".join(tag_path(tag["id"])) for tag, how in tags_of(path) if how == "folder"]
+    if inherited:
+        add_space(4)
+        weak("Hérités des dossiers")
+        tags_edit(Tags(inherited, colors=library.colors), editable=False, max_visible=6, muted=inherited, id="inherited")
+
+
+TAGS_COLUMN = 200  # the width of the Tags column of the tree
+
+
+def tags_cell(path):
+    """the Tags column of the tree and of the list: on the selected row the own tags of the item to edit, on the
+    others its tags and those of its folders, small chips"""
+    if len(picked) == 1 and path == selected.value:
+        # one chip, +N and the field fit in the column; +N shows them all
+        edit_own_tags(path, small=True, max_visible=1, field_width=64, hint_text="+ tag", id=f"tree tags {path}")
+        return
+    sync_library()
+    found = [("/".join(tag_path(tag["id"])), how) for tag, how in tags_of(path) if how != "parent"]
+    if found:
+        cell = Tags([p for p, _ in found], colors=library.colors)
+        inherited = [p for p, how in found if how == "folder"]  # desaturated: they come from a folder
+        tags_edit(cell, editable=False, small=True, max_visible=2, muted=inherited, id=f"tree tags {path}")
 
 
 def matching_tags(parts):
@@ -1294,37 +1393,8 @@ def sidebar_content():
         place(icon_name, name, path)
     add_space(12)
 
-    weak("Tags")  # managed from the Tags pane and the tag picker ("Gérer les tags…")
-    all_tags = tag_data()["all"]
-    with_children = {t["parent"] for t in all_tags}
-    hidden_below = None  # depth of the folded tag whose children are being skipped
-    for tag in all_tags:
-        if hidden_below is not None:
-            if tag["depth"] > hidden_below:
-                continue
-            hidden_below = None
-        if tag["id"] in tags_folded and tag["id"] in with_children:
-            hidden_below = tag["depth"]
-
-        def row(tag=tag):
-            add_space(13 + 8 * tag["depth"])  # the dot under the icons of the places
-            dot(hex_color(tag["color"]) + (255,))
-            add_space(-10)  # the name in line with the names of the places
-            if selectable_label_clicked(tag_filter.value == tag["id"], tag["name"]):
-                tag_filter.value = tag["id"]
-                deselect()
-            if tag["id"] in with_children:  # the disclosure arrow, at the right edge
-                add_space(max(available_width() - 40, 0))
-                folded_now = tag["id"] in tags_folded
-                if image_button_clicked(
-                    svg("chevron-right" if folded_now else "chevron-down"),
-                    size=10,
-                    tint=icon_tint(),
-                    frame=False,
-                ):
-                    tags_folded.symmetric_difference_update({tag["id"]})
-
-        horizontal(row)
+    weak("Tags")  # created in the preview, the Tags pane and the tag picker ("Gérer les tags…")
+    tags_tree()
 
 
 # toolbar
@@ -1656,14 +1726,15 @@ def content():
     before_view(v)
     if view.value == TREE:
         scroll_area_both(
-            lambda: file_tree_view(tree, badges=tag_badges, context_menu=view_menu)
+            lambda: file_tree_view(tree, extra_columns=[("Tags", TAGS_COLUMN, tags_cell)], context_menu=view_menu)
         )
     elif view.value == LIST:
         file_list_view(
             files_list,
             headers=["Name", "Date Modified", "Size", "Kind"],
-            extra_columns=[("Notes", 50, note_cell)],  # a column drawn by the Finder
-            badges=tag_badges,  # the tags as dots
+            # columns drawn by the Finder: the notes, and the tags as in the tree (editable on the
+            # selected row)
+            extra_columns=[("Notes", 50, note_cell), ("Tags", TAGS_COLUMN, tags_cell)],
             context_menu=view_menu,
         )
     else:
@@ -1712,6 +1783,9 @@ def preview():
             end_row()
 
     grid("info", rows, num_columns=2, spacing=(12, 6))
+    add_space(8)
+    small("Tags")
+    item_tags_ui(item["path"])
     add_space(8)
 
     suffix = item["path"].suffix.lower()
@@ -2356,7 +2430,10 @@ def path_bar():
             on_click=go_or_select,
             context_menu=path_menu,
         )
-        add_space(max(available_width() - widths[key] - SLACK, 4))
+        # no minimum: when the breadcrumb takes all its max_width, what is left is exactly the width
+        # of the right side; a few more points would push it out, measure() would widen it, the
+        # breadcrumb shrink, and the row would go back and forth at every frame
+        add_space(max(available_width() - widths[key] - SLACK, 0))
 
         def right():
             if with_text:

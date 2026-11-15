@@ -185,7 +185,9 @@ fn cap(widths: &[f32], available: f32, min: f32) -> Option<f32> {
 /// Keyword args:
 ///     root (str): the first folder shown, an ancestor of path. Default is the root of the disk
 ///
-///     max_width (float): the widest it can be. Default is the width left in the ui
+///     max_width (float): the widest it can be. Default is the width left in the ui. The
+///         ancestors are shortened first, then those that still do not fit are left out from the
+///         root, so the breadcrumb never takes more
 ///
 ///     icons (bool): shows the icons of the folders. Default is True
 ///
@@ -264,11 +266,29 @@ unsafe fn path_breadcrumb(path: PathBuf, kwargs: Option<&Bound<'_, PyDict>>) -> 
     let room = available - seps - widths.iter().sum::<f32>();
     widths.push(last.min(room.max(min)));
 
-    let total = widths.iter().sum::<f32>() + seps;
+    // never wider than the room given: the ancestors that do not fit even shortened are left out,
+    // from the root, and the folder itself is cut last. A breadcrumb wider than max_width would
+    // push what follows it out of the row, and a row that measures itself would never settle
+    let mut first = 0;
+    let mut total = widths.iter().sum::<f32>() + seps;
+    while total > available && first < steps.len() - 1 {
+        total -= widths[first] + sep_w;
+        first += 1;
+        let room = available - (total - widths[widths.len() - 1]);
+        let end = widths.len() - 1;
+        widths[end] = last.min(room.max(min));
+        total = widths[first..].iter().sum::<f32>() + sep_w * (steps.len() - 1 - first) as f32;
+    }
+    if total > available {
+        let end = widths.len() - 1;
+        widths[end] = (widths[end] - (total - available)).max(0.0);
+        total = available.max(0.0);
+    }
+
     let (rect, _) = ui.allocate_exact_size(vec2(total, height), Sense::hover());
     let mut clicked = None;
     let mut x = rect.left();
-    for (i, ((step, name), width)) in steps.iter().zip(&widths).enumerate() {
+    for (i, ((step, name), width)) in steps.iter().zip(&widths).enumerate().skip(first) {
         let item = Rect::from_min_size(pos2(x, rect.top()), vec2(*width, height));
         x += width;
         let response = ui.interact(item, id.with(i), Sense::click());
