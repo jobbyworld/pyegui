@@ -110,7 +110,11 @@ class TagStore:
         self.path = ":memory:" if path == ":memory:" else Path(path or default_path())
         if self.path != ":memory:":
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(str(self.path))
+        self.db = sqlite3.connect(str(self.path), timeout=2)  # the window never waits long for a thread that indexes
+        if self.path != ":memory:":
+            # write-ahead log: the window reads and writes tags while a thread indexes, and a reader
+            # no longer blocks the commit of the walk ("database is locked" with the default journal)
+            self.db.execute("PRAGMA journal_mode = WAL")
         self.db.execute("PRAGMA foreign_keys = ON")
         self.db.executescript(SCHEMA)
         # bases made before the index have only the first columns of files
@@ -267,14 +271,18 @@ class TagStore:
         self.changed()
 
     def opened(self, path, when=None):
-        """the item was opened now (or at `when`, seconds since the epoch): referenced if it was not"""
-        self.db.execute(
-            """INSERT INTO files (path, last_opened, open_count) VALUES (?, ?, 1)
-               ON CONFLICT(path) DO UPDATE SET last_opened = excluded.last_opened,
-                                               open_count = open_count + 1""",
-            (key(path), time.time() if when is None else when),
-        )
-        self.changed()
+        """the item was opened now (or at `when`, seconds since the epoch): referenced if it was not.
+        A base kept busy by an indexation only loses this date, the window is not blocked"""
+        try:
+            self.db.execute(
+                """INSERT INTO files (path, last_opened, open_count) VALUES (?, ?, 1)
+                   ON CONFLICT(path) DO UPDATE SET last_opened = excluded.last_opened,
+                                                   open_count = open_count + 1""",
+                (key(path), time.time() if when is None else when),
+            )
+            self.changed()
+        except sqlite3.OperationalError:  # database is locked
+            self.db.rollback()
 
     def last_opened(self, path):
         """when the item was last opened, in seconds since the epoch, or None if never"""
@@ -320,7 +328,7 @@ class TagStore:
 
     # the index: a whole folder and everything it contains, with name, size and date
 
-    def index_folder(self, root, progress=None, cancel=None, workers=1):
+    def index_folder(self, root, progress=None, cancel=None, workers=1, on_folder=None):
         """walks a folder and records every file and sub-folder in the table files (name, parent,
         kind, size, modification date). A file gets last_seen, the time of the walk that found it;
         a folder gets last_full_scan, the time of the walk that read all its entries (a folder
@@ -334,7 +342,8 @@ class TagStore:
         with 4 or 8, the threads fight for the GIL, the system already caches the listings); more
         readers are for a slow or distant disk (network share, USB drive, cold hard disk), where the
         time goes in waiting for the answers.
-        `progress(count)` is called about every thousand items, `cancel()` tells to stop."""
+        `progress(count)` is called about every thousand items, `cancel()` tells to stop,
+        `on_folder(path)` is called with each folder as its entries are received."""
         root = Path(root).resolve()
         if self.path == ":memory:":
             db = self.db
@@ -350,7 +359,7 @@ class TagStore:
         seen_folders = {key(root)}
         done = set()  # every folder fully read in this walk
         todo = queue.Queue()  # folders to read
-        results = queue.Queue()  # what the readers found, for the writer: (folder, rows, complete)
+        results = queue.Queue(maxsize=256)  # bounded: the readers wait for the writer. What the readers found, for the writer: (folder, rows, complete)
         stop = threading.Event()
 
         def read(folder):
@@ -431,6 +440,8 @@ class TagStore:
                     stop.set()
                     continue
                 folder, found, complete = got
+                if on_folder:
+                    on_folder(str(folder))
                 rows.extend(found)
                 count += len(found)
                 seen_folders.update(r[0] for r in found if r[3])
@@ -456,11 +467,21 @@ class TagStore:
             db.commit()
             if progress:
                 progress(count)
+            self._checkpoint(db)
             return count, gone
         finally:
             stop.set()
             if db is not self.db:
                 db.close()
+
+    @staticmethod
+    def _checkpoint(db):
+        """gives the write-ahead log back to the base file and empties it (it grows with a long
+        walk); skipped without error when a reader of the window is using it"""
+        try:
+            db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.OperationalError:
+            pass
 
     @staticmethod
     def _drop_vanished(db, root, started, seen_folders, done):
@@ -477,14 +498,18 @@ class TagStore:
                 gone += db.execute(
                     "DELETE FROM files WHERE path = ? OR path LIKE ? ESCAPE '\\'", (folder, below)
                 ).rowcount
+                db.commit()  # one folder at a time: the write lock is never held for long
         stale = db.execute(
             "SELECT path, parent FROM files WHERE is_dir = 0 AND last_seen < ? "
             "AND path LIKE ? ESCAPE '\\'",
             (started, inside),
         ).fetchall()
-        for path, parent in stale:
-            if parent in done:
-                gone += db.execute("DELETE FROM files WHERE path = ?", (path,)).rowcount
+        gone_paths = [(path,) for path, parent in stale if parent in done]
+        for start in range(0, len(gone_paths), INDEX_BATCH):
+            gone += db.executemany(
+                "DELETE FROM files WHERE path = ?", gone_paths[start : start + INDEX_BATCH]
+            ).rowcount
+            db.commit()
         return gone
 
     def search(self, text, limit=200):
@@ -551,12 +576,12 @@ class TagStore:
             if db is not self.db:
                 db.close()
 
-    def index_pdfs(self, root=None, progress=None, cancel=None):
+    def index_pdfs(self, root=None, progress=None, cancel=None, on_file=None):
         """reads, with pypdf, the PDF indexed under a folder (None: the whole index) that are new or
         changed since they were last read (their size or date is not the one of pdf_info), into the
         table pdf_info. Without a new walk: it also reads the PDF indexed before pdf_info existed.
         Returns (read, with an error, up to date), or None if cancelled. Run index_folder first.
-        Safe to call from a thread, like index_folder. `progress(done, total)` after each file."""
+        Safe to call from a thread, like index_folder. `progress(done, total)` after each file, `on_file(path)` before reading one."""
         from finder_pdf import COLUMNS, read_pdf_info  # pypdf is only needed from here
 
         db = self.db if self.path == ":memory:" else sqlite3.connect(str(self.path), timeout=30)
@@ -583,6 +608,8 @@ class TagStore:
                     return None
                 if not os.path.exists(path):  # in the index, but gone since: the next walk drops it
                     continue
+                if on_file:
+                    on_file(path)
                 info = read_pdf_info(path)
                 read += 1
                 errors += bool(info["error"])

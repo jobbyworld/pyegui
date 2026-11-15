@@ -2032,6 +2032,9 @@ unsafe fn code_editor(
 ///     request_focus (bool): give the field the keyboard focus this frame, for example to let the
 ///         user type into it right as it appears, like a search field in a popup. Default is False
 ///
+///     select_all (bool): select the whole text this frame, so that typing or pasting replaces it,
+///         e.g. together with request_focus when a field opens on a value. Default is False
+///
 /// Example::
 ///
 ///     text = Str("editable")
@@ -2044,6 +2047,7 @@ unsafe fn text_edit_singleline(text: &mut Str, kwargs: Option<&Bound<'_, PyDict>
 
     let mut w = egui::TextEdit::singleline(&mut text.value);
     let mut request_focus = false;
+    let mut select_all = false;
 
     if let Some(kwargs) = kwargs {
         if let Some(hint_text) = kwargs.get_item("hint_text")? {
@@ -2052,11 +2056,20 @@ unsafe fn text_edit_singleline(text: &mut Str, kwargs: Option<&Bound<'_, PyDict>
         if let Some(focus) = kwarg::<bool>(Some(kwargs), "request_focus")? {
             request_focus = focus;
         }
+        if let Some(all) = kwarg::<bool>(Some(kwargs), "select_all")? {
+            select_all = all;
+        }
     }
 
-    let response = ui.add(w);
+    let mut output = w.show(ui);
+    let length = text.value.chars().count();
     if request_focus {
-        response.request_focus();
+        output.response.request_focus();
+    }
+    if select_all {
+        use egui::text::{CCursor, CCursorRange};
+        output.state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(0), CCursor::new(length))));
+        output.state.store(ui.ctx(), output.response.id);
     }
     Ok(())
 }

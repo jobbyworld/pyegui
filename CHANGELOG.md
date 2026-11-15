@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `text_edit_singleline(..., select_all=True)`: selects the whole text of the field at that frame, with `request_focus=True` a field opens on its value ready to be replaced or pasted over
+- Finder example: a `…` at the end of the path bar turns it into a field holding the full path (Cmd+L too): Enter goes there, Escape cancels; Show / Hide hidden files (Cmd+Shift+.), hidden items drawn faded (and in italics in the tree) in the three views
+
 ## 0.7.0 (2026-11-15)
 
 - Finder example: a Last Opened column in the list and tree views (the hour today, Yesterday, the day, the year when older), for the files opened with their app or in the viewer and the folders entered; a Recent pane in the dock, the last 30 items opened, the latest first, with when and where: a click shows the item in its folder. `TagStore.opened_dates()` reads all the dates in one query
