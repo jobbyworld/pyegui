@@ -2,7 +2,7 @@ use eframe::egui;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
 
-use crate::style::{self, apply_frame_kwargs, has_frame_kwargs, kwarg_color};
+use crate::style::{self, apply_frame_kwargs, has_frame_kwargs, kwarg_color, kwarg_stroke};
 use crate::{
     current_ui, kwarg, panel_parent_ui, run_nested_update_func, with_bool_copy, Bool, UI,
 };
@@ -46,7 +46,14 @@ unsafe fn show_panel(
         panel = panel.frame(apply_frame_kwargs(frame, kwargs)?);
     }
 
-    match kwarg::<Py<Bool>>(kwargs, "expanded")? {
+    // the line between the panel and the rest is drawn with the stroke of the noninteractive
+    // widgets: given, it is that stroke while the panel is shown (its content draws with it too)
+    let separator = kwarg_stroke(kwargs, "separator_stroke")?;
+    let previous = ui.visuals().widgets.noninteractive.bg_stroke;
+    if let Some(stroke) = separator {
+        ui.visuals_mut().widgets.noninteractive.bg_stroke = stroke;
+    }
+    let result = match kwarg::<Py<Bool>>(kwargs, "expanded")? {
         Some(expanded) => with_bool_copy(update_fun.py(), &expanded, |is_expanded| {
             panel
                 .show_collapsible(ui, is_expanded, |ui| run_nested_update_func(ui, update_fun))
@@ -57,7 +64,11 @@ unsafe fn show_panel(
                 .show(ui, |ui| run_nested_update_func(ui, update_fun))
                 .inner
         }
+    };
+    if separator.is_some() {
+        ui.visuals_mut().widgets.noninteractive.bg_stroke = previous;
     }
+    result
 }
 
 /// A panel on the left side of the window. The rest of the window is the central panel.
@@ -69,6 +80,9 @@ unsafe fn show_panel(
 ///     resizable (bool): whether the user can resize the panel. Default is True
 ///
 ///     show_separator_line (bool): show a line between the panel and the rest of the window
+///
+///     separator_stroke (tuple[float, color]): width and color of that line. Default is the line of
+///         the theme
 ///
 ///     default_size (float): the initial width of the panel
 ///

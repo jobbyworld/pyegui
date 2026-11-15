@@ -93,6 +93,26 @@ pub(crate) fn has_frame_kwargs(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<b
     Ok(false)
 }
 
+/// A margin: a float for the four sides, or (left, top, right, bottom)
+pub(crate) fn extract_margin(value: &Bound<'_, PyAny>, name: &str) -> PyResult<egui::Margin> {
+    let side = |v: f32| v.round().clamp(0.0, 127.0) as i8;
+    if let Ok(all) = value.extract::<f32>() {
+        Ok(egui::Margin::same(side(all)))
+    } else if let Ok((left, top, right, bottom)) = value.extract::<(f32, f32, f32, f32)>() {
+        Ok(egui::Margin { left: side(left), right: side(right), top: side(top), bottom: side(bottom) })
+    } else {
+        Err(PyTypeError::new_err(format!("{} must be a float or a tuple (left, top, right, bottom)", name)))
+    }
+}
+
+/// A margin keyword arg: a float for the four sides, or (left, top, right, bottom)
+fn kwarg_margin(kwargs: Option<&Bound<'_, PyDict>>, name: &str) -> PyResult<Option<egui::Margin>> {
+    let Some(value) = kwargs.and_then(|k| k.get_item(name).ok().flatten()) else {
+        return Ok(None);
+    };
+    extract_margin(&value, name).map(Some)
+}
+
 /// Applies fill, stroke, rounding, inner_margin, outer_margin and shadow keyword args
 pub(crate) fn apply_frame_kwargs(mut frame: Frame, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Frame> {
     if let Some(fill) = kwarg_color(kwargs, "fill")? {
@@ -104,21 +124,10 @@ pub(crate) fn apply_frame_kwargs(mut frame: Frame, kwargs: Option<&Bound<'_, PyD
     if let Some(rounding) = kwarg::<f32>(kwargs, "rounding")? {
         frame = frame.corner_radius(rounding);
     }
-    if let Some(margin) = kwarg::<f32>(kwargs, "inner_margin")? {
+    if let Some(margin) = kwarg_margin(kwargs, "inner_margin")? {
         frame = frame.inner_margin(margin);
     }
-    if let Some(value) = kwargs.and_then(|k| k.get_item("outer_margin").ok().flatten()) {
-        // a float for the four sides, or (left, top, right, bottom)
-        let side = |v: f32| v.round().clamp(0.0, 127.0) as i8;
-        let margin = if let Ok(all) = value.extract::<f32>() {
-            egui::Margin::same(side(all))
-        } else if let Ok((left, top, right, bottom)) = value.extract::<(f32, f32, f32, f32)>() {
-            egui::Margin { left: side(left), right: side(right), top: side(top), bottom: side(bottom) }
-        } else {
-            return Err(PyTypeError::new_err(
-                "outer_margin must be a float or a tuple (left, top, right, bottom)",
-            ));
-        };
+    if let Some(margin) = kwarg_margin(kwargs, "outer_margin")? {
         frame = frame.outer_margin(margin);
     }
     if let Some(shadow) = kwarg_shadow(kwargs, "shadow")? {
@@ -137,7 +146,7 @@ pub(crate) fn apply_frame_kwargs(mut frame: Frame, kwargs: Option<&Bound<'_, PyD
 ///
 ///     rounding (float): corner radius
 ///
-///     inner_margin (float), outer_margin (float or (left, top, right, bottom)): space inside and outside the border
+///     inner_margin, outer_margin (float or (left, top, right, bottom)): space inside and outside the border
 ///
 ///     shadow (False | tuple[int, color] | tuple[int, int, int, int, color]): (blur, color) or (offset_x, offset_y, blur, spread, color)
 ///

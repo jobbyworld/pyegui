@@ -34,7 +34,7 @@ THEMES = [
      ["Str", "Int", "Float", "Bool", "Date", "RGB", "RGBA", "Response"]),
     ("text", "Text, links and markdown",
      "Functions that show text. They are called every frame, in the order the text appears.",
-     ["heading", "label", "small", "strong", "weak", "monospace", "code", "colored_label",
+     ["heading", "label", "small", "strong", "weak", "monospace", "code", "code_view", "colored_label",
       "badge", "hyperlink", "hyperlink_to", "link_clicked", "label_response", "markdown"]),
     ("inputs", "Buttons and input widgets",
      "Widgets the user acts on. Buttons and toggles return True during the frame they are "
@@ -44,7 +44,7 @@ THEMES = [
       "toggle_value", "switch", "segmented_control", "combo_box", "slider_int", "slider_float", "drag_int",
       "drag_float", "drag_angle", "text_edit_singleline", "text_edit_multiline", "code_editor",
       "date_picker_button", "color_edit_button_rgb", "color_edit_button_rgba", "progress",
-      "spinner"]),
+      "spinner", "Tags", "tags_edit", "TagTreeView", "tag_tree_view"]),
     ("layout", "Layout, sizes and scrolling",
      "Update functions can be nested: a function given to `horizontal`, `group`, `frame`... "
      "draws in a child ui with its own layout and style. Panels must be added before any other "
@@ -111,7 +111,7 @@ THEMES = [
      ["Context.is_dark_theme", "Context.is_light_theme", "Context.set_dark_theme",
       "Context.set_light_theme", "Context.set_system_theme", "Context.set_style",
       "Context.reset_style", "Context.set_layout", "Context.set_accent", "Context.set_glass_style",
-      "Context.set_backdrop", "Context.set_backdrop_blur", "Context.set_font"]),
+      "Context.set_backdrop", "Context.set_backdrop_blur", "Context.set_central_margin", "Context.set_font"]),
 ]
 
 PRIVATE = {"pyegui"}

@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
 use crate::style::extract_color;
-use crate::{current_ui, run_nested_call, run_nested_update_func, Bool, Float, Int, UI};
+use crate::{current_ui, panel_parent_ui, run_nested_call, run_nested_update_func, Bool, Float, Int, UI};
 
 /// Shows a text in the given color.
 ///
@@ -322,6 +322,10 @@ unsafe fn is_visible() -> PyResult<bool> {
 }
 
 /// True if the mouse is over the current ui, e.g. to show buttons on hover.
+///
+/// It tests the part of the ui drawn so far: at the start of a nested function the ui has no
+/// size yet and this is False. To know whether a click fell in a whole area, call it after its
+/// widgets.
 ///
 /// Example::
 ///
@@ -649,7 +653,7 @@ unsafe fn interactive(update_fun: Bound<'_, PyAny>, drag: bool) -> PyResult<Resp
 /// with Response.rect.
 #[pyfunction]
 unsafe fn pointer_pos() -> PyResult<Option<(f32, f32)>> {
-    let ctx = current_ui(&UI)?.ctx().clone();
+    let ctx = panel_parent_ui(&UI)?.ctx().clone(); // no widget: the central panel is not opened
     Ok(ctx.input(|i| i.pointer.latest_pos()).map(|p| (p.x, p.y)))
 }
 
@@ -663,7 +667,7 @@ unsafe fn pointer_pos() -> PyResult<Option<(f32, f32)>> {
 ///         focused_zone.value = "sidebar"
 #[pyfunction]
 unsafe fn pointer_pressed() -> PyResult<bool> {
-    let ctx = current_ui(&UI)?.ctx().clone();
+    let ctx = panel_parent_ui(&UI)?.ctx().clone(); // no widget: the central panel is not opened
     Ok(ctx.input(|i| i.pointer.primary_pressed()))
 }
 
@@ -681,7 +685,7 @@ unsafe fn pointer_pressed() -> PyResult<bool> {
 ///             select_only(item)
 #[pyfunction]
 unsafe fn modifiers(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyDict>> {
-    let ctx = current_ui(&UI)?.ctx().clone();
+    let ctx = panel_parent_ui(&UI)?.ctx().clone(); // no widget: the central panel is not opened
     let held = ctx.input(|i| i.modifiers);
     let dict = pyo3::types::PyDict::new(py);
     dict.set_item("shift", held.shift)?;
@@ -803,7 +807,7 @@ unsafe fn segmented_control(
 ///         select_first_starting_with(typed)
 #[pyfunction]
 unsafe fn typed_text() -> PyResult<String> {
-    let ctx = current_ui(&UI)?.ctx().clone();
+    let ctx = panel_parent_ui(&UI)?.ctx().clone(); // no widget: the central panel is not opened
     if ctx.text_edit_focused() {
         return Ok(String::new());
     }
@@ -935,7 +939,7 @@ fn parse_shortcut(shortcut: &str) -> PyResult<(egui::Modifiers, egui::Key)> {
 #[pyo3(signature = (shortcut, when_typing=false))]
 unsafe fn key_pressed(shortcut: &str, when_typing: bool) -> PyResult<bool> {
     let (modifiers, key) = parse_shortcut(shortcut)?;
-    let ctx = current_ui(&UI)?.ctx().clone();
+    let ctx = panel_parent_ui(&UI)?.ctx().clone(); // no widget: the central panel is not opened
     if !when_typing && (ctx.text_edit_focused() || crate::terminal::terminal_focused(&ctx)) {
         return Ok(false);
     }

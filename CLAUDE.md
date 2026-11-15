@@ -84,13 +84,13 @@ an example. They are generated from the docstrings, see "Keeping the reference u
 |---|---|---|
 | Application and context | [app.md](docs/framework/app.md) | `run_native`, `Context` (clipboard, open_url), `Backdrop`, `pixels_per_point` |
 | Values | [values.md](docs/framework/values.md) | `Str`, `Int`, `Float`, `Bool`, `Date`, `RGB`, `RGBA`, `Response` |
-| Text | [text.md](docs/framework/text.md) | headings, labels, code, links, badges, markdown with mermaid |
-| Buttons and inputs | [inputs.md](docs/framework/inputs.md) | buttons, checkbox, radio, switch, sliders, text edits, color and date pickers, progress |
+| Text | [text.md](docs/framework/text.md) | headings, labels, code, code_view (syntax highlighting), links, badges, markdown with mermaid |
+| Buttons and inputs | [inputs.md](docs/framework/inputs.md) | buttons, checkbox, radio, switch, sliders, text edits, color and date pickers, progress, `Tags`/`tags_edit` (tags with levels and colors), `TagTreeView`/`tag_tree_view` (their tree) |
 | Layout | [layout.md](docs/framework/layout.md) | horizontal/vertical, grid, columns, group, frame, sizes, scroll areas, enable/disable |
 | Panels and popups | [panels.md](docs/framework/panels.md) | `sidebar_panel`/`topbar_panel`/`bottombar_panel`, side/top/bottom panels, window, modal, menus, tooltips, context menu |
 | Data | [data.md](docs/framework/data.md) | `table`, `table_ui`, `tree_view`, plots |
 | Docking | [docking.md](docs/framework/docking.md) | `Dock`, `DockPane`, `DockContainer`, `DockTabBar`, `dock_area` |
-| Terminal | [terminal.md](docs/framework/terminal.md) | `Terminal` (a shell in a pseudo terminal: `run`, `send`, `restart`, `title`, `text`), `terminal` to draw it, e.g. in a `DockPane` |
+| Terminal | [terminal.md](docs/framework/terminal.md) | `Terminal` (a shell in a pseudo terminal: `run`, `send`, `restart`, `title`, `text`, `set_colors` for light and dark, `font`), `terminal` to draw it, e.g. in a `DockPane` |
 | File views | [files.md](docs/framework/files.md) | `FileListView`, `FileIconView`, `FileTreeView` and their draw functions, `FileWatcher` (folders kept up to date with the disk), `path_breadcrumb` and `path_combo` |
 | Images and icons | [images.md](docs/framework/images.md) | `image`, image buttons, tinted SVG icons, native `file_icon` |
 | Keyboard, mouse, drag and drop | [interaction.md](docs/framework/interaction.md) | `key_pressed`, `typed_text`, `modifiers`, `pointer_pos`, `interactive` (a clickable/draggable area with its `rect`), `draw_rect`, `dnd_drag_source`, `dnd_drop_zone` |
@@ -104,7 +104,7 @@ Index of all files: [docs/framework/README.md](docs/framework/README.md).
 |---|---|
 | `hello_world.py` | the smallest app |
 | `widget_gallery.py`, `demo.py` | most widgets, plots |
-| `finder.py` | a mini Finder: sidebar, toolbar, list/icon/tree views, preview, and a right-hand **Dock** with an **Actions** pane (collapsible categories, per-selection enabled state, shortcuts, rename modal, copy/cut/paste), multi-selection in the 3 views (Cmd/Shift click, Cmd+A) and a rubber band in the icon view, path bar; panes can be closed, moved by their tab, and brought back from the gear menu; the window, theme, view, folder, dock layout and open tree folders are kept between runs (`persist_id`, `ctx.save_state`, `dock.save`) |
+| `finder.py` | a mini Finder: sidebar, toolbar, list/icon/tree views, preview, and a right-hand **Dock** with an **Actions** pane (collapsible categories, per-selection enabled state, shortcuts, rename modal, copy/cut/paste), multi-selection in the 3 views (Cmd/Shift click, Cmd+A) and a rubber band in the icon view, path bar; panes can be closed, moved by their tab, and brought back from the gear menu; a Tags column and a Last Opened column in the list and tree views, a Recent pane of the items last opened; the window, theme, view, folder, dock layout and open tree folders are kept between runs (`persist_id`, `ctx.save_state`, `dock.save`) |
 | `app.py` | "Atelier": sidebar, toolbar, tabs and status bar in a glass style |
 | `explorer.py` | file explorer in a glass style with a native backdrop, files open in tabs |
 | `fileviwer.py` | file browsing with `scandir` |
@@ -115,6 +115,8 @@ Index of all files: [docs/framework/README.md](docs/framework/README.md).
 | `markdown_viewer_bars.py`, `markdown_viewer_glass.py`, `markdown_viewer_bars_glass.py` | the same app with a top and a bottom bar, with a glass backdrop, with both: the layout rules (`layout=dict(...)`, `sidebar_panel`, `topbar_panel`, `bottombar_panel`) |
 | `terminal.py` | a terminal in a dock: a sidebar of files, a viewer and a bottom dock with a shell and a Python prompt; buttons write commands to the shell (`term.run`); a Réglages pane changes the layout rules (`ctx.set_layout`) and the blur of the backdrop live |
 | `files.py` | the three file views (tree, list, icons) sharing one `FileWatcher`, a preview reloaded when the file changes on the disk, a Log dock of the notify events, a `path_combo` title, a `path_breadcrumb` path bar and a slider for the size of the icons |
+| `markdown_finder.py` | a markdown viewer in the unified layout of `finder.py`: a `FileTreeView` of the `.md` files of a folder in the sidebar (filtered by the search field), the document in the middle, reloaded when saved, its outline and source in a dock, the path in the bottom band |
+| `tags.py` | `Tags` and `tags_edit`: tags with several levels, the last one shown, the full path in the colors of its levels on hover, suggestions while typing, compact dots, `max_visible`; a `TagTreeView` of all the tags in the sidebar |
 | `markdown_viewer.py` | minimal app: a sidebar listing markdown files, a viewer in the middle and three docks on the right (outline, source, infos) |
 
 `finder.py` is the reference for a real desktop layout. Its Actions pane works like the Actions
@@ -137,6 +139,7 @@ predicate, run) read by both the panel and the keyboard, so an action is declare
 | `watcher.rs` | `FileWatcher`: listings of folders cached and watched with `notify`, a change asks for a repaint |
 | `files.rs` | `FileListView`, `FileIconView`, `FileTreeView` and their draw functions |
 | `path.rs` | `path_breadcrumb` and `path_combo` |
+| `tags.rs` | `Tags`, `tags_edit`, `TagTreeView` and `tag_tree_view` |
 | `icons.rs` | `file_icon` (native file icons) |
 
 Conventions when adding a function: a `#[pyfunction]` with a docstring in the same style as the

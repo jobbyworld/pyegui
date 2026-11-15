@@ -60,6 +60,7 @@ Panels must be added before any other widget in update_func, otherwise they are 
 
 - `resizable` (bool): whether the user can resize the panel. Default is True
 - `show_separator_line` (bool): show a line between the panel and the rest of the window
+- `separator_stroke` (tuple[float, color]): width and color of that line. Default is the line of the theme
 - `default_size` (float): the initial width of the panel
 - `min_size` (float): min width of the panel
 - `max_size` (float): max width of the panel

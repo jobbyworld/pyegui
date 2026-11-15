@@ -239,6 +239,12 @@ class TagStore:
         row = self.db.execute("SELECT last_opened FROM files WHERE path = ?", (key(path),)).fetchone()
         return row[0] if row else None
 
+    def opened_dates(self):
+        """when every item opened was last opened, as {key(path): seconds since the epoch}: one
+        query for a whole view instead of one per row"""
+        rows = self.db.execute("SELECT path, last_opened FROM files WHERE last_opened IS NOT NULL")
+        return dict(rows.fetchall())
+
     def recently_opened(self, limit=20):
         """the paths last opened, the latest first, as [(path, seconds since the epoch)]"""
         return self.db.execute(

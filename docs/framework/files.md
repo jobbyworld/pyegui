@@ -298,6 +298,7 @@ when they are opened and watched while they are open.
 
 - `context_menu` (callable): called with the list of paths concerned when an item is right-clicked, inside a menu: the selection if the item clicked is in it, else the item clicked. Build the menu in it
 - `badges` (callable): called with the path of each item, returns a list of colors drawn as dots at the right end of its row, e.g. the tags of a file
+- `extra_columns` (list[tuple[str, float, callable]]): columns of your own at the right end of the rows: a title (shown above the tree), a width, and a function called with the path of each row to draw its cell, e.g. ("Tags", 160, lambda path: tags_edit(...))
 
 **Example:**
 
@@ -388,7 +389,7 @@ click on a folder returns its path.
 **Keyword args**
 
 - `root` (str): the first folder shown, an ancestor of path. Default is the root of the disk
-- `max_width` (float): the widest it can be. Default is the width left in the ui
+- `max_width` (float): the widest it can be. Default is the width left in the ui. The ancestors are shortened first, then those that still do not fit are left out from the root, so the breadcrumb never takes more
 - `icons` (bool): shows the icons of the folders. Default is True
 - `id` (str): id of the breadcrumb, needed if there are several in the same ui
 - `on_click` (callable): called with the path of the element clicked

@@ -197,6 +197,25 @@ run_native("Glass", update_func, backdrop=Backdrop.LIQUID_GLASS_CLEAR)
 ```
 
 
+## `Context.set_central_margin(margin)`
+
+Sets the inner margin of the central panel: the space between the panels and what is drawn
+after them. Default is the 8 points of egui; 0 lets the content (a Dock for example) reach
+the panels, and its own margins decide the gaps. Not used with layout rules, which lay out
+the central area themselves.
+
+**Args**
+
+- `margin` (float | tuple[float, float, float, float]): the four sides, or (left, top, right, bottom)
+
+**Example:**
+
+```python
+ctx.set_central_margin(0)
+frame(lambda: dock_area(dock), outer_margin=6)  # the same gap on every side
+```
+
+
 ## `Context.set_font(source)`
 
 Tell egui which fonts to use.

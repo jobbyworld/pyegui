@@ -25,6 +25,7 @@ mod path;
 mod plot;
 mod style;
 mod table;
+mod tags;
 mod terminal;
 mod tree;
 mod watcher;
@@ -38,6 +39,8 @@ static mut APP_MUTEX: Mutex<()> = Mutex::new(());
 static mut CENTRAL: Option<Box<CentralPanelState>> = None;
 // backdrop requested by Context.set_backdrop, applied on the next frame
 static PENDING_BACKDROP: Mutex<Option<String>> = Mutex::new(None);
+/// the inner margin of the central panel given to set_central_margin, else the 8 points of egui
+static CENTRAL_MARGIN: Mutex<Option<egui::Margin>> = Mutex::new(None);
 /// the radius given to set_backdrop_blur, applied to the window at the next frame
 static PENDING_BLUR: Mutex<Option<u32>> = Mutex::new(None);
 // the state of the app as JSON: what was saved by the last run, and what the next save writes
@@ -471,6 +474,27 @@ impl Context {
         *PENDING_BACKDROP
             .lock()
             .map_err(|_| PyRuntimeError::new_err("backdrop lock is poisoned"))? = Some(backdrop);
+        self.0.request_repaint();
+        Ok(())
+    }
+
+    /// Sets the inner margin of the central panel: the space between the panels and what is drawn
+    /// after them. Default is the 8 points of egui; 0 lets the content (a Dock for example) reach
+    /// the panels, and its own margins decide the gaps. Not used with layout rules, which lay out
+    /// the central area themselves.
+    ///
+    /// Args:
+    ///     margin (float | tuple[float, float, float, float]): the four sides, or (left, top, right, bottom)
+    ///
+    /// Example::
+    ///
+    ///     ctx.set_central_margin(0)
+    ///     frame(lambda: dock_area(dock), outer_margin=6)  # the same gap on every side
+    fn set_central_margin(&self, margin: &Bound<'_, PyAny>) -> PyResult<()> {
+        let margin = style::extract_margin(margin, "margin")?;
+        *CENTRAL_MARGIN
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("margin lock is poisoned"))? = Some(margin);
         self.0.request_repaint();
         Ok(())
     }
@@ -956,7 +980,48 @@ pub(crate) fn app_fonts(modern: bool) -> FontDefinitions {
     } else {
         fonts.families.insert(style::bold_family(), proportional);
     }
+    // the font files given by name (Terminal(font=...)): each one is a family of its own, the
+    // monospace fonts behind it for the characters it does not have
+    let monospace = fonts.families[&FontFamily::Monospace].clone();
+    for font in FILE_FONTS.lock().map(|f| f.clone()).unwrap_or_default() {
+        fonts.font_data.insert(font.path.clone(), font.data.clone());
+        let family = std::iter::once(font.path.clone()).chain(monospace.iter().cloned()).collect();
+        fonts.families.insert(FontFamily::Name(font.path.into()), family);
+    }
     fonts
+}
+
+#[derive(Clone)]
+struct FileFont {
+    path: String,
+    data: Arc<FontData>,
+    /// the pass during which it was added: egui installs new fonts at the start of the next one
+    pass: u64,
+}
+
+/// The font files used by name, kept through the changes of style
+static FILE_FONTS: Mutex<Vec<FileFont>> = Mutex::new(Vec::new());
+
+/// The family of a font file (.ttf, .otf), loaded the first time it is asked for.
+///
+/// None while the font is not installed yet: egui installs it at the start of the next pass, and
+/// asks for that pass. The caller draws with another font meanwhile.
+pub(crate) fn file_font_family(ctx: &egui::Context, path: &str) -> PyResult<Option<FontFamily>> {
+    let pass = ctx.cumulative_pass_nr();
+    let mut fonts = FILE_FONTS.lock().map_err(|_| PyRuntimeError::new_err("the fonts are locked"))?;
+    if let Some(font) = fonts.iter().find(|f| f.path == path) {
+        if font.pass < pass {
+            return Ok(Some(FontFamily::Name(path.into())));
+        }
+        ctx.request_repaint();
+        return Ok(None);
+    }
+    let buf = fs::read(path).map_err(|e| PyRuntimeError::new_err(format!("cannot read the font '{}': {}", path, e)))?;
+    fonts.push(FileFont { path: path.to_owned(), data: Arc::new(FontData::from_owned(buf)), pass });
+    drop(fonts);
+    ctx.set_fonts(app_fonts(style::theme_state().glass.is_some()));
+    ctx.request_repaint();
+    Ok(None)
 }
 
 /// The fonts of egui, plus the icon of the copy button of the markdown code blocks.
@@ -1719,6 +1784,11 @@ unsafe fn open_central_panel(ui_stack: &mut Vec<*mut egui::Ui>) -> PyResult<()> 
     let ruled = layout::central_frame(root.style());
     let has_rules = ruled.is_some();
     let mut frame = ruled.unwrap_or_else(|| egui::Frame::central_panel(root.style()));
+    if !has_rules {
+        if let Some(margin) = CENTRAL_MARGIN.lock().ok().and_then(|m| *m) {
+            frame = frame.inner_margin(margin);
+        }
+    }
     // partial glass: the content is an almost opaque sheet over the glass (with layout rules, the
     // background of the rules decides instead)
     if !has_rules {
@@ -2849,5 +2919,6 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     watcher::register(m)?;
     files::register(m)?;
     path::register(m)?;
+    tags::register(m)?;
     Ok(())
 }

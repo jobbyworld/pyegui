@@ -88,6 +88,31 @@ code("print(42 + 27)")
 ```
 
 
+## `code_view(text, language='', **kwargs)`
+
+Shows source code with syntax highlighting and line numbers, in a scroll area. The text can be
+selected and copied.
+
+Highlighted languages: Python, JavaScript and TypeScript, Rust, shell (bash, zsh, and
+PowerShell as shell), C and C++, JSON, SQL, TOML and YAML. Another language is shown plain.
+
+**Args**
+
+- `text` (str): the code
+- `language` (str): the language or the extension of the file: "python", "py", ".rs", "ps1"...
+
+**Keyword args**
+
+- `line_numbers` (bool): the numbers of the lines in a column at the left. Default is True
+- `id` (str): id of the scroll area, needed if there are several code views. Default is "code_view"
+
+**Example:**
+
+```python
+code_view(Path("app.py").read_text(), "py")
+```
+
+
 ## `colored_label(color, text)`
 
 Shows a text in the given color.
@@ -188,6 +213,12 @@ Shows markdown text: headings, lists, tables, quotes, code blocks, links and ima
 - `default_width` (int): width of the text, default is the available width
 - `mermaid_theme` (str): theme of the mermaid diagrams: "default", "dark", "forest", "neutral" or "base".
 - Default follows the theme of the app
+- `open_links` (bool): a click on a link opens it in the browser. False: it is only returned, so that the app opens it itself, e.g. a link to another markdown file. Default is True
+
+**Returns**
+
+- str | None: the url of the link clicked during this frame, as written in the text (a relative
+- path stays relative), else None
 
 Code blocks marked ``mermaid`` are drawn as diagrams: flowcharts, sequence, class, state, ER, pie,
 gantt and more. A diagram that does not parse shows its error and its source.
