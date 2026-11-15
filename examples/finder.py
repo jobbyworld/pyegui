@@ -511,11 +511,62 @@ def python_pane():
     terminal(python)
 
 
+probe_cache = {}  # what a call that may block (a disconnected network drive) answered last
+
+
+def probe(key, call, default, every=5.0):
+    """the last answer of call(), asked again in a thread at most every `every` seconds. A call
+    on a disconnected network drive can block for many seconds: the window must never wait for
+    it, so it draws with the last answer (`default` until the first one arrives)"""
+    now = time.monotonic()
+    known = probe_cache.setdefault(key, {"value": default, "at": -1e9, "busy": False})
+    if not known["busy"] and now - known["at"] > every:
+        known["busy"] = True
+
+        def work():
+            try:
+                known["value"] = call()
+            except OSError:
+                known["value"] = default
+            known["at"] = time.monotonic()
+            known["busy"] = False  # stays True while the system blocks: no thread piles up
+
+        threading.Thread(target=work, daemon=True).start()
+    return known["value"]
+
+
+def is_dir_fast(path):
+    """Path.is_dir() for what is drawn at every frame: never waits for a slow drive"""
+    path = Path(path)
+    return probe(("dir", str(path)), path.is_dir, True)
+
+
+def exists_fast(path):
+    path = Path(path)
+    return probe(("exists", str(path)), path.exists, True)
+
+
+def is_dir_within(path, seconds=1.5):
+    """Path.is_dir() that gives up (False) after a while: for a click or the start of the app"""
+    answer = []
+
+    def work():
+        try:
+            answer.append(Path(path).is_dir())
+        except OSError:
+            answer.append(False)
+
+    thread = threading.Thread(target=work, daemon=True)
+    thread.start()
+    thread.join(seconds)
+    return bool(answer and answer[0])
+
+
 def go(folder):
     folder = Path(folder)
     close_reader()  # moving to a folder shows its files
     tag_filter.value = 0  # leaving a tag view
-    if folder == current() or not folder.is_dir():
+    if folder == current() or not is_dir_within(folder):
         return
     del history[position.value + 1 :]
     history.append(folder)
@@ -724,14 +775,14 @@ def restore(saved):
     tag_tree.folded = [p for p in saved.get("tag_tree_folded", []) if isinstance(p, str)]
     tree.open_folders = [p for p in saved.get("tree_open", []) if isinstance(p, str)]
     for folder in saved.get("watched", []):
-        if isinstance(folder, str) and Path(folder).is_dir():
+        if isinstance(folder, str) and is_dir_within(folder):
             watch_folder_path(Path(folder))
     layout = saved.get("dock")
     if layout:
         # a pane that no longer exists is left out; a layout that no longer fits is ignored
         dock.load(layout)
     folder = Path(saved.get("folder", ""))
-    if len(sys.argv) < 2 and folder.is_dir():  # a folder given on the command line wins
+    if len(sys.argv) < 2 and is_dir_within(folder):  # a folder given on the command line wins
         history[:] = [folder]
 
 
@@ -806,7 +857,7 @@ def tag_badges(path):
 def notes_panel():
     """the note of the selected item: written as it is typed"""
     path = selected.value
-    if not path or not Path(path).exists():
+    if not path or not exists_fast(path):
         weak("Sélectionne un fichier ou un dossier pour écrire une note")
         note_of["path"] = ""
         return
@@ -1672,11 +1723,11 @@ def favorites():
         ("folder", "Developpement", Path(r"C:\developpement")),
         ("folder", "Tech", Path(r"C:\Users\Joachim\tech")),
     ]
-    return [e for e in entries if e[2].is_dir()]
+    return [e for e in entries if is_dir_fast(e[2])]
 
 
 def locations():
-    return [("drive", place_name(drive), drive) for drive in drives() if drive.is_dir()]
+    return [("drive", place_name(drive), drive) for drive in drives() if is_dir_fast(drive)]
 
 
 def sidebar():
@@ -1731,10 +1782,9 @@ def sidebar_top():
 
 def sidebar_bottom():
     """the bottom band of the sidebar: the drive of the folder shown and its free space"""
-    try:
-        anchor = Path(current().anchor or "/")
-        usage = shutil.disk_usage(anchor)
-    except OSError:
+    anchor = Path(current().anchor or "/")
+    usage = probe(("usage", str(anchor)), lambda: shutil.disk_usage(anchor), None)
+    if usage is None:  # not known yet, or the drive does not answer
         return
 
     def row():
@@ -1763,7 +1813,7 @@ def sidebar_content():
     def place(icon_name, name, path):
         # SVG icons in the accent color, like the sidebar of the Finder; white when selected
         path = Path(path)
-        if not path.is_dir():
+        if not is_dir_fast(path):
             return
         on = current() == path
         if image_button_clicked(
@@ -1987,7 +2037,7 @@ def opened_cell(path):
 def recent_panel():
     """the Recent pane: the items last opened, the latest first. A click shows the item in its
     folder (or enters the folder), the mouse over it gives its path"""
-    items = [(Path(p), when) for p, when in opened_data()["recent"] if Path(p).exists()]
+    items = [(Path(p), when) for p, when in opened_data()["recent"] if exists_fast(p)]
     if not items:
         weak("Les fichiers et dossiers ouverts s'afficheront ici")
         return
@@ -2438,7 +2488,7 @@ def zed_command():
 def target_directory():
     """the selected folder, the folder of the selected file, or the current folder"""
     path = targets()[0]
-    return path if path.is_dir() else path.parent
+    return path if is_dir_fast(path) else path.parent
 
 
 def open_in_zed():
