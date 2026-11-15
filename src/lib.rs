@@ -979,7 +979,48 @@ pub(crate) fn app_fonts(modern: bool) -> FontDefinitions {
     } else {
         fonts.families.insert(style::bold_family(), proportional);
     }
+    // the font files given by name (Terminal(font=...)): each one is a family of its own, the
+    // monospace fonts behind it for the characters it does not have
+    let monospace = fonts.families[&FontFamily::Monospace].clone();
+    for font in FILE_FONTS.lock().map(|f| f.clone()).unwrap_or_default() {
+        fonts.font_data.insert(font.path.clone(), font.data.clone());
+        let family = std::iter::once(font.path.clone()).chain(monospace.iter().cloned()).collect();
+        fonts.families.insert(FontFamily::Name(font.path.into()), family);
+    }
     fonts
+}
+
+#[derive(Clone)]
+struct FileFont {
+    path: String,
+    data: Arc<FontData>,
+    /// the pass during which it was added: egui installs new fonts at the start of the next one
+    pass: u64,
+}
+
+/// The font files used by name, kept through the changes of style
+static FILE_FONTS: Mutex<Vec<FileFont>> = Mutex::new(Vec::new());
+
+/// The family of a font file (.ttf, .otf), loaded the first time it is asked for.
+///
+/// None while the font is not installed yet: egui installs it at the start of the next pass, and
+/// asks for that pass. The caller draws with another font meanwhile.
+pub(crate) fn file_font_family(ctx: &egui::Context, path: &str) -> PyResult<Option<FontFamily>> {
+    let pass = ctx.cumulative_pass_nr();
+    let mut fonts = FILE_FONTS.lock().map_err(|_| PyRuntimeError::new_err("the fonts are locked"))?;
+    if let Some(font) = fonts.iter().find(|f| f.path == path) {
+        if font.pass < pass {
+            return Ok(Some(FontFamily::Name(path.into())));
+        }
+        ctx.request_repaint();
+        return Ok(None);
+    }
+    let buf = fs::read(path).map_err(|e| PyRuntimeError::new_err(format!("cannot read the font '{}': {}", path, e)))?;
+    fonts.push(FileFont { path: path.to_owned(), data: Arc::new(FontData::from_owned(buf)), pass });
+    drop(fonts);
+    ctx.set_fonts(app_fonts(style::theme_state().glass.is_some()));
+    ctx.request_repaint();
+    Ok(None)
 }
 
 /// The fonts of egui, plus the icon of the copy button of the markdown code blocks.

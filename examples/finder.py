@@ -39,7 +39,6 @@ from pyegui import (
     FileListView,
     FileTreeView,
     FileWatcher,
-    Float,
     Int,
     Str,
     Terminal,
@@ -53,8 +52,6 @@ from pyegui import (
     code,
     code_view,
     color_edit_button_rgb,
-    colored_label,
-    columns,
     combo_box,
     dock_area,
     draw_rect,
@@ -73,19 +70,15 @@ from pyegui import (
     key_pressed,
     label,
     left_panel,
-    menu_button,
+    markdown,
     menu_image_button,
     modal,
     path_breadcrumb,
     path_combo,
     pointer_pos,
     pointer_pressed,
-    radio_clicked,
-    radio_value,
-    right_panel,
     run_native,
     scroll_area_both,
-    markdown,
     scroll_area_vertical,
     scroll_to_rect,
     segmented_control,
@@ -96,11 +89,10 @@ from pyegui import (
     set_min_width,
     set_width,
     small,
-    slider_float,
     small_button_clicked,
     strong,
-    text_edit_multiline,
     terminal,
+    text_edit_multiline,
     text_edit_singleline,
     toggle_value,
     tooltip,
@@ -262,31 +254,20 @@ palette_index = Int(0)  # the highlighted action, moved by the keyboard or the m
 file_clipboard = {"paths": [], "cut": False}
 theme = Int(LIGHT)
 glass = Int(FULL)
-glass_opacity = Float(1.2)  # multiplies the opacity of the glass: the Global slider of the Transparence pane
-# the levels of each surface, set in the Transparence pane; a level not chosen is the style's one
-GLASS_SURFACES = [
-    ("sidebar", "Barre latérale", 0.3),
-    ("bars", "Barres haut et bas", 0.4),
-    ("central", "Fichiers (central)", 0.3),
-    ("dock", "Docks", 0.3),
-    ("windows", "Fenêtres et menus", 0.8),
-    ("background", "Fond (entre les boîtes)", 0.2),
-]
+GLASS_OPACITY = 1.2  # multiplies the opacity of the glass
+GLASS_LEVELS = {"central": 0.3, "dock": 0.3}  # the files and the docks are clear glass; the rest is the style's
+BACKDROP_BLUR = 32  # the blur of what is behind the window (macOS), in points
 # the unified layout, like the window of the Claude app: the sidebar runs along the whole height of
 # the window, without gap nor corners; it and the body are cut in three bands of the same heights
-# (top, content, bottom) whose lines continue from one to the other. False: the boxes of before
+# (top, content, bottom) whose lines continue from one to the other. False: rounded boxes with gaps
 unified = Bool(True)
-unified_gap = Float(8)  # the gap of the unified layout, around the dock and between its panes
+UNIFIED_GAP = 8  # the gap of the unified layout, around the dock and between its panes
 TOP_H, BOTTOM_H = 52, 44  # the heights of the top and bottom bands, in the sidebar and the body
 CLEAR = (0, 0, 0, 0)
 LINE = (1, (127, 127, 127, 70))  # the lines between the bands and between the sidebar and the body
-sidebar_gap = Float(0)  # the space between the sidebar and the rest, set in the Transparence pane
-# the margins outside the sidebar (0 sticks it to the border of the window) and its corners
-sidebar_box = {"left": Float(0), "top": Float(39), "bottom": Float(15.5), "rounding": Float(14.7)}
-backdrop_blur = Float(32)  # the blur of what is behind the window (macOS), in points
-glass_level = {name: Float(value) for name, _, value in GLASS_SURFACES}
-# the levels fixed by default: the files and the docks are clear glass
-glass_custom = {name: Bool(name in ("central", "dock")) for name, _, _ in GLASS_SURFACES}
+# the boxes layout: the margins outside the sidebar (left, top, right, bottom) and its corners
+SIDEBAR_MARGIN = (0, 39, 0, 15.5)
+SIDEBAR_ROUNDING = 14.7
 accent_name = Str("Blue")
 pill_tabs = Bool(False)
 started = Bool(False)
@@ -296,7 +277,7 @@ listing_cache = {}  # folder -> (version of the watcher, entries): read again wh
 
 # the views of the files: state objects of pyegui, sharing one watcher of the disk
 watcher = FileWatcher()
-reading = Str("")  # a markdown file shown in the central view instead of the files, "" for none
+reading = Str("")  # a markdown or source file shown in the central view instead of the files, "" for none
 reading_cache = {"path": None, "text": ""}
 tree = FileTreeView("tree", start, watcher=watcher, activatable_dirs=True)
 # navigate=False: a double click or Enter comes back in activated, the Finder opens it itself
@@ -422,10 +403,47 @@ def newest_python():
     return sys.executable
 
 
+def nerd_font():
+    """an installed Nerd Font, its Mono variant (icons one cell wide), for the icons of the prompt"""
+    folders = [HOME / "Library" / "Fonts", Path("/Library/Fonts"), HOME / ".local" / "share" / "fonts"]
+    if sys.platform == "win32":
+        folders = [Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Windows" / "Fonts", Path(r"C:\Windows\Fonts")]
+    for folder in folders:
+        found = sorted(folder.glob("*NerdFontMono-Regular.[ot]tf")) if folder.is_dir() else []
+        if found:
+            return str(found[0])
+    return None  # the monospace font of egui
+
+
+# the colors of the terminals with the light theme and with the dark one (One Light, One Dark):
+# the terminal takes those of the theme shown. Without them it is transparent, in the colors of egui
+TERMINAL_LIGHT = dict(
+    background="#fafafa",
+    foreground="#383a42",
+    cursor="#526fff",
+    selection="#e5e5e6",
+    palette=[
+        "#383a42", "#e45649", "#50a14f", "#c18401", "#4078f2", "#a626a4", "#0184bc", "#a0a1a7",
+        "#696c77", "#e45649", "#50a14f", "#c18401", "#4078f2", "#a626a4", "#0184bc", "#fafafa",
+    ],
+)
+TERMINAL_DARK = dict(
+    background="#282c34",
+    foreground="#abb2bf",
+    cursor="#528bff",
+    selection="#3e4451",
+    palette=[
+        "#3f4451", "#e06c75", "#98c379", "#e5c07b", "#61afef", "#c678dd", "#56b6c2", "#d7dae0",
+        "#4f5666", "#be5046", "#98c379", "#d19a66", "#61afef", "#c678dd", "#56b6c2", "#e6e6e6",
+    ],
+)
+
 # the terminals of the dock at the bottom: states, created once, outside the update function.
 # They start in the folder the Finder opens
-shell = Terminal(cwd=str(start))
-python = Terminal(cwd=str(start), shell=newest_python(), args=["-q"])
+shell = Terminal(cwd=str(start), font=nerd_font(), light=TERMINAL_LIGHT, dark=TERMINAL_DARK)
+python = Terminal(
+    cwd=str(start), shell=newest_python(), args=["-q"], font=nerd_font(), light=TERMINAL_LIGHT, dark=TERMINAL_DARK
+)
 follow_folder = Bool(True)  # the shell goes to the folder shown, with cd
 shell_folder = {"path": start}  # where the shell was sent last
 
@@ -459,132 +477,6 @@ def python_pane():
     terminal(python)
 
 
-TRANSPARENCY = "Transparence"
-
-
-def transparency_pane():
-    """every level of set_glass_style on sliders, applied at once, to try them"""
-    changed = False
-
-    def modes():
-        nonlocal changed
-        changed |= bool(
-            segmented_control(theme, [(None, "Clair"), (None, "Sombre"), (None, "Système")])
-        )
-        changed |= bool(
-            segmented_control(glass, [(None, "Sans vitre"), (None, "Partielle"), (None, "Complète")])
-        )
-
-    horizontal(modes)
-
-    def sidebar_rows():
-        # not levels of the glass: the box of the sidebar, read by update_func at every frame;
-        # all at 0 the sidebar fills the left of the window, with square corners
-        for title, value, low, high in [
-            ("Écart à droite (vers le contenu)", sidebar_gap, 0, 40),
-            ("Marge à gauche", sidebar_box["left"], 0, 40),
-            ("Marge en haut", sidebar_box["top"], 0, 40),
-            ("Marge en bas", sidebar_box["bottom"], 0, 40),
-            ("Arrondi", sidebar_box["rounding"], 0, 32),
-        ]:
-            weak(title)
-            slider_float(value, low, high, "")
-            end_row()
-
-    before_layout = unified.value
-    toggle_value(unified, "Disposition unifiée (comme l'app Claude)")
-    if unified.value != before_layout:
-        apply_gaps()
-    if unified.value:
-
-        def gap_row():
-            weak("Écart")
-            before = unified_gap.value
-            slider_float(unified_gap, 0, 24, "")
-            if unified_gap.value != before:
-                apply_gaps()
-
-        horizontal(gap_row)
-    else:  # the boxes: their gaps and corners
-        small("Barre latérale")
-        grid("sidebar_box", sidebar_rows, num_columns=2, spacing=(12, 6))
-        if small_button_clicked("Barre latérale collée (tout à 0)"):
-            sidebar_gap.value = 0
-            for value in sidebar_box.values():
-                value.value = 0
-    add_space(4)
-
-    if MACOS:
-
-        def blur_row():
-            nonlocal changed
-            # set_backdrop_blur: the blur behind the window, on top of the one of the backdrop
-            weak("Flou du fond")
-            before = backdrop_blur.value
-            slider_float(backdrop_blur, 0, 64, "")
-            changed |= backdrop_blur.value != before
-
-        horizontal(blur_row)
-    if glass.value == NO_GLASS:
-        weak("Choisis une vitre partielle ou complète pour régler sa transparence.")
-        if changed:
-            apply_style()
-        return
-    add_space(4)
-
-    def rows():
-        nonlocal changed
-        # opacity=: multiplies every level that was not chosen
-        weak("Global (×)")
-        label("")
-        before = glass_opacity.value
-        slider_float(glass_opacity, 0.3, 1.6, "")
-        changed |= glass_opacity.value != before
-        end_row()
-        # sidebar=, bars=, central=, dock=, windows=: the level of one part of the window, 0 to 1
-        for name, title, _ in GLASS_SURFACES:
-            weak(title)
-            on = glass_custom[name]
-            before = (on.value, glass_level[name].value)
-            toggle_value(on, "fixé" if on.value else "auto")
-            add_enabled(on.value, lambda name=name: slider_float(glass_level[name], 0.0, 1.0, ""))
-            changed |= (on.value, glass_level[name].value) != before
-            end_row()
-
-    grid("glass_levels", rows, num_columns=3, spacing=(12, 6))
-    add_space(4)
-
-    def bottom():
-        nonlocal changed
-        if small_button_clicked("Valeurs du style"):
-            glass_opacity.value = 1.0
-            sidebar_gap.value = GAP
-            for name, value in sidebar_box.items():
-                value.value = 12 if name == "rounding" else 0
-            backdrop_blur.value = 0
-            for name, _, value in GLASS_SURFACES:
-                glass_custom[name].value = False
-                glass_level[name].value = value
-            changed = True
-        # the call that gives this look, to copy into an app
-        args = [f"mode={'full' if glass.value == FULL else 'partial'}"]
-        if glass_opacity.value != 1.0:
-            args.append(f"opacity={glass_opacity.value:.2f}")
-        args += [
-            f"{name}={glass_level[name].value:.2f}"
-            for name, _, _ in GLASS_SURFACES
-            if glass_custom[name].value
-        ]
-        call = f'ctx.set_glass_style({", ".join(args)})'
-        if small_button_clicked("Copier l'appel"):
-            context[0].copy_text(call)
-        weak(call)
-
-    horizontal(bottom)
-    if changed:
-        apply_style()
-
-
 def go(folder):
     folder = Path(folder)
     close_reader()  # moving to a folder shows its files
@@ -600,7 +492,7 @@ def go(folder):
 
 
 def back():
-    if reading.value:  # back from the markdown viewer to the files first
+    if reading.value:  # back from the viewer to the files first
         close_reader()
         return
     if position.value > 0:
@@ -629,10 +521,6 @@ def open_item(item):
     else:
         context[0].open_url(item["path"].as_uri())  # with the app of the file
         tags.opened(item["path"])  # remembered in the base
-
-
-def select(item):
-    select_path(item["path"])
 
 
 def open_palette():
@@ -684,10 +572,13 @@ def keyboard():
         # Escape uses when_typing=True below to work while a field has focus, so without this
         # guard it would also clear the background search/selection at the same time
         return
-    if key_pressed("F6"):
+    if key_pressed("F6", when_typing=True):
         cycle_zone(1)
-    if key_pressed("Shift+F6"):
+    if key_pressed("Shift+F6", when_typing=True):
         cycle_zone(-1)
+    if shell.has_focus or python.has_focus:
+        # the keys are for the shell: Escape (vim, less) must not send the focus back to the files
+        return
     if key_pressed("Space"):
         open_palette()
     if key_pressed("Cmd+P"):
@@ -699,7 +590,7 @@ def keyboard():
     if key_pressed("Cmd+CloseBracket"):
         forward()
     if key_pressed("Escape", when_typing=True):
-        close_reader()  # back to the files from the markdown viewer
+        close_reader()  # back to the files from the viewer
         search.value = ""
         deselect()
         focus_zone.value = "content"  # back to the list, even from the search field
@@ -730,18 +621,14 @@ def apply_style():
         ctx.set_glass_style(
             accent=ACCENTS[accent_name.value],
             mode="full" if glass.value == FULL else "partial",
-            opacity=glass_opacity.value,  # how transparent the glass is, from the slider
-            # a surface whose level was chosen in the Transparence pane, else None: the style's
-            **{
-                name: glass_level[name].value if glass_custom[name].value else None
-                for name, _, _ in GLASS_SURFACES
-            },
+            opacity=GLASS_OPACITY,
+            **GLASS_LEVELS,
         )
     else:
         ctx.set_accent(ACCENTS[accent_name.value])
     dock.set_style(tab_style="pill" if pill_tabs.value else "classic")
     apply_gaps()
-    ctx.set_backdrop_blur(backdrop_blur.value)  # macOS only, added to the blur of the backdrop
+    ctx.set_backdrop_blur(BACKDROP_BLUR)  # macOS only, added to the blur of the backdrop
 
 
 def apply_gaps():
@@ -749,7 +636,7 @@ def apply_gaps():
     the dock between its panes; the boxes layout keeps the margin of egui and its own gap"""
     ctx = context[0]
     ctx.set_central_margin(0 if unified.value else 8)
-    dock.set_style(gap_width=unified_gap.value if unified.value else GAP)
+    dock.set_style(gap_width=UNIFIED_GAP if unified.value else GAP)
 
 
 def snapshot():
@@ -757,18 +644,7 @@ def snapshot():
     return {
         "theme": theme.value,
         "glass": glass.value,
-        "glass_opacity": glass_opacity.value,
-        "glass_levels": {
-            name: glass_level[name].value if glass_custom[name].value else None
-            for name, _, _ in GLASS_SURFACES
-        },
-        "terminals": True,  # the layout has the dock of the terminals
-        "transparency_pane": True,
-        "sidebar_gap": sidebar_gap.value,
-        "unified_gap": unified_gap.value,
         "unified": unified.value,
-        "sidebar_box": {name: value.value for name, value in sidebar_box.items()},
-        "backdrop_blur": backdrop_blur.value,  # and the Transparence pane next to them
         "accent": accent_name.value,
         "pill_tabs": pill_tabs.value,
         "view": view.value,
@@ -788,24 +664,7 @@ def restore(saved):
         return
     theme.value = saved.get("theme", theme.value)
     glass.value = saved.get("glass", glass.value)
-    glass_opacity.value = float(saved.get("glass_opacity", glass_opacity.value))
-    sidebar_gap.value = float(saved.get("sidebar_gap", sidebar_gap.value))
     unified.value = bool(saved.get("unified", unified.value))
-    unified_gap.value = float(saved.get("unified_gap", unified_gap.value))
-    box = saved.get("sidebar_box")
-    for name, value in (box.items() if isinstance(box, dict) else []):
-        if name in sidebar_box and isinstance(value, (int, float)):
-            sidebar_box[name].value = float(value)
-    backdrop_blur.value = float(saved.get("backdrop_blur", backdrop_blur.value))
-    levels = saved.get("glass_levels")
-    for name, _, _ in GLASS_SURFACES:
-        if not isinstance(levels, dict) or name not in levels:
-            continue  # not saved: the default stays
-        value = levels[name]
-        # a number is a fixed level, None the level of the style ("auto")
-        glass_custom[name].value = isinstance(value, (int, float))
-        if glass_custom[name].value:
-            glass_level[name].value = float(value)
     if saved.get("accent") in ACCENTS:
         accent_name.value = saved["accent"]
     pill_tabs.value = saved.get("pill_tabs", pill_tabs.value)
@@ -816,21 +675,9 @@ def restore(saved):
     tags_folded.update(i for i in saved.get("tags_folded", []) if isinstance(i, int))
     tree.open_folders = [p for p in saved.get("tree_open", []) if isinstance(p, str)]
     layout = saved.get("dock")
-    if layout and not saved.get("terminals") and not has_pane(layout, "Terminal"):
-        # saved before the dock of the terminals: it goes under the files once
-        layout = with_terminals(layout)
-    if layout and not saved.get("transparency_pane") and not has_pane(layout, TRANSPARENCY):
-        # saved before the Transparence pane: it is put next to the terminals once
-        layout = with_pane_next_to(layout, "Terminal", TRANSPARENCY)
-    if layout and not has_pane(layout, CENTRAL):
-        # saved before the files were a pane: what was on the right stays there
-        layout = {
-            "kind": "horizontal",
-            "shares": [4.0, 1.0],
-            "children": [{"pane": CENTRAL}, layout],
-        }
     if layout:
-        dock.load(layout)  # a layout that no longer fits is ignored
+        # a pane that no longer exists is left out; a layout that no longer fits is ignored
+        dock.load(layout)
     folder = Path(saved.get("folder", ""))
     if len(sys.argv) < 2 and folder.is_dir():  # a folder given on the command line wins
         history[:] = [folder]
@@ -858,9 +705,6 @@ def set_tab_style(value):
 
 def set_view(value):
     view.value = value
-
-
-# sidebar
 
 
 # tags
@@ -905,10 +749,6 @@ def tag_badges(path):
         hex_color(tag["color"]) + (255 if how == "own" else 110,)
         for tag, how in tags_of(path)
     ]
-
-
-def has_note(item):
-    return tag_key(item["path"]) in tag_data()["noted"]
 
 
 def notes_panel():
@@ -1363,12 +1203,12 @@ def sidebar():
 
 
 def settings_menu():
-    """the menu of the settings button: theme, glass, accent, tabs, layout, and the Transparence pane"""
+    """the menu of the settings button: theme, glass, accent, tabs and layout"""
 
     def choices(title, items, current_value, setter):
         small(title)
-        for value, label in items:
-            if selectable_label_clicked(current_value == value, label):
+        for value, text in items:
+            if selectable_label_clicked(current_value == value, text):
                 setter(value)
                 close_menu()
 
@@ -1385,12 +1225,6 @@ def settings_menu():
     toggle_value(unified, "Disposition unifiée")
     if unified.value != before_layout:
         apply_gaps()
-    if button_clicked("Transparence…"):
-        # the pane of the fine settings, brought back if it was closed
-        if TRANSPARENCY not in dock.titles:
-            dock.add_pane(DockPane(TRANSPARENCY, ALL_PANES[TRANSPARENCY], closable=True))
-        show_dock.value = True
-        close_menu()
 
 
 def sidebar_top():
@@ -1530,13 +1364,14 @@ def drives():
     ]
 
 
+# what the right side of the bars takes: measured as drawn
 widths = {
     "view": 130,
     "panes": 60,
     "count": 110,
     "dock": 50,
 }
-THEME_W = 116  # the width of the theme control: three icons in a segmented control  # what the right side of the bars takes: measured as drawn
+THEME_W = 116  # the width of the theme control: three icons in a segmented control
 
 
 def measure(key, draw, last=False):
@@ -1570,7 +1405,7 @@ def panes_menu():
         if button_clicked(f"Afficher {title}"):
             dock.add_pane(DockPane(title, ALL_PANES[title], closable=True))
     separator()
-    toggle_value(show_dock, "Dock")  # the transparency is set in the Transparence pane
+    toggle_value(show_dock, "Dock")
 
 
 def toolbar():
@@ -1713,7 +1548,7 @@ def seed_tree_selection():
     entries = visible_entries()
     if (down or up) and entries:
         item = entries[0 if down else -1]
-        select(item)
+        select_path(item["path"])
         scroll_target.value = str(item["path"])
         tree.focus(False)
 
@@ -1781,7 +1616,7 @@ def follow_link(url):
 
 
 def reader():
-    """the markdown viewer of the central view: a bar to go back to the files, then the text"""
+    """the viewer of the central view: a bar to go back to the files, then the markdown or the code"""
     tint = icon_tint()
 
     def bar():
@@ -2307,7 +2142,7 @@ ACTIONS = [
 
 
 def action_keys():
-    for _, label_, _, shortcut, enabled, run in ACTIONS:
+    for _, _, _, shortcut, enabled, run in ACTIONS:
         if shortcut and enabled() and key_pressed(shortcut):
             run()
             return
@@ -2541,9 +2376,10 @@ def in_zone(zone, ui):
     """a click anywhere in the part of the window moves the keyboard focus there"""
 
     def run():
+        ui()
+        # after the drawing: before it, the ui has no size yet and never contains the pointer
         if pointer_pressed() and ui_contains_pointer():
             focus_zone.value = zone
-        ui()
 
     return run
 
@@ -2595,7 +2431,6 @@ PANES = {
 BOTTOM_PANES = {
     "Terminal": zone_pane("dock", shell_pane),
     "Python": zone_pane("dock", python_pane),
-    TRANSPARENCY: zone_pane("dock", lambda: scroll_area_vertical(transparency_pane)),
 }
 ALL_PANES = {**PANES, **BOTTOM_PANES}
 central_ui = zone_pane("content", content, margin=8)
@@ -2637,38 +2472,6 @@ default_layout["children"][0]["shares"] = [3.0, 1.0]  # and most of the height, 
 dock.load(default_layout)
 
 
-def with_terminals(layout):
-    """a saved layout with the dock of the terminals put under the files"""
-    if layout.get("pane") == CENTRAL:
-        return {
-            "kind": "vertical",
-            "shares": [3.0, 1.0],
-            "children": [layout, {"kind": "tabs", "active": 0, "children": [{"pane": t} for t in BOTTOM_PANES]}],
-        }
-    if "children" in layout:
-        return {**layout, "children": [with_terminals(child) for child in layout["children"]]}
-    return layout
-
-
-def with_pane_next_to(layout, neighbour, title):
-    """a saved layout with a tab added to the tabs that hold the pane neighbour"""
-    children = layout.get("children")
-    if children is None:
-        return layout
-    if layout.get("kind") == "tabs" and any(c.get("pane") == neighbour for c in children):
-        return {**layout, "children": [*children, {"pane": title}]}
-    return {**layout, "children": [with_pane_next_to(c, neighbour, title) for c in children]}
-
-
-def has_pane(layout, title):
-    """is this pane in a layout saved by dock.save()"""
-    if not isinstance(layout, dict):
-        return False
-    return layout.get("pane") == title or any(
-        has_pane(child, title) for child in layout.get("children", [])
-    )
-
-
 def update_func(ctx):
     if not started.value:
         context.append(ctx)
@@ -2679,11 +2482,10 @@ def update_func(ctx):
     keyboard()
     action_keys()
     follow_in_shell()
-    edge = EDGE
     if unified.value:
         unified_layout()
     else:
-        boxes_layout(edge)
+        boxes_layout()
     if renaming.value:
         rename_dialog()
     if palette_open.value:
@@ -2715,17 +2517,16 @@ def unified_layout():
     # one gap everywhere: a side of the dock that faces a neighbour without gap (the line of the
     # sidebar, of the bars, the border of the window) gets the whole gap, and the dock puts the same
     # gap between its panes. The central panel adds no margin of its own (set_central_margin)
-    gap = unified_gap.value
-    frame(
-        lambda: dock_area(dock) if show_dock.value else frame(central_ui, stroke=EDGE, rounding=6),
-        outer_margin=gap,
-    )
+    dock_or_files(outer_margin=UNIFIED_GAP)
 
 
-def boxes_layout(edge):
-    """the layout of before: the sidebar, the bars and the dock are rounded boxes with gaps"""
-    # the gap between the sidebar and the boxes on its right: each side gives its half, up to H
-    left_gap = min(H, sidebar_gap.value)
+def dock_or_files(**kwargs):
+    """the panes of the dock, or the files alone when the dock is hidden"""
+    frame(lambda: dock_area(dock) if show_dock.value else frame(central_ui, stroke=EDGE, rounding=6), **kwargs)
+
+
+def boxes_layout():
+    """the sidebar, the bars and the dock are rounded boxes with gaps"""
     left_panel(
         "sidebar",
         in_zone("sidebar", sidebar),
@@ -2733,44 +2534,15 @@ def boxes_layout(edge):
         default_size=215,
         min_size=200,
         inner_margin=12,
-        # the boxes on the right give H already: the sidebar gives the rest of its gap
-        outer_margin=(
-            sidebar_box["left"].value,
-            sidebar_box["top"].value,
-            max(sidebar_gap.value - H, 0),
-            sidebar_box["bottom"].value,
-        ),
+        outer_margin=SIDEBAR_MARGIN,
         show_separator_line=False,
-        rounding=sidebar_box["rounding"].value,
-        stroke=zone_stroke("sidebar", edge),
+        rounding=SIDEBAR_ROUNDING,
+        stroke=zone_stroke("sidebar", EDGE),
     )
-    top_panel(
-        "toolbar",
-        toolbar,
-        inner_margin=8,
-        outer_margin=(left_gap, 0, 0, H),
-        show_separator_line=False,
-        rounding=12,
-        stroke=edge,
-    )
-    bottom_panel(
-        "path",
-        path_bar,
-        inner_margin=8,
-        outer_margin=(left_gap, H, 0, 0),
-        show_separator_line=False,
-        rounding=12,
-        stroke=edge,
-    )
-    # the panes of the dock, or the files alone when the dock is hidden
-    frame(
-        lambda: (
-            dock_area(dock)
-            if show_dock.value
-            else frame(central_ui, stroke=EDGE, rounding=6)
-        ),  # what the dock draws around its panes
-        outer_margin=(left_gap, H, 0, H),  # the same as the bars: the panes line up with them
-    )
+    bar = dict(inner_margin=8, show_separator_line=False, rounding=12, stroke=EDGE)
+    top_panel("toolbar", toolbar, outer_margin=(0, 0, 0, H), **bar)
+    bottom_panel("path", path_bar, outer_margin=(0, H, 0, 0), **bar)
+    dock_or_files(outer_margin=(0, H, 0, H))  # the same as the bars: the panes line up with them
 
 
 if __name__ == "__main__":

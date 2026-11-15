@@ -90,7 +90,7 @@ an example. They are generated from the docstrings, see "Keeping the reference u
 | Panels and popups | [panels.md](docs/framework/panels.md) | `sidebar_panel`/`topbar_panel`/`bottombar_panel`, side/top/bottom panels, window, modal, menus, tooltips, context menu |
 | Data | [data.md](docs/framework/data.md) | `table`, `table_ui`, `tree_view`, plots |
 | Docking | [docking.md](docs/framework/docking.md) | `Dock`, `DockPane`, `DockContainer`, `DockTabBar`, `dock_area` |
-| Terminal | [terminal.md](docs/framework/terminal.md) | `Terminal` (a shell in a pseudo terminal: `run`, `send`, `restart`, `title`, `text`), `terminal` to draw it, e.g. in a `DockPane` |
+| Terminal | [terminal.md](docs/framework/terminal.md) | `Terminal` (a shell in a pseudo terminal: `run`, `send`, `restart`, `title`, `text`, `set_colors` for light and dark, `font`), `terminal` to draw it, e.g. in a `DockPane` |
 | File views | [files.md](docs/framework/files.md) | `FileListView`, `FileIconView`, `FileTreeView` and their draw functions, `FileWatcher` (folders kept up to date with the disk), `path_breadcrumb` and `path_combo` |
 | Images and icons | [images.md](docs/framework/images.md) | `image`, image buttons, tinted SVG icons, native `file_icon` |
 | Keyboard, mouse, drag and drop | [interaction.md](docs/framework/interaction.md) | `key_pressed`, `typed_text`, `modifiers`, `pointer_pos`, `interactive` (a clickable/draggable area with its `rect`), `draw_rect`, `dnd_drag_source`, `dnd_drop_zone` |

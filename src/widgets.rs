@@ -323,6 +323,10 @@ unsafe fn is_visible() -> PyResult<bool> {
 
 /// True if the mouse is over the current ui, e.g. to show buttons on hover.
 ///
+/// It tests the part of the ui drawn so far: at the start of a nested function the ui has no
+/// size yet and this is False. To know whether a click fell in a whole area, call it after its
+/// widgets.
+///
 /// Example::
 ///
 ///     def row():

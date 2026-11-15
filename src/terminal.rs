@@ -17,11 +17,11 @@ use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, CursorShape, NamedColor};
 use eframe::egui::{self, Color32, FontId, Key, Modifiers, Pos2, Rect, Sense, Stroke, Vec2};
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use crate::style::kwarg_color;
+use crate::style::{extract_color, kwarg_color};
 use crate::{current_ui, kwarg, UI};
 
 /// The egui id of the terminal that had the keyboard focus when it was last drawn (0 for none).
@@ -119,10 +119,25 @@ impl Drop for Session {
 ///
 ///     font_size (float): size of the monospace font, 13 by default
 ///
+///     light (dict): the colors with the light theme, see set_colors()
+///
+///     dark (dict): the colors with the dark theme, see set_colors()
+///
+///     font (str): path of a monospace font file (.ttf, .otf) to draw with instead of the one of
+///         egui, e.g. a Nerd Font for the icons of a prompt; take its "Mono" variant, whose icons
+///         are one cell wide. The characters it does not have come from the font of egui
+///
 /// Usage::
 ///
 ///     term = Terminal(cwd="/tmp")
 ///     python = Terminal(shell="python3", args=["-q"])
+///     nerd = Terminal(font=str(Path.home() / "Library/Fonts/HackNerdFontMono-Regular.ttf"))
+///
+///     # colors that follow the theme of the app
+///     term = Terminal(
+///         light=dict(background="#fafafa", foreground="#383a42"),
+///         dark=dict(background="#282c34", foreground="#abb2bf", cursor="#528bff"),
+///     )
 ///
 ///     def update_func(ctx):
 ///         terminal(term)
@@ -142,6 +157,12 @@ pub(crate) struct Terminal {
     /// Size of the monospace font
     #[pyo3(get, set)]
     font_size: f32,
+    /// Path of the font file drawn with, or None for the monospace font of egui
+    #[pyo3(get, set)]
+    font: Option<String>,
+    /// the colors with the light theme and with the dark theme
+    light: Scheme,
+    dark: Scheme,
     session: Option<Session>,
     /// what was sent before the shell started
     pending: Vec<u8>,
@@ -226,7 +247,7 @@ impl Terminal {
 #[pymethods]
 impl Terminal {
     #[new]
-    #[pyo3(signature = (cwd=None, shell=None, args=None, env=None, scrollback=10000, font_size=13.0))]
+    #[pyo3(signature = (cwd=None, shell=None, args=None, env=None, scrollback=10000, font_size=13.0, font=None, light=None, dark=None))]
     fn new(
         cwd: Option<PathBuf>,
         shell: Option<String>,
@@ -234,14 +255,20 @@ impl Terminal {
         env: Option<HashMap<String, String>>,
         scrollback: usize,
         font_size: f32,
-    ) -> Self {
-        Terminal {
+        font: Option<String>,
+        light: Option<&Bound<'_, PyDict>>,
+        dark: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Self> {
+        Ok(Terminal {
             cwd,
             shell,
             args: args.unwrap_or_default(),
             env: env.unwrap_or_default(),
             scrollback,
             font_size,
+            font,
+            light: light.map(Scheme::from_dict).transpose()?.unwrap_or_default(),
+            dark: dark.map(Scheme::from_dict).transpose()?.unwrap_or_default(),
             session: None,
             pending: Vec::new(),
             title: String::new(),
@@ -253,7 +280,51 @@ impl Terminal {
             refocus: false,
             scroll_rest: 0.0,
             mouse_down: false,
+        })
+    }
+
+    /// Sets the colors of the terminal with the light theme, with the dark one, or both. The
+    /// terminal takes those of the theme shown, at once: a change of theme changes them too.
+    /// A color not given is the one of the theme of egui; the background of terminal(...) and
+    /// its foreground win over these.
+    ///
+    /// Keyword args:
+    ///     light (dict): the colors with the light theme; {} goes back to those of egui
+    ///
+    ///     dark (dict): the colors with the dark theme; {} goes back to those of egui
+    ///
+    /// Each dict takes (a color is (r, g, b), (r, g, b, a) or "#rrggbb[aa]"):
+    ///
+    ///     background: behind the text, the sheet of the pane by default (transparent)
+    ///
+    ///     foreground: the text
+    ///
+    ///     cursor: the cursor, the foreground by default
+    ///
+    ///     selection: behind the selected text
+    ///
+    ///     palette (list): the 16 colors of the shell, black, red, green, yellow, blue, magenta,
+    ///         cyan, white then their bright versions; a shorter list or None in it keeps the
+    ///         others
+    ///
+    /// Example::
+    ///
+    ///     term.set_colors(
+    ///         light=dict(background="#fdf6e3", foreground="#657b83"),
+    ///         dark=dict(background="#002b36", foreground="#839496", palette=[
+    ///             "#073642", "#dc322f", "#859900", "#b58900", "#268bd2", "#d33682", "#2aa198", "#eee8d5",
+    ///             "#002b36", "#cb4b16", "#586e75", "#657b83", "#839496", "#6c71c4", "#93a1a1", "#fdf6e3",
+    ///         ]),
+    ///     )
+    #[pyo3(signature = (light=None, dark=None))]
+    fn set_colors(&mut self, light: Option<&Bound<'_, PyDict>>, dark: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+        if let Some(light) = light {
+            self.light = Scheme::from_dict(light)?;
         }
+        if let Some(dark) = dark {
+            self.dark = Scheme::from_dict(dark)?;
+        }
+        Ok(())
     }
 
     /// Writes a text to the shell, as if it was typed. Before the shell has started, the text is
@@ -363,7 +434,52 @@ const LIGHT_PALETTE: [u32; 16] = [
     0xb5a000, 0x0451a5, 0xbc05bc, 0x0598bc, 0xa5a5a5,
 ];
 
+/// The colors of a terminal for one theme, set by the app; None is the color of egui
+#[derive(Clone, Default)]
+struct Scheme {
+    background: Option<Color32>,
+    foreground: Option<Color32>,
+    cursor: Option<Color32>,
+    selection: Option<Color32>,
+    palette: [Option<Color32>; 16],
+}
+
+impl Scheme {
+    fn from_dict(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let mut scheme = Scheme::default();
+        for (key, value) in dict.iter() {
+            let key: String = key.extract()?;
+            let color = |value: &Bound<'_, PyAny>| -> PyResult<Option<Color32>> {
+                if value.is_none() { Ok(None) } else { extract_color(value).map(Some) }
+            };
+            match key.as_str() {
+                "background" => scheme.background = color(&value)?,
+                "foreground" => scheme.foreground = color(&value)?,
+                "cursor" => scheme.cursor = color(&value)?,
+                "selection" => scheme.selection = color(&value)?,
+                "palette" => {
+                    let colors: Vec<Bound<'_, PyAny>> = value.extract()?;
+                    if colors.len() > 16 {
+                        return Err(PyValueError::new_err("palette has 16 colors at most"));
+                    }
+                    for (index, value) in colors.iter().enumerate() {
+                        scheme.palette[index] = color(value)?;
+                    }
+                }
+                _ => {
+                    return Err(PyValueError::new_err(format!(
+                        "unknown terminal color '{key}': background, foreground, cursor, selection or palette"
+                    )))
+                }
+            }
+        }
+        Ok(scheme)
+    }
+}
+
 struct Palette {
+    /// the 16 colors given by the app
+    custom: [Option<Color32>; 16],
     dark: bool,
     foreground: Color32,
     /// what is behind the text, used when the colors are inverted
@@ -374,7 +490,8 @@ impl Palette {
     fn indexed(&self, index: usize) -> Color32 {
         let hex = |value: u32| Color32::from_rgb((value >> 16) as u8, (value >> 8) as u8, value as u8);
         match index {
-            0..=15 => hex(if self.dark { DARK_PALETTE[index] } else { LIGHT_PALETTE[index] }),
+            0..=15 => self.custom[index]
+                .unwrap_or_else(|| hex(if self.dark { DARK_PALETTE[index] } else { LIGHT_PALETTE[index] })),
             16..=231 => {
                 let level = |n: usize| if n == 0 { 0 } else { (55 + 40 * n) as u8 };
                 let index = index - 16;
@@ -548,15 +665,18 @@ struct Run {
 /// keys go to the shell and key_pressed() returns False (unless when_typing=True).
 ///
 /// Without a background the terminal is transparent: it shows the sheet of the pane or of the
-/// panel it is in. The 16 colors of the shell follow the light or dark theme.
+/// panel it is in. The 16 colors of the shell follow the light or dark theme, and so do the
+/// colors given by Terminal(light=..., dark=...) or term.set_colors().
 ///
 /// Args:
 ///     term (Terminal): the state of the terminal
 ///
 /// Keyword args:
-///     background (tuple | str): the color behind the text
+///     background (tuple | str): the color behind the text, before the one of Terminal(light=,
+///         dark=)
 ///
-///     foreground (tuple | str): the color of the text, the one of the theme by default
+///     foreground (tuple | str): the color of the text, before the one of Terminal(light=,
+///         dark=), the one of the theme by default
 ///
 ///     height (float): the height, the available one by default
 ///
@@ -581,10 +701,17 @@ struct Run {
 #[pyo3(signature = (term, **kwargs))]
 unsafe fn terminal(term: &mut Terminal, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
     let ui = current_ui(&UI)?;
-    let background = kwarg_color(kwargs, "background")?;
-    let foreground = kwarg_color(kwargs, "foreground")?;
+    // the colors of the theme shown, those of the call first
+    let scheme = if ui.visuals().dark_mode { term.dark.clone() } else { term.light.clone() };
+    let background = kwarg_color(kwargs, "background")?.or(scheme.background);
+    let foreground = kwarg_color(kwargs, "foreground")?.or(scheme.foreground);
     let padding = kwarg::<f32>(kwargs, "padding")?.unwrap_or(6.0);
-    let font = FontId::monospace(term.font_size.max(4.0));
+    // the font file of the terminal once egui has it, the monospace font of egui until then
+    let family = match &term.font {
+        Some(path) => crate::file_font_family(ui.ctx(), path)?,
+        None => None,
+    };
+    let font = FontId::new(term.font_size.max(4.0), family.unwrap_or(egui::FontFamily::Monospace));
     let cell = ui.ctx().fonts_mut(|f| egui::vec2(f.glyph_width(&font, 'M'), f.row_height(&font)));
     if cell.x <= 0.0 || cell.y <= 0.0 {
         return Err(PyRuntimeError::new_err("the monospace font has no size"));
@@ -832,11 +959,12 @@ unsafe fn terminal(term: &mut Terminal, kwargs: Option<&Bound<'_, PyDict>>) -> P
 
     // the cells
     let palette = Palette {
+        custom: scheme.palette,
         dark: background.map_or(ui.visuals().dark_mode, |color| color.intensity() < 0.5),
         foreground: text_color,
         backdrop: background.unwrap_or_else(|| ui.visuals().panel_fill).to_opaque(),
     };
-    let selection_color = ui.visuals().selection.bg_fill;
+    let selection_color = scheme.selection.unwrap_or(ui.visuals().selection.bg_fill);
     let content = grid.renderable_content();
     let offset = content.display_offset as i32;
     let selection = content.selection;
@@ -942,7 +1070,7 @@ unsafe fn terminal(term: &mut Terminal, kwargs: Option<&Bound<'_, PyDict>>) -> P
         let cursor_cell = &grid.grid()[cursor.point];
         let wide = cursor_cell.flags.contains(Flags::WIDE_CHAR);
         let area = cell_rect(cursor_row as usize, cursor.point.column.0, if wide { 2 } else { 1 });
-        let color = palette.foreground;
+        let color = scheme.cursor.unwrap_or(palette.foreground);
         match cursor.shape {
             _ if !focused => {
                 painter.rect_stroke(area.shrink(0.5), 0.0, Stroke::new(1.0, color), egui::StrokeKind::Inside);

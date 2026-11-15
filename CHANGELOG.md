@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `Terminal(font="...ttf")` (and `term.font`): draws the terminal with a monospace font file, e.g. a Nerd Font for the icons of a prompt; the characters it lacks come from the font of egui. The font is kept through the changes of style
+- `Terminal(light=dict(...), dark=dict(...))` and `term.set_colors(light=, dark=)`: the colors of the terminal with each theme (background, foreground, cursor, selection and the 16 colors of the shell); a change of theme changes them at once
+- Finder example: a click in a pane gives it the keyboard zone again (it was tested before the pane was drawn, when its ui has no size, so the tree kept taking the focus back from the terminal); while a terminal has the focus the keys are the shell's, Escape no longer sends the focus back to the files; F6 works from a text field or a terminal. The docstring of `ui_contains_pointer` says it tests what is drawn so far
+- Finder example: the terminals use an installed Nerd Font (its Mono variant) when there is one, and the One Light and One Dark colors; the Transparence pane is removed, its settings are constants (opacity 1.2, files and docks at 0.3, blur 32, gap 8), and the code that converted old saved layouts is gone
 - `key_pressed`, `typed_text`, `modifiers`, `pointer_pos`, `pointer_pressed` and `file_icon` no longer open the central panel: called before the panels of `update_func`, they used to put the panels inside it, 8 points from the borders of the window
 - `code_view(text, language)`: source code with syntax highlighting (Python, JavaScript/TypeScript, Rust, shell, PowerShell as shell, C/C++, JSON, SQL, TOML, YAML), line numbers, selection, in a scroll area
 - `markdown(...)` returns the url of the link clicked during the frame; `open_links=False` leaves it to the app instead of the browser, e.g. to open a linked markdown file
@@ -10,8 +14,8 @@
 - Finder example: a double click (or Enter) on a markdown or source file (.py, .js, .ts, .rs, .ps1, .sh...) shows it in the central view, reloaded when saved, its links to other markdown files opened there; Fermer, Escape, Back or another folder go back to the files
 - Finder and markdown viewer examples: a segmented control of icons (light, dark, system) in the bottom band of the sidebar; new icons `sun`, `moon` and `theme-system`
 - `examples/markdown_finder.py`: a markdown viewer in the unified layout of the Finder example, with a `FileTreeView` of the markdown files of a folder for the navigation; a click on a heading of the outline scrolls the document to it; a link to a markdown file opens it in the viewer, at its heading for `file.md#heading`, `#heading` scrolls the document, another file opens with its app and the web in the browser
-- Finder example: the panes menu no longer has the transparency slider, it is in the Transparence pane (Global)
-- Finder example: a unified layout like the Claude app. The sidebar runs along the whole height without gap nor corners. It and the body are cut in three bands (top, content, bottom) of the same heights; only the body has lines between its bands. The top of the sidebar has a settings menu (theme, glass, accent, tabs, layout, Transparence pane), its bottom the drive and its free space. One gap everywhere (8 points, a slider in the Transparence tab): around the dock, against the lines, the border of the window, and between its panes. The layout of boxes is still there (Disposition unifiée off)
+- Finder example: the panes menu no longer has the transparency slider
+- Finder example: a unified layout like the Claude app. The sidebar runs along the whole height without gap nor corners. It and the body are cut in three bands (top, content, bottom) of the same heights; only the body has lines between its bands. The top of the sidebar has a settings menu (theme, glass, accent, tabs, layout), its bottom the drive and its free space. One gap everywhere (8 points): around the dock, against the lines, the border of the window, and between its panes. The layout of boxes is still there (Disposition unifiée off)
 
 ## 0.6.1 (2026-11-14)
 
