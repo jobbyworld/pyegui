@@ -1111,18 +1111,34 @@ TAGS_COLUMN = 200  # the width of the Tags column of the tree
 
 
 def tags_cell(path):
-    """the Tags column of the tree and of the list: on the selected row the own tags of the item to edit, on the
-    others its tags and those of its folders, small chips"""
-    if len(picked) == 1 and path == selected.value:
-        # one chip, +N and the field fit in the column; +N shows them all
-        edit_own_tags(path, small=True, max_visible=1, field_width=64, hint_text="+ tag", id=f"tree tags {path}")
-        return
+    """the Tags column of the tree and of the list: small chips, the tags of the item then those of its
+    folders (desaturated). The mouse over the cell shows a cross on the own tags and an empty tag, a
+    field with the list of the tags to choose one or to type a new one (Enter)"""
     sync_library()
     found = [("/".join(tag_path(tag["id"])), how) for tag, how in tags_of(path) if how != "parent"]
-    if found:
-        cell = Tags([p for p, _ in found], colors=library.colors)
-        inherited = [p for p, how in found if how == "folder"]  # desaturated: they come from a folder
-        tags_edit(cell, editable=False, small=True, max_visible=2, muted=inherited, id=f"tree tags {path}")
+    inherited = [p for p, how in found if how == "folder"]  # desaturated: they come from a folder
+    cell = Tags([p for p, _ in found], colors=library.colors)
+    before = set(cell.tags)
+    if tags_edit(
+        cell,
+        small=True,
+        fit=True,
+        field_width=64,
+        hint_text="+ tag",
+        on_hover=True,
+        dropdown=True,
+        suggestions=list(library_state["ids"]),
+        muted=inherited,
+        id=f"tree tags {path}",
+    ):
+        ids = library_state["ids"]
+        now = set(cell.tags)
+        for added in now - before:
+            tags.tag(path, create_tag_path(split_tag_path(added)))
+        for removed in before - now:
+            if removed in ids:
+                tags.untag(path, ids[removed])
+        store_colors(cell)
 
 
 def matching_tags(parts):
@@ -1955,6 +1971,7 @@ widths = {
     "panes": 60,
     "count": 230,
     "dock": 170,
+    "edit": 41,  # the "…" that ends the path bar, with its spacing (40.1 measured)
 }
 
 
@@ -1975,10 +1992,6 @@ def measure(key, draw, last=False):
         context[0].request_repaint()  # the next frame is laid out with the new width
 
 
-# the room of the "…" that ends the path: the button and its spacing, as drawn (36.9 measured). It
-# must not be under what is drawn: the breadcrumb is given what is left, so a button that takes more
-# pushes the right side out of the row, and measure() then sees "does not fit" at every other frame
-EDIT_BUTTON = 38
 SLACK = 1  # room kept in a row, to see that what is at its right grew
 SEARCH_WIDTH, SEARCH_MIN = (
     240,
@@ -3409,13 +3422,19 @@ def path_bar():
         else:
             path_breadcrumb(
                 here,
-                max_width=available_width() - widths[key] - SLACK - 8 - EDIT_BUTTON,
+                max_width=available_width() - widths[key] - SLACK - 8 - widths["edit"],
                 on_click=go_or_select,
                 context_menu=path_menu,
             )
             # the last element of the path: its full text, to type or paste a path
+            before_edit = available_width()
             if small_button_clicked("…"):
                 edit_path()
+            # the button and its spacing, as drawn: learned, it depends on the font and the style
+            drawn = before_edit - available_width()
+            if drawn > 0.5 and abs(drawn - widths["edit"]) > 0.5:
+                widths["edit"] = drawn
+                context[0].request_repaint()
         # no minimum: when the breadcrumb takes all its max_width, what is left is exactly the width
         # of the right side; a few more points would push it out, measure() would widen it, the
         # breadcrumb shrink, and the row would go back and forth at every frame

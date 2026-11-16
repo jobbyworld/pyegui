@@ -479,10 +479,13 @@ removes the last tag.
 - `hint_text` (str): the text of the empty field, "Add a tag" by default
 - `suggestions` (list[str]): tags offered under the field while typing, e.g. all the known ones; those already there are left out
 - `field_width` (float): the width of the field, 120 by default
+- `on_hover` (bool): the chips are read only until the mouse is over the widget, e.g. the cell of a row: then the crosses show and an empty tag, a field in a pill like the chips with a chevron, to type or choose a tag. The pill stays while it has the focus. What is typed is kept by the widget (give each row its own id). The tags in muted have no cross. False by default
+- `dropdown` (bool): the field shows the list of all the suggestions as soon as it has the focus, filtered by what is typed, instead of only while typing. The keys Down and Up move a highlighted row (the list scrolls with it), Enter adds it, Escape clears what is typed. False by default
 - `compact` (bool): only a dot per tag in its color, the full path on hover, e.g. in a row of a list; read only
 - `dot_size` (float): the diameter of the dots of compact, 10 by default
 - `muted` (list[str]): tags drawn with their colors desaturated, e.g. those an item inherits
 - `small` (bool): smaller chips, with the small text, e.g. in a row of a list or of a tree
+- `fit` (bool): shows as many tags as the room of the ui allows and the others in the "+5" badge, e.g. in a cell of a table; the room of the crosses and of the field is kept even when they do not show. Replaces max_visible. False by default
 - `max_visible` (int): with more tags, only the first ones are shown and then "+5": the mouse over it lists the others, a click shows them all (and "−" shows the first ones again)
 - `id` (str): to tell apart two widgets of the same Tags
 
