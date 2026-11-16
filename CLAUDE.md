@@ -59,6 +59,10 @@ Things that bite:
 
 - `key_pressed` returns False while a text field has the focus unless `when_typing=True`. Cmd+C,
   Cmd+X and Cmd+V are turned into egui copy/cut/paste events and may not reach `key_pressed`.
+- `path_breadcrumb(max_width=...)` takes exactly what it is given: reserve what follows it in the row with
+  its measured width and the row spacing (the "…" button of the Finder is 36.9 wide with its spacing). An
+  under-estimate pushes the right side out of the row; a row that learns its widths from what fits then
+  goes back and forth at every frame at one window width (see `measure` and `EDIT_BUTTON` in `finder.py`).
 - `scroll_area_vertical` and `table*` clip their content to the width they are given; use
   `scroll_area_both` or the automatic horizontal scroll of `table(column_widths=[...])` to reach
   wider content.
@@ -117,6 +121,7 @@ Index of all files: [docs/framework/README.md](docs/framework/README.md).
 | `files.py` | the three file views (tree, list, icons) sharing one `FileWatcher`, a preview reloaded when the file changes on the disk, a Log dock of the notify events, a `path_combo` title, a `path_breadcrumb` path bar and a slider for the size of the icons |
 | `markdown_finder.py` | a markdown viewer in the unified layout of `finder.py`: a `FileTreeView` of the `.md` files of a folder in the sidebar (filtered by the search field), the document in the middle, reloaded when saved, its outline and source in a dock, the path in the bottom band |
 | `tags.py` | `Tags` and `tags_edit`: tags with several levels, the last one shown, the full path in the colors of its levels on hover, suggestions while typing, compact dots, `max_visible`; a `TagTreeView` of all the tags in the sidebar |
+| `table_columns.py`, `file_columns.py` | `table(view=TableView())` and the file views with an interactive header: sort, filter by type, move, resize and pin columns (right click on a title) |
 | `markdown_viewer.py` | minimal app: a sidebar listing markdown files, a viewer in the middle and three docks on the right (outline, source, infos) |
 
 `finder.py` is the reference for a real desktop layout. Its Actions pane works like the Actions

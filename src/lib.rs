@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{fs, ptr};
 
+mod columns;
 mod containers;
 mod icons;
 mod layout;
@@ -25,6 +26,7 @@ mod path;
 mod plot;
 mod style;
 mod table;
+mod table_view;
 mod tags;
 mod terminal;
 mod tree;
@@ -2921,6 +2923,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     containers::register(m)?;
     layout::register(m)?;
     table::register(m)?;
+    table_view::register(m)?;
     tree::register(m)?;
     widgets::register(m)?;
     icons::register(m)?;

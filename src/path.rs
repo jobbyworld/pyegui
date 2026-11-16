@@ -187,7 +187,10 @@ fn cap(widths: &[f32], available: f32, min: f32) -> Option<f32> {
 ///
 ///     max_width (float): the widest it can be. Default is the width left in the ui. The
 ///         ancestors are shortened first, then those that still do not fit are left out from the
-///         root, so the breadcrumb never takes more
+///         root, so the breadcrumb never takes more. Give it the width left minus what follows it in
+///         the row, as drawn (measured, not guessed, and with the spacing of the row): a row that
+///         measures itself and gets an under-estimate pushes its right side out, sees that it does
+///         not fit, widens, fits again, and redraws at every frame
 ///
 ///     icons (bool): shows the icons of the folders. Default is True
 ///

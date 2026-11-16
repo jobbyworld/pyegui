@@ -12,7 +12,25 @@ use crate::{panel_parent_ui, UI};
 
 thread_local! {
     // (path, pixels) -> uri of the icon given to the image loaders, None if there is no icon
-    static ICONS: RefCell<HashMap<(String, u32), Option<String>>> = RefCell::new(HashMap::new());
+    static ICONS: RefCell<HashMap<(String, u32, bool), Option<String>>> = RefCell::new(HashMap::new());
+    // the folders of Windows are drawn blue, like in the Finder
+    static BLUE_FOLDERS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Draws the icons of the folders in blue, in the style of the Finder of macOS, instead of the
+/// yellow of the Explorer of Windows. It changes the icons given by file_icon and drawn by the
+/// file views. It has no effect on macOS (already blue) nor on Linux. Default is False
+///
+/// Args:
+///     enabled (bool): True for blue folders, False for the native ones
+///
+/// Example::
+///
+///     set_blue_folders(True)  # once, before the first frame
+#[pyfunction]
+#[pyo3(signature = (enabled=true))]
+fn set_blue_folders(enabled: bool) {
+    BLUE_FOLDERS.with(|b| b.set(enabled));
 }
 
 /// The icon of a file as a PNG, from NSWorkspace like the Finder shows it
@@ -107,6 +125,11 @@ fn native_icon_png(path: &str, pixels: u32) -> Option<Vec<u8>> {
                 px[3] = 255;
             }
         }
+        if BLUE_FOLDERS.with(|b| b.get()) && std::path::Path::new(path).is_dir() {
+            for px in data.chunks_exact_mut(4) {
+                yellow_to_blue(px);
+            }
+        }
 
         let mut png = Vec::new();
         image::codecs::png::PngEncoder::new(&mut png)
@@ -114,6 +137,47 @@ fn native_icon_png(path: &str, pixels: u32) -> Option<Vec<u8>> {
             .ok()?;
         Some(png)
     }
+}
+
+/// Turns a yellow pixel (RGBA) of the folder of Windows into the blue of the Finder: the hue
+/// moves, the saturation and the brightness stay, so the shades of the folder are kept
+#[cfg(target_os = "windows")]
+fn yellow_to_blue(px: &mut [u8]) {
+    let (r, g, b) = (px[0] as f32 / 255.0, px[1] as f32 / 255.0, px[2] as f32 / 255.0);
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+    if max <= 0.0 || delta / max < 0.2 {
+        return; // grey, white or transparent: nothing to color
+    }
+    let hue = if max == r {
+        60.0 * (((g - b) / delta).rem_euclid(6.0))
+    } else if max == g {
+        60.0 * ((b - r) / delta + 2.0)
+    } else {
+        60.0 * ((r - g) / delta + 4.0)
+    };
+    if !(20.0..=70.0).contains(&hue) {
+        return;
+    }
+    // yellow (45) to the blue of the Finder (about 208), with a little of the spread kept
+    let hue = 208.0 + (hue - 45.0) * 0.3;
+    let sat = (delta / max * 1.15).min(1.0);
+    let h = hue / 60.0;
+    let c = max * sat;
+    let x = c * (1.0 - (h.rem_euclid(2.0) - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = max - c;
+    px[0] = ((r + m) * 255.0).round() as u8;
+    px[1] = ((g + m) * 255.0).round() as u8;
+    px[2] = ((b + m) * 255.0).round() as u8;
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -150,7 +214,8 @@ unsafe fn file_icon(path: &str, size: f32) -> PyResult<Option<String>> {
 /// The uri of the native icon of a file, made once per path and size, None if the platform has none
 pub(crate) fn icon_uri(ctx: &eframe::egui::Context, path: &str, size: f32) -> Option<String> {
     let pixels = (size * ctx.pixels_per_point()).round().clamp(8.0, 1024.0) as u32;
-    let key = (path.to_string(), pixels);
+    let blue = BLUE_FOLDERS.with(|b| b.get());
+    let key = (path.to_string(), pixels, blue);
 
     ICONS.with_borrow_mut(|icons| {
         icons
@@ -158,7 +223,7 @@ pub(crate) fn icon_uri(ctx: &eframe::egui::Context, path: &str, size: f32) -> Op
             .or_insert_with(|| {
                 let png = native_icon_png(path, pixels)?;
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                (path, pixels).hash(&mut hasher);
+                (path, pixels, blue).hash(&mut hasher);
                 let uri = format!("bytes://file-icon-{:016x}.png", hasher.finish());
                 ctx.include_bytes(uri.clone(), png);
                 Some(uri)
@@ -169,5 +234,6 @@ pub(crate) fn icon_uri(ctx: &eframe::egui::Context, path: &str, size: f32) -> Op
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(file_icon, m)?)?;
+    m.add_function(wrap_pyfunction!(set_blue_folders, m)?)?;
     Ok(())
 }

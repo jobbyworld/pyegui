@@ -71,7 +71,7 @@ THEMES = [
      "Widgets for collections. Tables only draw the visible rows, so they stay fast with many "
      "rows. A `TreeView` keeps the selection and the opened folders, the nodes are rebuilt each "
      "frame.",
-     ["table", "table_ui", "tree_view", "TreeView", "TreeNode", "plot", "PlotLine",
+     ["table", "TableView", "table_ui", "tree_view", "TreeView", "TreeNode", "plot", "PlotLine",
       "PlotPoints", "PlotBars", "PlotRule"]),
     ("docking", "Docking tabs",
      "A `Dock` holds panes shown as tabs that the user can resize, rearrange by dragging and "
@@ -84,7 +84,7 @@ THEMES = [
      "the first time it is drawn.",
      ["Terminal", "terminal"]),
     ("files", "File views and watcher",
-     "Ready made views of the disk: `FileListView` (a list with sortable columns), `FileIconView` "
+     "Ready made views of the disk: `FileListView` (a list whose columns can be resized, moved, sorted and filtered by type), `FileIconView` "
      "(a grid of icons) and `FileTreeView` (a tree of folders), drawn by `file_list_view`, "
      "`file_icon_view` and `file_tree_view`. They are state objects: create them once, outside the "
      "update function. Their folders are listed through a `FileWatcher` that the system notifies of "
@@ -96,7 +96,7 @@ THEMES = [
     ("images", "Images and icons",
      "Images are given as uri: `file://` followed by a path, or an `http(s)` url. SVG icons stay "
      "sharp at any size and can be tinted.",
-     ["image", "image_button_clicked", "image_and_text_clicked", "file_icon"]),
+     ["image", "image_button_clicked", "image_and_text_clicked", "file_icon", "set_blue_folders"]),
     ("interaction", "Keyboard, mouse and drag and drop",
      "Shortcuts are read with `key_pressed`; what the user did to a widget is read from its "
      "`Response` or from the value the function returns.",

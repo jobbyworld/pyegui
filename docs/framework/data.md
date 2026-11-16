@@ -22,6 +22,11 @@ Shows a table of texts. Only visible rows are drawn, so it is fast even with man
 - `column_widths` (list[float | None | str]): width of each column: a starting width, None to fit
 - the contents or "remainder" for the rest of the width. Default fits the contents, the last
 - column takes the rest
+- `view` (TableView): the state of the table. With it the header is interactive: a click on a title sorts (again to reverse), a drag on a title moves the column, a drag on its border resizes it, the funnel filters it and a right click pins it at the left or at the right (the columns that are not pinned scroll horizontally). `selected` then holds the index of the row in `rows`, whatever the sort and the filters. Widths are numbers or None
+- `types` (list[str]): with `view`, the type of the data of each column: "text" (default), "number" (sorted by value, filtered by a minimum and a maximum, "10 KB" is understood), "date" (YYYY-MM-DD) or "choice" (filtered by the values kept)
+- `sortable` (bool): with `view`, a click on a title sorts. Default is True
+- `pinnable` (bool): with `view`, the right click on a title offers to pin the column. Default is True
+- reorderable, filterable (bool): with `view`, the columns can be moved and filtered. Default is True
 
 **Example:**
 
@@ -35,6 +40,47 @@ def update_func(ctx):
         label(f"Selected: {rows[selected.value][0]}")
 ```
 
+
+## `TableView`
+
+
+The state of a table: sort, filters, widths, order and pinned columns. Create it once, outside
+the update function, and give it to `table` with `view=`.
+
+The columns are named by their header, so the headers of a table should be different.
+
+**Args**
+
+- `sort_by` (str): header of the column to sort by. Default is "", the order of the rows
+
+**Properties**
+
+- sort_by (str), ascending (bool), column_widths (dict[str, float]), column_order (list[str]),
+- column_filters (dict), pinned_left (list[str]), pinned_right (list[str]) are read and
+- written, to save at the end of the run and give back at the next one.
+- visible_rows (list[int]) is read only: the indexes in `rows` of the rows shown, in order.
+
+**Example:**
+
+```python
+view = TableView(sort_by="Age")
+view.pinned_left = ["Name"]
+
+def update_func(ctx):
+    table(["Name", "Age", "City"], rows, view=view, types=["text", "number", "choice"])
+```
+
+
+- `TableView.ascending` (attribute)
+- `TableView.clear_filters()` (method): Removes the filters of all the columns
+- `TableView.column_filters` (attribute)
+- `TableView.column_order` (attribute)
+- `TableView.column_widths` (attribute)
+- `TableView.pinned_left` (attribute)
+- `TableView.pinned_right` (attribute)
+- `TableView.reset_columns()` (method): Gives the columns their default width, order and no pin
+- `TableView.sort_by` (attribute)
+- `TableView.visible_rows` (attribute)
 
 ## `table_ui(headers, num_rows, cell_func, **kwargs)`
 
