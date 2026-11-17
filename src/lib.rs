@@ -24,6 +24,8 @@ mod files;
 mod markdown;
 mod native_dnd;
 mod path;
+#[cfg(feature = "pdf")]
+mod pdf;
 mod plot;
 mod style;
 mod table;
@@ -2944,6 +2946,8 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     watcher::register(m)?;
     files::register(m)?;
     path::register(m)?;
+    #[cfg(feature = "pdf")]
+    pdf::register(m)?;
     tags::register(m)?;
     Ok(())
 }

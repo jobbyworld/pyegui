@@ -246,7 +246,7 @@ find_name = Str("")  # the Recherche pane: part of the name,
 find_ext = Str("")  # the extensions (py, md pdf),
 find_scope = Int(0)  # 0: from the current folder, 1: everywhere in the index
 find_folders = Bool(True)  # folders among the results
-find_pages_min = Str("")  # filters on what pypdf read of the PDF: number of pages,
+find_pages_min = Str("")  # filters on what pdf_info read of the PDF: number of pages,
 find_pages_max = Str("")
 find_protect = Int(0)  # 0: all, 1: encrypted, 2: not encrypted
 find_pdf_text = Str("")  # a text of the title, author, subject or keywords
@@ -2752,7 +2752,7 @@ def index_folder_action():
 
 
 def read_pdfs_action():
-    """reads with pypdf the PDF already in the index that were never read (indexed before the PDF
+    """reads with pdf_info the PDF already in the index that were never read (indexed before the PDF
     were read, or new), or changed since: no new walk of the disk, for the whole index"""
     start_index_job(None, "l'index", walk=False)
 
@@ -2803,11 +2803,8 @@ def run_index_job(folder, name, walk):
             indexing["result"] = (
                 tags.index_folder(folder, progress, cancelled, on_folder=on_folder) if walk else (0, 0)
             )
-            try:  # then what the PDF say of themselves: only the new or changed ones are read
-                if indexing["result"] is not None:  # a cancelled walk stops the whole job
-                    indexing["pdfs"] = tags.index_pdfs(folder, pdf_progress, cancelled, on_file)
-            except ImportError:
-                indexing["pdfs"] = "pypdf"  # not installed: the files are indexed all the same
+            if indexing["result"] is not None:  # then what the PDF say of themselves: only the new or changed ones are read
+                indexing["pdfs"] = tags.index_pdfs(folder, pdf_progress, cancelled, on_file)  # a cancelled walk stops the whole job
         except Exception as error:  # a base that is locked, a disk that is full...
             indexing["result"] = error
         result = indexing["result"]
@@ -2908,9 +2905,7 @@ def index_idle_section():
         heading("Indexation terminée")
         label(f"{state['folder']} : {result[0]} éléments" + (f", {result[1]} retirés" if result[1] else ""))
         pdfs = state.get("pdfs")
-        if pdfs == "pypdf":
-            weak("PDF non lus : pip install pypdf")
-        elif pdfs and pdfs[0]:
+        if pdfs and pdfs[0]:
             weak(f"{pdfs[0]} PDF lus" + (f" dont {pdfs[1]} illisibles" if pdfs[1] else ""))
     weak(f"Terminée à {time.strftime('%H:%M:%S', time.localtime(state['done_at']))}")
 
@@ -2929,16 +2924,12 @@ def index_status():
     if result:
         pdfs = indexing.get("pdfs")
         if not indexing.get("walk"):  # only the PDF of the index were read
-            if pdfs == "pypdf":
-                return "PDF non lus : pypdf n'est pas installé (pip install pypdf)"
             read, bad = (pdfs[0], pdfs[1]) if pdfs else (0, 0)
             if not read:
                 return "Tous les PDF de l'index sont déjà lus"
             return f"{read} PDF lus" + (f" dont {bad} illisibles" if bad else "")
         text = f"{indexing['folder']} indexé : {result[0]} éléments"
-        if pdfs == "pypdf":
-            text += " (PDF non lus : pip install pypdf)"
-        elif pdfs and pdfs[0]:
+        if pdfs and pdfs[0]:
             text += f", {pdfs[0]} PDF lus" + (f" dont {pdfs[1]} illisibles" if pdfs[1] else "")
         return text
     return ""
@@ -2975,18 +2966,15 @@ pdf_cache = {"key": None, "info": None, "reading": None}
 
 def read_pdf_in_thread(path, key_):
     """reads the PDF of a thread: a big file can take seconds, the window must not wait for it"""
-    try:
-        from finder_pdf import read_pdf_info
+    from finder_pdf import read_pdf_info
 
-        info = read_pdf_info(path)
-    except ImportError:
-        info = {"error": "pypdf n'est pas installé (pip install pypdf)"}
+    info = read_pdf_info(path)
     if pdf_cache["reading"] == key_:  # not the PDF of a selection the user has left since
         pdf_cache.update(key=key_, info=info, reading=None)
 
 
 def pdf_details(path):
-    """what pypdf read of a PDF: from the index, or (not indexed yet) from the file itself, in a
+    """what pdf_info read of a PDF: from the index, or (not indexed yet) from the file itself, in a
     thread. None while it is read. Cached: the preview asks at every frame"""
     try:
         stamp = path.stat().st_mtime_ns

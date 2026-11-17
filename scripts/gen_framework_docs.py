@@ -98,6 +98,12 @@ THEMES = [
      "Images are given as uri: `file://` followed by a path, or an `http(s)` url. SVG icons stay "
      "sharp at any size and can be tinted.",
      ["image", "image_button_clicked", "image_and_text_clicked", "file_icon", "set_blue_folders"]),
+    ("pdf", "PDF",
+     "What a PDF says about itself, read by the Rust code of pyegui (the `craft-pdf` reader): `pdf_info` "
+     "gives the pages, the version, the metadata, the dates and what the file forbids, with the GIL "
+     "released so it can be called from a thread. Nothing to install: it replaces pypdf. Only in a build "
+     "with the `pdf` Cargo feature, which is on by default.",
+     ["pdf_info"]),
     ("interaction", "Keyboard, mouse and drag and drop",
      "Shortcuts are read with `key_pressed`; what the user did to a widget is read from its "
      "`Response` or from the value the function returns.",
