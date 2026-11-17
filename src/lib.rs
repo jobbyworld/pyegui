@@ -1082,8 +1082,13 @@ impl eframe::App for PyeguiApp<'_> {
         }
     }
 
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        native_dnd::pump_drop_input(ctx, raw_input);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx_r = Context(ui.ctx().clone());
+        native_dnd::set_window(&*frame);
 
         #[cfg(target_os = "macos")]
         if ui.ctx().cumulative_pass_nr() < 3 {

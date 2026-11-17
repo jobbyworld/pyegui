@@ -2570,13 +2570,69 @@ def new_folder():
     start_rename(target)
 
 
+def trash_windows(paths):
+    """sends the items to the Recycle Bin (SHFileOperation with FOF_ALLOWUNDO), so they can be restored"""
+    import ctypes
+    from ctypes import wintypes
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [
+            ("hwnd", wintypes.HWND),
+            ("wFunc", wintypes.UINT),
+            ("pFrom", wintypes.LPCWSTR),
+            ("pTo", wintypes.LPCWSTR),
+            ("fFlags", ctypes.c_ushort),
+            ("fAnyOperationsAborted", wintypes.BOOL),
+            ("hNameMappings", ctypes.c_void_p),
+            ("lpszProgressTitle", wintypes.LPCWSTR),
+        ]
+
+    FO_DELETE, FOF_SILENT, FOF_NOCONFIRMATION, FOF_ALLOWUNDO, FOF_NOERRORUI = 3, 0x4, 0x10, 0x40, 0x400
+    user32 = ctypes.windll.user32
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    window = user32.GetForegroundWindow()  # the window of the Finder: it must keep the keyboard
+    # the paths are separated by a nul character and the list ends with two
+    names = "\0".join(os.path.abspath(p) for p in paths) + "\0\0"
+    flags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI
+    op = SHFILEOPSTRUCTW(window, FO_DELETE, names, None, flags, False, None, None)
+    done = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op)) == 0
+    # the shell may take the activation of the window: without it the keys do not reach the app
+    if window and user32.GetForegroundWindow() != window:
+        user32.SetForegroundWindow(window)
+    return done
+
+
+def next_after(paths):
+    """the item that follows the last of the items in the view (as shown, whatever the sort), or the
+    one before the first when they end the list: the one to select once they are gone"""
+    gone = {str(p) for p in paths}
+    shown = file_view().items
+    at = [i for i, p in enumerate(shown) if p in gone]
+    if not at:
+        return None
+    after = [p for p in shown[max(at) + 1 :] if p not in gone]
+    before = [p for p in shown[: min(at)] if p not in gone]
+    return (after or before or [None])[0 if after else -1]
+
+
 def trash():
-    # the Finder's own trash, so the items can be put back
-    for path in chosen():
-        script = f'tell application "Finder" to delete POSIX file "{path}"'
-        subprocess.run(["osascript", "-e", script], capture_output=True)
+    paths = chosen()
+    try:
+        following = next_after(paths)
+    except Exception:  # never in the way of the deletion
+        following = None
+    if sys.platform == "win32":
+        trash_windows(paths)
+    else:
+        # the Finder's own trash, so the items can be put back
+        for path in paths:
+            script = f'tell application "Finder" to delete POSIX file "{path}"'
+            subprocess.run(["osascript", "-e", script], capture_output=True)
     refresh(current())
     deselect()
+    if following and Path(following).exists():
+        select_path(following)  # the focus goes on to the next item
+        scroll_target.value = following
 
 
 def reveal():
@@ -2914,33 +2970,49 @@ def protected_cell(path):
         label("🔒")
 
 
-pdf_cache = {"key": None, "info": None}
+pdf_cache = {"key": None, "info": None, "reading": None}
+
+
+def read_pdf_in_thread(path, key_):
+    """reads the PDF of a thread: a big file can take seconds, the window must not wait for it"""
+    try:
+        from finder_pdf import read_pdf_info
+
+        info = read_pdf_info(path)
+    except ImportError:
+        info = {"error": "pypdf n'est pas installé (pip install pypdf)"}
+    if pdf_cache["reading"] == key_:  # not the PDF of a selection the user has left since
+        pdf_cache.update(key=key_, info=info, reading=None)
 
 
 def pdf_details(path):
-    """what pypdf read of a PDF: from the index, or (not indexed yet) from the file itself, once.
-    Cached: the preview asks at every frame"""
+    """what pypdf read of a PDF: from the index, or (not indexed yet) from the file itself, in a
+    thread. None while it is read. Cached: the preview asks at every frame"""
     try:
         stamp = path.stat().st_mtime_ns
     except OSError:
         stamp = None
     key_ = (str(path), stamp, indexing.get("done_at"))
-    if pdf_cache["key"] != key_:
-        info = tags.pdf_info(path)
-        if info is None:
-            try:
-                from finder_pdf import read_pdf_info
-
-                info = read_pdf_info(path)
-            except ImportError:
-                info = {"error": "pypdf n'est pas installé (pip install pypdf)"}
-        pdf_cache.update(key=key_, info=info)
-    return pdf_cache["info"]
+    if pdf_cache["key"] == key_:
+        return pdf_cache["info"]
+    if pdf_cache["reading"] == key_:
+        context[0].request_repaint(after=0.1)  # the thread cannot wake the window
+        return None
+    info = tags.pdf_info(path)
+    if info is not None:
+        pdf_cache.update(key=key_, info=info, reading=None)
+        return info
+    pdf_cache["reading"] = key_
+    threading.Thread(target=read_pdf_in_thread, args=(path, key_), daemon=True).start()
+    context[0].request_repaint(after=0.1)
+    return None
 
 
 def pdf_rows(path):
     """the lines of the preview for a PDF: (name, value), what is known only"""
     info = pdf_details(path)
+    if info is None:
+        return [("PDF", "lecture…")]
     if info.get("error") and info.get("pages") is None and not info.get("encrypted"):
         return [("PDF", f"illisible : {info['error']}")]
     from finder_pdf import restrictions
@@ -3061,8 +3133,8 @@ ACTIONS = [
         "Édition",
         "Mettre à la corbeille",
         "trash",
-        "Cmd+Backspace",
-        lambda: MACOS and has_selection(),
+        "Cmd+Backspace" if MACOS else "Delete",
+        lambda: (MACOS or sys.platform == "win32") and has_selection(),
         trash,
     ),
     (

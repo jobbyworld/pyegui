@@ -14,7 +14,13 @@ the permissions are still read, they are not encrypted. One that has only an own
 with an empty one, which is how every viewer opens it.
 """
 
+import json
 import logging
+import os
+import queue
+import subprocess
+import sys
+import threading
 
 from pypdf import PdfReader
 from pypdf.constants import UserAccessPermissions as Access
@@ -55,8 +61,9 @@ def timestamp(read):
         return None
 
 
-def read_pdf_info(path):
-    """the information of a PDF as a dict with the keys of COLUMNS (None where unknown)"""
+def read_pdf_info_here(path):
+    """the information of a PDF as a dict with the keys of COLUMNS (None where unknown), read by
+    this process"""
     info = dict.fromkeys(COLUMNS)
     try:
         with open(path, "rb") as stream:
@@ -82,6 +89,82 @@ def read_pdf_info(path):
     except Exception as error:  # damaged file, unsupported encryption, AES without cryptography...
         info["error"] = f"{type(error).__name__}: {error}"[:300]
     return info
+
+
+# pypdf is plain Python: read in a thread of the app it holds the GIL and the window stutters while a
+# big PDF is read. The files are read by other processes instead, which the window does not wait for.
+WORKERS = 2  # one for the index, one for the preview
+_idle = queue.Queue()
+_count = [0]
+_lock = threading.Lock()
+
+
+def _python():
+    """python.exe: the pythonw.exe of a window has no standard output to answer on"""
+    exe = sys.executable
+    if os.path.basename(exe).lower() == "pythonw.exe":
+        console = os.path.join(os.path.dirname(exe), "python.exe")
+        if os.path.exists(console):
+            return console
+    return exe
+
+
+def _start_worker():
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    return subprocess.Popen(
+        [_python(), "-X", "utf8", os.path.abspath(__file__), "--worker"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=flags,
+    )
+
+
+def _take_worker():
+    try:
+        return _idle.get_nowait()
+    except queue.Empty:
+        pass
+    with _lock:
+        if _count[0] < WORKERS:
+            _count[0] += 1
+            try:
+                return _start_worker()
+            except OSError:
+                _count[0] -= 1
+                return None
+    return _idle.get()  # all are busy: wait for one
+
+
+def read_pdf_info(path):
+    """the information of a PDF as a dict with the keys of COLUMNS (None where unknown), read by a
+    worker process so that the window does not stutter. Safe to call from any thread."""
+    worker = _take_worker()
+    if worker is None:
+        return read_pdf_info_here(path)
+    try:
+        worker.stdin.write(json.dumps(str(path)).encode() + b"\n")
+        worker.stdin.flush()
+        answer = worker.stdout.readline()
+        if not answer:
+            raise OSError("worker gone")
+        info = json.loads(answer)
+        _idle.put(worker)
+        return {column: info.get(column) for column in COLUMNS}
+    except Exception:  # the worker died: this file is read here, the next ones get a new worker
+        worker.kill()
+        with _lock:
+            _count[0] -= 1
+        return read_pdf_info_here(path)
+
+
+def _serve():
+    """the loop of a worker process: a path per line on the input, the information on the output"""
+    for line in sys.stdin.buffer:
+        info = read_pdf_info_here(json.loads(line))
+        sys.stdout.buffer.write(json.dumps(info).encode() + b"\n")
+        sys.stdout.buffer.flush()
+
+
+if __name__ == "__main__" and "--worker" in sys.argv:
+    _serve()
 
 
 def restrictions(info):

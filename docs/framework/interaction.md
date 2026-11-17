@@ -250,8 +250,8 @@ Call it on the frame a drag starts on an item (``response.drag_started`` of an
 ``interactive`` area, or a drag of the file views with ``drag_out=True``): the mouse button has
 to be down. The drag goes on by itself, with the icons of the files under the pointer, and the
 drop is done by the receiver (a copy in the Finder, a move with Cmd held). The window gets no
-pointer event until the mouse button is released. Works on macOS, returns False elsewhere or if
-there is nothing to drag.
+pointer event until the mouse button is released. Works on macOS and on Windows (on Windows the
+call returns once the drag is over), returns False elsewhere or if there is nothing to drag.
 
 **Args**
 
