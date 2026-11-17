@@ -31,6 +31,10 @@ from finder_tags import TagStore
 from finder_tags import key as tag_key
 from pyegui import (
     RGB,
+    FileTransfer,
+    drop_operation,
+    dropped_files,
+    hovered_files,
     Backdrop,
     Bool,
     Dock,
@@ -2330,6 +2334,12 @@ def content():
     if reading.value:
         reader()
         return
+    if transfer.running:
+        copy_progress()
+    elif hovered_files():
+        folder = drop_folder()
+        verb = drop_operation(hovered_files(), str(folder))  # "move" or "copy", by the keys held now
+        colored_label(ACCENTS[accent_name.value], f"Drop to {verb} into {folder.name or folder}")
     tag_header()
     if not listing_here() or (search.value and not visible_entries()):
         weak("No items" if not search.value else f"No items match “{search.value}”")
@@ -2489,6 +2499,49 @@ def paste():
         picked.clear()
         picked.update(map(str, pasted))
         selected.value = anchor.value = str(pasted[-1])
+
+
+transfer = FileTransfer()  # copies and moves the files dropped on the window, in a thread
+
+
+def receive_drops():
+    """files dropped on the window, from the Finder or from the views of this window: moved or copied
+    into the folder under the pointer (else the folder shown) by the rules of the file managers
+    (drop_operation), in a thread with a progress (FileTransfer). The way out is the drag of the
+    views, which start a drag of the selection to the Finder (drag_out)"""
+    # a folder of the views under the pointer takes the files (the value of the last frame, drawn
+    # while the files hovered), else the folder shown
+    folder = drop_folder()
+    sources = [p for p in dropped_files() if Path(p).parent != folder]
+    if sources:
+        # decided now, with the keys held at the drop
+        transfer.start(sources, str(folder), operation=drop_operation(sources, str(folder)))
+    for error in transfer.errors():
+        print(f"drop: {error}", file=sys.stderr)
+    done = transfer.finished()  # each item once
+    if done:
+        refresh(*{Path(f) for f, _ in done}, *{Path(p).parent for p in sources})
+        shown = [Path(t) for f, t in done if Path(f) == current()]
+        if shown:
+            picked.clear()
+            picked.update(map(str, shown))
+            selected.value = anchor.value = str(shown[-1])
+
+
+def copy_progress():
+    """the bar of the files dropped, while they are copied or moved"""
+    colored_label(
+        ACCENTS[accent_name.value],
+        f"{transfer.running} item(s)… {human_size(transfer.done)} of {human_size(transfer.total)}",
+    )
+    progress(transfer.progress)
+
+
+def drop_folder():
+    """where the files dropped now would go: the folder of the views under the pointer, else the
+    folder shown"""
+    over = {TREE: tree, LIST: files_list, ICONS: files_icons}.get(view.value)
+    return Path(over.drop_target) if over is not None and over.drop_target else current()
 
 
 def duplicate():
@@ -3571,6 +3624,7 @@ def update_func(ctx):
 
     keyboard()
     action_keys()
+    receive_drops()
     open_requested_panes()  # before the dock is drawn
     collect_activity()
     follow_in_shell()

@@ -97,7 +97,7 @@ an example. They are generated from the docstrings, see "Keeping the reference u
 | Terminal | [terminal.md](docs/framework/terminal.md) | `Terminal` (a shell in a pseudo terminal: `run`, `send`, `restart`, `title`, `text`, `set_colors` for light and dark, `font`), `terminal` to draw it, e.g. in a `DockPane` |
 | File views | [files.md](docs/framework/files.md) | `FileListView`, `FileIconView`, `FileTreeView` and their draw functions, `FileWatcher` (folders kept up to date with the disk), `path_breadcrumb` and `path_combo` |
 | Images and icons | [images.md](docs/framework/images.md) | `image`, image buttons, tinted SVG icons, native `file_icon` |
-| Keyboard, mouse, drag and drop | [interaction.md](docs/framework/interaction.md) | `key_pressed`, `typed_text`, `modifiers`, `pointer_pos`, `interactive` (a clickable/draggable area with its `rect`), `draw_rect`, `dnd_drag_source`, `dnd_drop_zone` |
+| Keyboard, mouse, drag and drop | [interaction.md](docs/framework/interaction.md) | `key_pressed`, `typed_text`, `modifiers`, `pointer_pos`, `interactive` (a clickable/draggable area with its `rect`), `draw_rect`, `dnd_drag_source`, `dnd_drop_zone`, and the drag and drop with the Finder: `dropped_files`, `hovered_files`, `start_file_drag`, `dragged_files`, `system_modifiers` (the copy and move of what is dropped: `drop_operation`, `FileTransfer` in [files.md](docs/framework/files.md)) |
 | Styling | [styling.md](docs/framework/styling.md) | light/dark/system theme, accent, `set_style`, `set_layout` (layout rules), fonts, glass and native backdrops |
 
 Index of all files: [docs/framework/README.md](docs/framework/README.md).
@@ -146,6 +146,8 @@ predicate, run) read by both the panel and the keyboard, so an action is declare
 | `path.rs` | `path_breadcrumb` and `path_combo` |
 | `tags.rs` | `Tags`, `tags_edit`, `TagTreeView` and `tag_tree_view` |
 | `icons.rs` | `file_icon` (native file icons) |
+| `transfer.rs` | `drop_operation`, `same_volume` and `FileTransfer`: copy or move dropped files in a thread, with a progress |
+| `native_dnd.rs` | drag and drop with the system: `dropped_files`, `hovered_files`, `start_file_drag` (a drag session of AppKit on macOS), `dragged_files`, the pointer read from the system |
 
 Conventions when adding a function: a `#[pyfunction]` with a docstring in the same style as the
 others (summary, `Args:` / `Keyword args:` sections, an `Example::` block), registered in the

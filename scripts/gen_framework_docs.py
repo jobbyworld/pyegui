@@ -92,7 +92,8 @@ THEMES = [
      "next frame. Give the same watcher to all the views of an app. `path_breadcrumb` and "
      "`path_combo` show where a folder is and go to one of its ancestors.",
      ["FileListView", "FileIconView", "FileTreeView", "file_list_view", "file_icon_view",
-      "file_tree_view", "FileWatcher", "path_breadcrumb", "path_combo"]),
+      "file_tree_view", "FileWatcher", "path_breadcrumb", "path_combo",
+      "FileTransfer", "drop_operation", "same_volume"]),
     ("images", "Images and icons",
      "Images are given as uri: `file://` followed by a path, or an `http(s)` url. SVG icons stay "
      "sharp at any size and can be tinted.",
@@ -101,7 +102,7 @@ THEMES = [
      "Shortcuts are read with `key_pressed`; what the user did to a widget is read from its "
      "`Response` or from the value the function returns.",
      ["key_pressed", "typed_text", "modifiers", "pointer_pos", "pointer_pressed", "ui_contains_pointer", "interactive", "draw_rect",
-      "dnd_drag_source", "dnd_drop_zone"]),
+      "dnd_drag_source", "dnd_drop_zone", "dropped_files", "dragged_files", "system_modifiers", "hovered_files", "start_file_drag"]),
     ("styling", "Themes, colors, fonts and glass",
      "Everything that changes the look is a method of the `Context`, given to the update "
      "function of the top level. Call them from the first frame; `reset_style` goes back to the "
