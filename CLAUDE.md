@@ -97,7 +97,7 @@ an example. They are generated from the docstrings, see "Keeping the reference u
 | Terminal | [terminal.md](docs/framework/terminal.md) | `Terminal` (a shell in a pseudo terminal: `run`, `send`, `restart`, `title`, `text`, `set_colors` for light and dark, `font`), `terminal` to draw it, e.g. in a `DockPane` |
 | File views | [files.md](docs/framework/files.md) | `FileListView`, `FileIconView`, `FileTreeView` and their draw functions, `FileWatcher` (folders kept up to date with the disk), `path_breadcrumb` and `path_combo` |
 | Images and icons | [images.md](docs/framework/images.md) | `image`, image buttons, tinted SVG icons, native `file_icon` |
-| PDF | [pdf.md](docs/framework/pdf.md) | `pdf_info`: pages, version, metadata, dates and rights of a PDF (replaces pypdf; Cargo feature `pdf`, on by default) |
+| PDF | [pdf.md](docs/framework/pdf.md) | `pdf_info` (metadata, dates, rights: replaces pypdf), `PdfDocument`, `PdfView`/`pdf_view` (viewer: scroll, zoom, fit) and `pdf_thumbnail`; Cargo feature `pdf`, on by default |
 | Keyboard, mouse, drag and drop | [interaction.md](docs/framework/interaction.md) | `key_pressed`, `typed_text`, `modifiers`, `pointer_pos`, `interactive` (a clickable/draggable area with its `rect`), `draw_rect`, `dnd_drag_source`, `dnd_drop_zone`, and the drag and drop with the Finder: `dropped_files`, `hovered_files`, `start_file_drag`, `dragged_files`, `system_modifiers` (the copy and move of what is dropped: `drop_operation`, `FileTransfer` in [files.md](docs/framework/files.md)) |
 | Styling | [styling.md](docs/framework/styling.md) | light/dark/system theme, accent, `set_style`, `set_layout` (layout rules), fonts, glass and native backdrops |
 
@@ -123,6 +123,7 @@ Index of all files: [docs/framework/README.md](docs/framework/README.md).
 | `markdown_finder.py` | a markdown viewer in the unified layout of `finder.py`: a `FileTreeView` of the `.md` files of a folder in the sidebar (filtered by the search field), the document in the middle, reloaded when saved, its outline and source in a dock, the path in the bottom band |
 | `tags.py` | `Tags` and `tags_edit`: tags with several levels, the last one shown, the full path in the colors of its levels on hover, suggestions while typing, compact dots, `max_visible`; a `TagTreeView` of all the tags in the sidebar |
 | `table_columns.py`, `file_columns.py` | `table(view=TableView())` and the file views with an interactive header: sort, filter by type, move, resize and pin columns (right click on a title) |
+| `pdf_viewer.py` | a PDF viewer: thumbnails in the sidebar, the pages in the middle (`PdfView`), a toolbar (page, zoom, fit, continuous), password, drop a file on the window |
 | `markdown_viewer.py` | minimal app: a sidebar listing markdown files, a viewer in the middle and three docks on the right (outline, source, infos) |
 
 `finder.py` is the reference for a real desktop layout. Its Actions pane works like the Actions
@@ -146,6 +147,7 @@ predicate, run) read by both the panel and the keyboard, so an action is declare
 | `files.rs` | `FileListView`, `FileIconView`, `FileTreeView` and their draw functions |
 | `path.rs` | `path_breadcrumb` and `path_combo` |
 | `tags.rs` | `Tags`, `tags_edit`, `TagTreeView` and `tag_tree_view` |
+| `pdf_view.rs` | `PdfDocument`, `PdfView`, `pdf_view`, `pdf_thumbnail`: pages drawn by threads (`craft-pdf` raster), textures kept in a cache with a memory budget |
 | `pdf.rs` | `pdf_info`, with `craft-pdf` (git dependency of `storytold/craft-libs` pinned by its rev, with the `[patch.crates-io]` of `Cargo.toml` at the same rev; feature `pdf`) |
 | `icons.rs` | `file_icon` (native file icons) |
 | `transfer.rs` | `drop_operation`, `same_volume` and `FileTransfer`: copy or move dropped files in a thread, with a progress |

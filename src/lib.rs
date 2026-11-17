@@ -26,6 +26,8 @@ mod native_dnd;
 mod path;
 #[cfg(feature = "pdf")]
 mod pdf;
+#[cfg(feature = "pdf")]
+mod pdf_view;
 mod plot;
 mod style;
 mod table;
@@ -2948,6 +2950,8 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     path::register(m)?;
     #[cfg(feature = "pdf")]
     pdf::register(m)?;
+    #[cfg(feature = "pdf")]
+    pdf_view::register(m)?;
     tags::register(m)?;
     Ok(())
 }

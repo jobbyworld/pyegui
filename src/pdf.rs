@@ -31,7 +31,7 @@ const PERMISSIONS: [(&str, u32); 6] = [
 ];
 
 /// What a document says about itself, with the keys of the Python answer.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Info {
     pub pages: Option<usize>,
     pub encrypted: bool,
@@ -247,8 +247,9 @@ fn header_version(bytes: &[u8]) -> Option<String> {
         .then_some(version)
 }
 
-/// The information of a PDF given as bytes. Never fails: a file that cannot be read gives `error`.
-pub(crate) fn info_of_bytes(bytes: Vec<u8>) -> Info {
+/// Opens a PDF held in memory (with `password`, an empty one by default) and tells what it says about
+/// itself. The document is given back when it opened. Never fails: what went wrong is in `error`.
+pub(crate) fn open_with_info(bytes: Arc<Vec<u8>>, password: Option<&str>) -> (Info, Option<Pdf>) {
     let mut info = Info { encrypted: names_encryption(&bytes), ..Info::default() };
     if info.encrypted {
         info.permissions = read_permissions(&bytes);
@@ -258,13 +259,15 @@ pub(crate) fn info_of_bytes(bytes: Vec<u8>) -> Info {
         decode_limits: DecodeLimits::default().with_max_decoded_stream(MAX_DECODED_STREAM),
         ..Default::default()
     };
-    let bytes = Arc::new(bytes);
-    match craft_pdf::open_with_options(Arc::clone(&bytes), None, &options) {
+    let mut document = None;
+    match craft_pdf::open_with_options(Arc::clone(&bytes), password, &options) {
         Ok(pdf) => {
             // a document that opens with an empty password may still withhold rights (owner password only)
             let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read_open(&pdf, &bytes, &mut info)));
             if read.is_err() {
                 info.error = Some("the PDF reader failed on this file".into());
+            } else {
+                document = Some(pdf);
             }
         }
         Err(craft_pdf::OpenError::Load(LoadPdfError::Decryption(_))) => {
@@ -280,7 +283,38 @@ pub(crate) fn info_of_bytes(bytes: Vec<u8>) -> Info {
         #[allow(unreachable_patterns)]
         Err(other) => info.error = Some(other.to_string()),
     }
-    info
+    (info, document)
+}
+
+/// The information of a PDF given as bytes. Never fails: a file that cannot be read gives `error`.
+pub(crate) fn info_of_bytes(bytes: Vec<u8>) -> Info {
+    open_with_info(Arc::new(bytes), None).0
+}
+
+/// What the Python side gets: the dict of `pdf_info`.
+pub(crate) fn info_dict<'py>(py: Python<'py>, info: &Info) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("pages", info.pages)?;
+    // a file that could not be read tells nothing about its encryption and its rights
+    let known = info.error.is_none();
+    d.set_item("encrypted", known.then_some(u8::from(info.encrypted)))?;
+    d.set_item("needs_password", known.then_some(u8::from(info.needs_password)))?;
+    for (key, bit) in PERMISSIONS {
+        // not encrypted, or rights unknown: everything is allowed
+        let allowed = info.permissions.is_none_or(|p| p & (1 << (bit - 1)) != 0);
+        d.set_item(key, known.then_some(u8::from(allowed)))?;
+    }
+    d.set_item("title", &info.title)?;
+    d.set_item("author", &info.author)?;
+    d.set_item("subject", &info.subject)?;
+    d.set_item("keywords", &info.keywords)?;
+    d.set_item("creator", &info.creator)?;
+    d.set_item("producer", &info.producer)?;
+    d.set_item("created", info.created)?;
+    d.set_item("modified", info.modified)?;
+    d.set_item("pdf_version", &info.pdf_version)?;
+    d.set_item("error", &info.error)?;
+    Ok(d)
 }
 
 /// The information of the PDF at `path`; the read error becomes `error`.
@@ -321,28 +355,7 @@ pub(crate) fn info_of_path(path: &str) -> Info {
 #[pyfunction]
 fn pdf_info<'py>(py: Python<'py>, path: String) -> PyResult<Bound<'py, PyDict>> {
     let info = py.detach(|| info_of_path(&path));
-    let d = PyDict::new(py);
-    d.set_item("pages", info.pages)?;
-    // a file that could not be read tells nothing about its encryption and its rights
-    let known = info.error.is_none();
-    d.set_item("encrypted", known.then_some(u8::from(info.encrypted)))?;
-    d.set_item("needs_password", known.then_some(u8::from(info.needs_password)))?;
-    for (key, bit) in PERMISSIONS {
-        // not encrypted, or rights unknown: everything is allowed
-        let allowed = info.permissions.is_none_or(|p| p & (1 << (bit - 1)) != 0);
-        d.set_item(key, known.then_some(u8::from(allowed)))?;
-    }
-    d.set_item("title", info.title)?;
-    d.set_item("author", info.author)?;
-    d.set_item("subject", info.subject)?;
-    d.set_item("keywords", info.keywords)?;
-    d.set_item("creator", info.creator)?;
-    d.set_item("producer", info.producer)?;
-    d.set_item("created", info.created)?;
-    d.set_item("modified", info.modified)?;
-    d.set_item("pdf_version", info.pdf_version)?;
-    d.set_item("error", info.error)?;
-    Ok(d)
+    info_dict(py, &info)
 }
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

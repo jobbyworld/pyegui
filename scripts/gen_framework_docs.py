@@ -101,9 +101,12 @@ THEMES = [
     ("pdf", "PDF",
      "What a PDF says about itself, read by the Rust code of pyegui (the `craft-pdf` reader): `pdf_info` "
      "gives the pages, the version, the metadata, the dates and what the file forbids, with the GIL "
-     "released so it can be called from a thread. Nothing to install: it replaces pypdf. Only in a build "
-     "with the `pdf` Cargo feature, which is on by default.",
-     ["pdf_info"]),
+     "released so it can be called from a thread. Nothing to install: it replaces pypdf. `PdfDocument` opens a "
+     "file, `PdfView` and `pdf_view` show its pages (scroll, zoom, fit to the width or the page, one page or "
+     "all of them) and `pdf_thumbnail` shows one small page that can be clicked. The pages are drawn by threads "
+     "and kept as textures, the window never waits for them. Only in a build with the `pdf` Cargo feature, "
+     "which is on by default.",
+     ["pdf_info", "PdfDocument", "PdfView", "pdf_view", "pdf_thumbnail"]),
     ("interaction", "Keyboard, mouse and drag and drop",
      "Shortcuts are read with `key_pressed`; what the user did to a widget is read from its "
      "`Response` or from the value the function returns.",

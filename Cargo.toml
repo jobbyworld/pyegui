@@ -29,7 +29,7 @@ alacritty_terminal = "0.26"
 notify = "8.2"
 # PDF (pdf_info, then the viewer): the reader of findcraft, same rev. `kurbo` is not used yet; it comes with the
 # interpreter (text, render) and is added with it.
-craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "a9949872bd91ecf6bcec4e86339e3f50ad007fb9", default-features = false, features = ["read"], optional = true }
+craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "a9949872bd91ecf6bcec4e86339e3f50ad007fb9", default-features = false, features = ["read", "raster"], optional = true }
 
 [features]
 default = ["pdf"]
