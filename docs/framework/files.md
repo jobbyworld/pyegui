@@ -1,6 +1,6 @@
 # File views and watcher
 
-Ready made views of the disk: `FileListView` (a list with sortable columns), `FileIconView` (a grid of icons) and `FileTreeView` (a tree of folders), drawn by `file_list_view`, `file_icon_view` and `file_tree_view`. They are state objects: create them once, outside the update function. Their folders are listed through a `FileWatcher` that the system notifies of every change, so a file created, renamed, modified or removed by any program shows at the next frame. Give the same watcher to all the views of an app. `path_breadcrumb` and `path_combo` show where a folder is and go to one of its ancestors.
+Ready made views of the disk: `FileListView` (a list whose columns can be resized, moved, sorted and filtered by type), `FileIconView` (a grid of icons) and `FileTreeView` (a tree of folders), drawn by `file_list_view`, `file_icon_view` and `file_tree_view`. They are state objects: create them once, outside the update function. Their folders are listed through a `FileWatcher` that the system notifies of every change, so a file created, renamed, modified or removed by any program shows at the next frame. Give the same watcher to all the views of an app. `path_breadcrumb` and `path_combo` show where a folder is and go to one of its ancestors.
 
 ## `FileListView`
 
@@ -12,7 +12,15 @@ The folder is watched while it is shown (see FileWatcher): what any program chan
 shows at the next frame. A click selects, Cmd (Ctrl) and Shift extend the selection, a drag on
 the background draws a rubber band, a double click or Enter opens. The arrows, Home, End, Page
 Up and Page Down move, Cmd+A selects all, Cmd+Up enters the parent folder, and typing the start
-of a name selects it. A click on a column header sorts by it.
+of a name selects it.
+
+The header of the columns is interactive: a click on a title sorts by the column (a second click
+reverses the order), a drag on a title moves the column, a drag on the border of a title
+resizes it (a double click gives it its default width back), and the funnel at the right of a
+title filters it, with a filter that fits the type of the column: a text for the name, a minimum
+and a maximum for the size, a period for the date, the values to keep for the kind. Everything
+is also a property of the view (sort_by, ascending, column_widths, column_order,
+column_filters), to save at the end of the run and give back at the next one.
 
 **Args**
 
@@ -23,7 +31,7 @@ of a name selects it. A click on a column header sorts by it.
 - `multi_select` (bool): several items can be selected. Default is True
 - `navigate` (bool): a double click or Enter on a folder enters it. Default is True. With False the folder is in activated, like a file
 - `dirs_first` (bool): folders before files. Default is True
-- `sort_by` (str): "name", "modified", "size" or "kind". Default is "name"
+- `sort_by` (str): "name", "modified", "size", "kind" or the title of a column of your own that has a value function. Default is "name"
 
 **Usage:**
 
@@ -48,7 +56,26 @@ def update_func(ctx):
 - `FileListView.back()` (method): Goes back to the previous folder of the history
 - `FileListView.can_go_back` (attribute): True if back has a folder to go to
 - `FileListView.can_go_forward` (attribute): True if forward has a folder to go to
-- `FileListView.filter` (attribute): Only the items whose name contains this text are shown (without case). Empty shows all
+- `FileListView.clear_filters()` (method): Removes the filters of all the columns, the name included
+- `FileListView.column_filters` (attribute): The filters of the columns, by column key: a text for a column of text (the items whose value
+
+  contains it, without case), a (min, max) tuple for a number or a date (None for no bound; a
+  size is "10 KB", a date "2024-05-01"), a list of values for a column of choices. The funnel of
+  the header sets them too. Assign a dict to replace them all
+
+- `FileListView.column_order` (attribute): The keys of the columns in the order the user gave them by dragging their title. Empty while
+
+  the order is the default one. Save and give it back at the next run
+
+- `FileListView.column_widths` (attribute): The widths the user gave to the columns by dragging their border, by column key ("name",
+
+  "modified", "size", "kind" or the title of a column of your own). Save and give them back at
+  the next run. A column without width has its default one
+
+- `FileListView.filter` (attribute): Only the items whose name contains this text are shown (without case). Empty shows all.
+
+  It is the filter of the column "name"
+
 - `FileListView.focus(focused=True)` (method): Gives the keyboard focus to the view (True, the default) or takes it away (False) at
 
   the next frame. A click on the view gives it the focus too
@@ -71,13 +98,22 @@ def update_func(ctx):
   the files of a tag, from any folders. They stay up to date like a folder. None (the
   default) shows the folder; entering a folder sets it back to None
 
+- `FileListView.pinned_left` (attribute): The columns pinned at the left (by column key): they stay in place while the others scroll
+
+  horizontally. The user pins a column with a right click on its title
+
+- `FileListView.pinned_right` (attribute): The columns pinned at the right (by column key)
+- `FileListView.refresh_columns()` (method): Asks the functions `value` of the columns of your own again at the next frame, e.g. after the
+
+  tags changed. They are otherwise kept for a second
+
 - `FileListView.reveal(path)` (method): Selects one item and scrolls to it
 - `FileListView.scroll_to(path)` (method): Scrolls just enough to show an item, at the next frame
 - `FileListView.selected` (attribute): Paths of the selected items, in the order they were selected
 - `FileListView.show_hidden` (attribute): Shows the hidden items: a name starting with a dot, or hidden by the system
-- `FileListView.sort_by` (attribute): The order of the items: "name", "modified", "size" or "kind". A click on a column of
+- `FileListView.sort_by` (attribute): The order of the items: "name", "modified", "size", "kind", or the title of a column of your
 
-  the list view changes it
+  own that has a value function. A click on a title of the header changes it
 
 - `FileListView.up()` (method): Enters the parent folder and selects the folder we come from. Cmd+Up does the same
 
@@ -99,7 +135,7 @@ arrows move in the grid) and the folder is watched while it is shown.
 - `multi_select` (bool): several items can be selected. Default is True
 - `navigate` (bool): a double click or Enter on a folder enters it. Default is True
 - `dirs_first` (bool): folders before files. Default is True
-- `sort_by` (str): "name", "modified", "size" or "kind". Default is "name"
+- `sort_by` (str): "name", "modified", "size", "kind" or the title of a column of your own that has a value function. Default is "name"
 
 The size of the grid is icon_size, which can change at any time, e.g. from a slider.
 
@@ -126,7 +162,26 @@ def update_func(ctx):
 - `FileIconView.back()` (method): Goes back to the previous folder of the history
 - `FileIconView.can_go_back` (attribute): True if back has a folder to go to
 - `FileIconView.can_go_forward` (attribute): True if forward has a folder to go to
-- `FileIconView.filter` (attribute): Only the items whose name contains this text are shown (without case). Empty shows all
+- `FileIconView.clear_filters()` (method): Removes the filters of all the columns, the name included
+- `FileIconView.column_filters` (attribute): The filters of the columns, by column key: a text for a column of text (the items whose value
+
+  contains it, without case), a (min, max) tuple for a number or a date (None for no bound; a
+  size is "10 KB", a date "2024-05-01"), a list of values for a column of choices. The funnel of
+  the header sets them too. Assign a dict to replace them all
+
+- `FileIconView.column_order` (attribute): The keys of the columns in the order the user gave them by dragging their title. Empty while
+
+  the order is the default one. Save and give it back at the next run
+
+- `FileIconView.column_widths` (attribute): The widths the user gave to the columns by dragging their border, by column key ("name",
+
+  "modified", "size", "kind" or the title of a column of your own). Save and give them back at
+  the next run. A column without width has its default one
+
+- `FileIconView.filter` (attribute): Only the items whose name contains this text are shown (without case). Empty shows all.
+
+  It is the filter of the column "name"
+
 - `FileIconView.focus(focused=True)` (method): Gives the keyboard focus to the view (True, the default) or takes it away (False) at
 
   the next frame. A click on the view gives it the focus too
@@ -154,13 +209,22 @@ def update_func(ctx):
   the files of a tag, from any folders. They stay up to date like a folder. None (the
   default) shows the folder; entering a folder sets it back to None
 
+- `FileIconView.pinned_left` (attribute): The columns pinned at the left (by column key): they stay in place while the others scroll
+
+  horizontally. The user pins a column with a right click on its title
+
+- `FileIconView.pinned_right` (attribute): The columns pinned at the right (by column key)
+- `FileIconView.refresh_columns()` (method): Asks the functions `value` of the columns of your own again at the next frame, e.g. after the
+
+  tags changed. They are otherwise kept for a second
+
 - `FileIconView.reveal(path)` (method): Selects one item and scrolls to it
 - `FileIconView.scroll_to(path)` (method): Scrolls just enough to show an item, at the next frame
 - `FileIconView.selected` (attribute): Paths of the selected items, in the order they were selected
 - `FileIconView.show_hidden` (attribute): Shows the hidden items: a name starting with a dot, or hidden by the system
-- `FileIconView.sort_by` (attribute): The order of the items: "name", "modified", "size" or "kind". A click on a column of
+- `FileIconView.sort_by` (attribute): The order of the items: "name", "modified", "size", "kind", or the title of a column of your
 
-  the list view changes it
+  own that has a value function. A click on a title of the header changes it
 
 - `FileIconView.up()` (method): Enters the parent folder and selects the folder we come from. Cmd+Up does the same
 
@@ -202,7 +266,27 @@ def update_func(ctx):
 
   activatable_dirs is True
 
-- `FileTreeView.filter` (attribute): Only the files whose name contains this text are shown (without case), the folders always
+- `FileTreeView.ascending` (attribute): False reverses the order
+- `FileTreeView.clear_filters()` (method): Removes the filters of all the columns, the name included
+- `FileTreeView.column_filters` (attribute): The filters of the columns, by column key: a text for a column of text (the items whose value
+
+  contains it, without case), a (min, max) tuple for a number or a date (None for no bound; a
+  size is "10 KB", a date "2024-05-01"), a list of values for a column of choices. The funnel of
+  the header sets them too. Assign a dict to replace them all
+
+- `FileTreeView.column_order` (attribute): The keys of the columns in the order the user gave them by dragging their title. Empty while
+
+  the order is the default one. Save and give it back at the next run
+
+- `FileTreeView.column_widths` (attribute): The widths the user gave to the columns by dragging their border, by column key ("name",
+
+  "modified", "size", "kind" or the title of a column of your own). Save and give them back at
+  the next run. A column without width has its default one
+
+- `FileTreeView.filter` (attribute): Only the files whose name contains this text are shown (without case), the folders always.
+
+  It is the filter of the column "name"
+
 - `FileTreeView.focus(focused=True)` (method): Gives the keyboard focus to the tree (True, the default) or takes it away (False) at the
 
   next frame
@@ -218,12 +302,25 @@ def update_func(ctx):
   search or the files of a tag, from any folders; their folders still open. None (the
   default) shows the root
 
+- `FileTreeView.pinned_left` (attribute): The columns pinned at the left (by column key): they stay in place while the others scroll
+
+  horizontally. The user pins a column with a right click on its title
+
+- `FileTreeView.pinned_right` (attribute): The columns pinned at the right (by column key)
+- `FileTreeView.refresh_columns()` (method): Asks the functions `value` of the columns of your own again at the next frame, e.g. after the
+
+  tags changed. They are otherwise kept for a second
+
 - `FileTreeView.reveal(path)` (method): Opens the folders down to a path, selects it and scrolls to it
 - `FileTreeView.root` (attribute): The folder at the top of the tree
 - `FileTreeView.scroll_to(path)` (method): Scrolls just enough to show an item, at the next frame. It has to be shown: its folders open
 - `FileTreeView.selected` (attribute): Paths of the selected items
 - `FileTreeView.set_open(path, open)` (method): Opens or closes a folder of the tree
 - `FileTreeView.show_hidden` (attribute): Shows the hidden items: a name starting with a dot, or hidden by the system
+- `FileTreeView.sort_by` (attribute): The order of the items: "name", "modified", "size", "kind", or the title of a column of your
+
+  own that has a value function. A click on a title of the header changes it
+
 
 ## `file_list_view(view, **kwargs)`
 
@@ -236,11 +333,14 @@ in the ui and scrolls; only the visible rows are drawn, so large folders stay fa
 
 **Keyword args**
 
-- `columns` (list[str]): the columns after the name, among "modified", "size" and "kind". Default is all three. The last ones are hidden when the view is narrow
+- `columns` (list[str]): the columns after the name, among "modified", "size" and "kind". Default is all three. A view narrower than its columns scrolls horizontally
 - `headers` (list[str]): the titles of the columns name, modified, size and kind. Default is ["Name", "Date Modified", "Size", "Kind"]
 - `date_format` (str): format of the dates, like strftime. Default is "%d %b %Y %H:%M"
 - `row_height` (float): height of a row. Default is 24
-- `extra_columns` (list[tuple[str, float, callable]]): columns of your own, after the name: a title, a width and a function called with the path of the row inside the cell, to draw it with the usual widgets. They do not sort
+- `extra_columns` (list[tuple]): columns of your own, after the name: a title, a width and a function called with the path of the row inside the cell, to draw it with the usual widgets. They sort and filter when a fourth item, a dict, gives the type of their data and a function that returns the value of a row: {"type": "text" | "number" | "date" | "choice", "value": function(path) -> value}. A date is seconds since 1970 or a datetime. The values are kept for a second (see refresh_columns). The function runs while the view is drawn: it must not read or change the view itself
+- `resizable` (bool): the border of a column can be dragged. Default is True
+- `reorderable` (bool): the title of a column can be dragged to another place. Default is True
+- `filterable` (bool): the funnel of the header opens the filter of the column. Default is True
 - `badges` (callable): called with the path of each row shown, returns a list of colors drawn as dots at the right end of the name, e.g. the tags of a file
 - `context_menu` (callable): called with the list of paths concerned on a right click, inside a menu: the selection if the item clicked is in it, else the item clicked, and [] on the background. Build the menu in it
 
@@ -257,6 +357,20 @@ def menu(paths):
 
 def update_func(ctx):
     file_list_view(files, columns=["modified", "size"], context_menu=menu)
+```
+
+**A column of your own that sorts and filters:**
+
+```python
+def stars(path):
+    rating = ratings.get(path, 0)
+    label("★" * rating)
+
+file_list_view(
+    files,
+    extra_columns=[("Rating", 80, stars, {"type": "number", "value": lambda p: ratings.get(p, 0)})],
+)
+files.column_filters = {"size": ("1 MB", None), "kind": ["PDF document"]}
 ```
 
 
@@ -298,7 +412,19 @@ when they are opened and watched while they are open.
 
 - `context_menu` (callable): called with the list of paths concerned when an item is right-clicked, inside a menu: the selection if the item clicked is in it, else the item clicked. Build the menu in it
 - `badges` (callable): called with the path of each item, returns a list of colors drawn as dots at the right end of its row, e.g. the tags of a file
-- `extra_columns` (list[tuple[str, float, callable]]): columns of your own at the right end of the rows: a title (shown above the tree), a width, and a function called with the path of each row to draw its cell, e.g. ("Tags", 160, lambda path: tags_edit(...))
+- `columns` (list[str]): columns of the view at the right end of the rows, among "modified", "size" and "kind". Default is none, the tree is then only names
+- `headers` (list[str]): the titles of the columns name, modified, size and kind. Default is ["Name", "Date Modified", "Size", "Kind"]
+- `date_format` (str): format of the dates, like strftime. Default is "%d %b %Y %H:%M"
+- `extra_columns` (list[tuple]): columns of your own at the right end of the rows: a title (shown above the tree), a width, and a function called with the path of each row to draw its cell, e.g. ("Tags", 160, lambda path: tags_edit(...)). A fourth item, a dict, makes the column sort and filter: {"type": "text" | "number" | "date" | "choice", "value": function(path) -> value}. A date is seconds since 1970 or a datetime
+- `header` (bool): draws the header of the columns above the tree, pinned at the top while the tree scrolls. Default is True when there are columns
+- `resizable` (bool): the border of a column can be dragged. Default is True
+- `reorderable` (bool): the title of a column can be dragged to another place. Default is True
+- `pinnable` (bool): a right click on a title offers to pin the column at the left (after the name) or at the right: the other columns then scroll horizontally. Default is True
+- `filterable` (bool): the funnel of the header opens the filter of the column, which fits its type: a text, a minimum and a maximum, a period, or the values to keep. The folders stay, only the files are filtered. Default is True
+
+A click on a title sorts the items of each folder by the column, a second click reverses the
+order. See sort_by, ascending, column_widths, column_order and column_filters of the view to
+read, save and set them.
 
 **Example:**
 
@@ -389,7 +515,7 @@ click on a folder returns its path.
 **Keyword args**
 
 - `root` (str): the first folder shown, an ancestor of path. Default is the root of the disk
-- `max_width` (float): the widest it can be. Default is the width left in the ui. The ancestors are shortened first, then those that still do not fit are left out from the root, so the breadcrumb never takes more
+- `max_width` (float): the widest it can be. Default is the width left in the ui. The ancestors are shortened first, then those that still do not fit are left out from the root, so the breadcrumb never takes more. Give it the width left minus what follows it in the row, as drawn (measured, not guessed, and with the spacing of the row): a row that measures itself and gets an under-estimate pushes its right side out, sees that it does not fit, widens, fits again, and redraws at every frame
 - `icons` (bool): shows the icons of the folders. Default is True
 - `id` (str): id of the breadcrumb, needed if there are several in the same ui
 - `on_click` (callable): called with the path of the element clicked

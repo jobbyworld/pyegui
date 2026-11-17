@@ -266,10 +266,29 @@ fn chip_style(small: bool) -> TextStyle {
     }
 }
 
+/// The background of the chips, of the empty tag and of the list: the one of a window pulled a
+/// little toward the text, a grey that is not as black as the window in the dark theme
+fn soft_fill(ui: &egui::Ui) -> Color32 {
+    let visuals = ui.visuals();
+    // lighter in the light theme, where the same amount of text color would look dirty
+    let amount = if visuals.dark_mode { 0.14 } else { 0.03 };
+    visuals.window_fill.to_opaque().lerp_to_gamma(visuals.text_color(), amount)
+}
+
 /// What can be done to a tag from its chip
 enum ChipAction {
     Remove,
     Color(String, Option<Color32>),
+}
+
+/// The width of the chip of a tag, with the room of its cross when it can be removed
+fn chip_width(ui: &egui::Ui, tag: &str, removable: bool, small: bool) -> f32 {
+    let font = chip_style(small).resolve(ui.style());
+    let galley = ui.painter().layout_no_wrap(last_level(tag).to_owned(), font, Color32::WHITE);
+    let height = galley.size().y + if small { 2.0 } else { 6.0 };
+    let (pad, dot) = if small { (6.0, 6.0) } else { (8.0, 8.0) };
+    let cross = if removable { height.min(14.0) } else { 0.0 };
+    pad + dot + 6.0 + galley.size().x + cross + pad
 }
 
 /// The chip of a tag: a dot and the last level in a pill of its color, a cross to remove it
@@ -286,7 +305,9 @@ fn chip(
     let color = if dim { muted(tags.color_of(tag)) } else { tags.color_of(tag) };
     let font = chip_style(small).resolve(ui.style());
     // the text and the cross in the color of the outline
-    let edge = color.gamma_multiply(0.6);
+    // the text and the cross: the color pulled toward the text of the theme, so it reads on the
+    // tint of the chip in the light and in the dark theme; the outline keeps the color
+    let edge = color.lerp_to_gamma(ui.visuals().strong_text_color(), 0.45);
     let galley = ui.painter().layout_no_wrap(last_level(tag).to_owned(), font, edge);
     let height = galley.size().y + if small { 2.0 } else { 6.0 };
     let (pad, dot) = if small { (6.0, 6.0) } else { (8.0, 8.0) };
@@ -302,9 +323,9 @@ fn chip(
         let hovered = response.hovered();
         // opaque: the tint of the color over the background of the window, so a chip stays readable
         // over a selected row
-        let base = ui.visuals().window_fill.to_opaque();
+        let base = soft_fill(ui);
         let fill = base.lerp_to_gamma(color, if hovered { 0.28 } else { 0.18 });
-        painter.rect(rect, height / 2.0, fill, Stroke::new(1.0, edge), StrokeKind::Inside);
+        painter.rect(rect, height / 2.0, fill, Stroke::new(1.2, color), StrokeKind::Inside);
         let dot_center = egui::pos2(rect.left() + pad + dot / 2.0, rect.center().y);
         painter.circle_filled(dot_center, dot / 2.0, color);
         let text_pos = egui::pos2(dot_center.x + dot / 2.0 + 6.0, rect.center().y - galley.size().y / 2.0);
@@ -396,6 +417,17 @@ fn more_badge(ui: &mut egui::Ui, tags: &Tags, hidden: &[String], expanded: bool,
 ///
 ///     field_width (float): the width of the field, 120 by default
 ///
+///     on_hover (bool): the chips are read only until the mouse is over the widget, e.g. the cell
+///         of a row: then the crosses show and an empty tag, a field in a pill like the chips with a
+///         chevron, to type or choose a tag. The pill stays while it has the focus. What is typed
+///         is kept by the widget (give each row its own id). The tags in muted have no cross.
+///         False by default
+///
+///     dropdown (bool): the field shows the list of all the suggestions as soon as it has the
+///         focus, filtered by what is typed, instead of only while typing. The keys Down and Up
+///         move a highlighted row (the list scrolls with it), Enter adds it, Escape clears what is
+///         typed. False by default
+///
 ///     compact (bool): only a dot per tag in its color, the full path on hover, e.g. in a row
 ///         of a list; read only
 ///
@@ -404,6 +436,10 @@ fn more_badge(ui: &mut egui::Ui, tags: &Tags, hidden: &[String], expanded: bool,
 ///     muted (list[str]): tags drawn with their colors desaturated, e.g. those an item inherits
 ///
 ///     small (bool): smaller chips, with the small text, e.g. in a row of a list or of a tree
+///
+///     fit (bool): shows as many tags as the room of the ui allows and the others in the "+5"
+///         badge, e.g. in a cell of a table; the room of the crosses and of the field is kept
+///         even when they do not show. Replaces max_visible. False by default
 ///
 ///     max_visible (int): with more tags, only the first ones are shown and then "+5": the mouse
 ///         over it lists the others, a click shows them all (and "−" shows the first ones again)
@@ -439,8 +475,39 @@ unsafe fn tags_edit(tags: &Bound<'_, Tags>, kwargs: Option<&Bound<'_, PyDict>>) 
     let small = kwarg::<bool>(kwargs, "small")?.unwrap_or(false);
     let muted_tags: std::collections::HashSet<String> =
         kwarg::<Vec<String>>(kwargs, "muted")?.unwrap_or_default().iter().map(|t| normalize(t)).collect();
+    // on_hover: the chips are read only until the mouse is over the widget (or its field has the
+    // focus): then the crosses and the empty tag, a field that looks like a tag, show
+    let on_hover = kwarg::<bool>(kwargs, "on_hover")?.unwrap_or(false);
+    let dropdown = kwarg::<bool>(kwargs, "dropdown")?.unwrap_or(false);
+    let field_id = id.with("field");
+    let editing = editable
+        && (!on_hover
+            || ui.rect_contains_pointer(ui.max_rect().intersect(ui.clip_rect()))
+            || ui.ctx().memory(|m| m.has_focus(field_id)));
     let expanded = ui.ctx().data(|d| d.get_temp::<bool>(id.with("expanded"))).unwrap_or(false);
     let count = tags.borrow().tags.len();
+    // fit: as many chips as the room allows, the others in the "+N" badge. The room of the empty
+    // tag and of the crosses is kept even when they do not show, so the chips do not come and go
+    // with the mouse
+    let fit = kwarg::<bool>(kwargs, "fit")?.unwrap_or(false);
+    let max_visible = if fit && !kwarg::<bool>(kwargs, "compact")?.unwrap_or(false) {
+        let state = tags.borrow();
+        let reserved = if editable { field_width + 16.0 + 6.0 } else { 0.0 };
+        let room = (ui.available_width() - reserved).max(0.0);
+        let (mut used, mut fitting) = (0.0, 0);
+        for (i, tag) in state.tags.iter().enumerate() {
+            let width = chip_width(ui, tag, editable, small) + 6.0;
+            let badge = if i + 1 < count { 40.0 } else { 0.0 };
+            if used + width + badge > room {
+                break;
+            }
+            used += width;
+            fitting += 1;
+        }
+        Some(fitting.max(1))
+    } else {
+        max_visible
+    };
     let shown = match max_visible {
         Some(max) if count > max && !expanded => max,
         _ => count,
@@ -471,6 +538,13 @@ unsafe fn tags_edit(tags: &Bound<'_, Tags>, kwargs: Option<&Bound<'_, PyDict>>) 
 
     let mut state = tags.borrow_mut();
     let mut changed = false;
+    // what is typed: with on_hover it is kept by the widget, so each row of a list has its own
+    let input_id = id.with("input");
+    let mut input = if on_hover {
+        ui.ctx().data_mut(|d| d.get_temp::<String>(input_id)).unwrap_or_default()
+    } else {
+        std::mem::take(&mut state.input)
+    };
 
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
@@ -478,7 +552,7 @@ unsafe fn tags_edit(tags: &Bound<'_, Tags>, kwargs: Option<&Bound<'_, PyDict>>) 
         let actions: Vec<(String, ChipAction)> = state.tags[..shown]
             .iter()
             .filter_map(|tag| {
-                chip(ui, &state, tag, editable, small, muted_tags.contains(tag), id.with(tag))
+                chip(ui, &state, tag, editing && !muted_tags.contains(tag), small, muted_tags.contains(tag), id.with(tag))
                     .map(|action| (tag.clone(), action))
             })
             .collect();
@@ -497,47 +571,131 @@ unsafe fn tags_edit(tags: &Bound<'_, Tags>, kwargs: Option<&Bound<'_, PyDict>>) 
             }
             changed = true;
         }
-        if !editable {
+        if !editing {
             return;
         }
 
-        let mut field = egui::TextEdit::singleline(&mut state.input)
-            .id(id.with("field"))
-            .hint_text(hint)
-            .desired_width(field_width)
-            .font(chip_style(small));
-        if small {
-            field = field.margin(vec2(4.0, 1.0)); // as high as the small chips
+        // the keyboard in the list: arrows move the highlighted row, Enter picks it, Escape clears
+        // what is typed. The list is the one of the last frame (it is drawn after the field)
+        let highlight_id = id.with("highlight");
+        let count_id = id.with("count");
+        let listed = ui.ctx().data(|d| d.get_temp::<usize>(count_id)).unwrap_or(0);
+        let mut highlight = ui.ctx().data(|d| d.get_temp::<Option<usize>>(highlight_id)).flatten();
+        let mut moved = false;
+        if listed > 0 && ui.ctx().memory(|m| m.has_focus(field_id)) {
+            let none = egui::Modifiers::NONE;
+            if ui.input_mut(|i| i.consume_key(none, egui::Key::ArrowDown)) {
+                highlight = Some(highlight.map_or(0, |h| (h + 1).min(listed - 1)));
+                moved = true;
+            }
+            if ui.input_mut(|i| i.consume_key(none, egui::Key::ArrowUp)) {
+                highlight = Some(highlight.map_or(listed - 1, |h| h.saturating_sub(1)));
+                moved = true;
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                input.clear();
+                highlight = None;
+            }
         }
-        let field = field.show(ui).response;
+        let typed_before = input.clone();
+        let field = if on_hover {
+            // the empty tag: a pill like the chips, with the field in it and a chevron that opens
+            // the list
+            let height = ui.text_style_height(&chip_style(small)) + if small { 2.0 } else { 6.0 };
+            let chevron = 16.0;
+            let (rect, _) = ui.allocate_exact_size(vec2(field_width + chevron, height), Sense::hover());
+            let weak = ui.visuals().weak_text_color();
+            let focused = ui.ctx().memory(|m| m.has_focus(field_id));
+            ui.painter().rect_filled(rect, height / 2.0, soft_fill(ui));
+            let inner = Rect::from_min_max(
+                rect.min + vec2(if small { 10.0 } else { 12.0 }, 0.0),
+                egui::pos2(rect.right() - chevron, rect.bottom()),
+            );
+            // the field centered in the pill, as high as its text
+            let field = ui
+                .scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(inner)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                    |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut input)
+                                .id(field_id)
+                                .hint_text(hint)
+                                .frame(egui::Frame::NONE)
+                                .margin(vec2(0.0, 0.0))
+                                .desired_width(inner.width())
+                                .font(chip_style(small)),
+                        )
+                    },
+                )
+                .inner;
+            let edge = if focused { ui.visuals().selection.stroke.color } else { ui.visuals().text_color().gamma_multiply(0.55) };
+            ui.painter().rect_stroke(rect, height / 2.0, Stroke::new(1.0, edge), StrokeKind::Inside);
+            let toggle = ui.interact(
+                Rect::from_min_max(egui::pos2(rect.right() - chevron, rect.top()), rect.max),
+                id.with("chevron"),
+                Sense::click(),
+            );
+            let c = toggle.rect.center();
+            let color = if toggle.hovered() { ui.visuals().text_color() } else { weak };
+            let stroke = Stroke::new(1.3, color);
+            ui.painter().line_segment([c + vec2(-3.5, -1.5), c + vec2(0.0, 2.0)], stroke);
+            ui.painter().line_segment([c + vec2(0.0, 2.0), c + vec2(3.5, -1.5)], stroke);
+            if toggle.clicked() {
+                field.request_focus();
+            }
+            field
+        } else {
+            let mut field = egui::TextEdit::singleline(&mut input)
+                .id(field_id)
+                .hint_text(hint)
+                .desired_width(field_width)
+                .font(chip_style(small));
+            if small {
+                field = field.margin(vec2(4.0, 1.0)); // as high as the small chips
+            }
+            field.show(ui).response.response
+        };
         // after a tag was added, the field that added it takes the focus back (two widgets can
         // show the same Tags, so it is kept by the id of the widget)
         let refocus_id = id.with("refocus");
         if ui.ctx().data_mut(|d| d.remove_temp::<bool>(refocus_id)).unwrap_or(false) {
             field.request_focus();
         }
-        let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if enter && !state.input.trim().is_empty() {
-            let typed = std::mem::take(&mut state.input);
-            changed |= state.insert(&typed);
-            ui.ctx().data_mut(|d| d.insert_temp(refocus_id, true));
+        if input != typed_before {
+            highlight = None; // the list changed
         }
-        if field.has_focus() && state.input.is_empty() && ui.input(|i| i.key_pressed(egui::Key::Backspace)) {
-            changed |= state.tags.pop().is_some();
-        }
-
         // the suggestions that match what is typed, under the field
-        let typed = normalize(&state.input).to_lowercase();
-        let matching: Vec<String> = if typed.is_empty() {
+        let typed = normalize(&input).to_lowercase();
+        let matching: Vec<String> = if typed.is_empty() && !dropdown {
             vec![]
         } else {
             suggestions
                 .iter()
                 .map(|s| normalize(s))
                 .filter(|s| !state.tags.contains(s) && s.to_lowercase().contains(&typed))
-                .take(8)
+                .take(if dropdown { 200 } else { 8 })
                 .collect()
         };
+        let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if enter {
+            if let Some(chosen) = highlight.and_then(|h| matching.get(h)) {
+                // the row chosen with the arrows
+                changed |= state.insert(chosen);
+                input.clear();
+                highlight = None;
+                ui.ctx().data_mut(|d| d.insert_temp(refocus_id, true));
+            } else if !input.trim().is_empty() {
+                let typed = std::mem::take(&mut input);
+                changed |= state.insert(&typed);
+                ui.ctx().data_mut(|d| d.insert_temp(refocus_id, true));
+            }
+        }
+        if field.has_focus() && input.is_empty() && ui.input(|i| i.key_pressed(egui::Key::Backspace)) {
+            changed |= state.tags.pop().is_some();
+        }
+
         let popup_id = id.with("suggestions");
         if field.has_focus() && !matching.is_empty() {
             let mut picked = None;
@@ -545,13 +703,33 @@ unsafe fn tags_edit(tags: &Bound<'_, Tags>, kwargs: Option<&Bound<'_, PyDict>>) 
                 .order(egui::Order::Foreground)
                 .fixed_pos(field.rect.left_bottom() + vec2(0.0, 4.0))
                 .show(ui.ctx(), |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        for suggestion in &matching {
+                    egui::Frame::popup(ui.style()).fill(soft_fill(ui)).show(ui, |ui| {
+                        // the scroll bar takes its own room: it must not cover the long names
+                        ui.spacing_mut().scroll.floating = false;
+                        ui.set_min_width(field_width + 60.0);
+                        // the whole list of a dropdown scrolls
+                        egui::ScrollArea::vertical().max_height(220.0).auto_shrink([true, true]).show(ui, |ui| {
+                        for (index, suggestion) in matching.iter().enumerate() {
                             // the full path in the colors of its levels, over a row that lights up
                             let background = ui.painter().add(egui::Shape::Noop);
                             let row = ui.horizontal(|ui| path_ui(ui, &state, suggestion)).response;
                             let hit = ui.interact(row.rect, popup_id.with(suggestion), Sense::click());
-                            if hit.hovered() {
+                            let current = highlight == Some(index);
+                            if current && moved {
+                                row.scroll_to_me(None);
+                            }
+                            if current {
+                                // the row of the keyboard: drawn from the color of the text, so it
+                                // shows on a light and on a dark background
+                                let visuals = ui.visuals();
+                                let text = visuals.text_color();
+                                let rect = row.rect.expand2(vec2(4.0, 2.0));
+                                let mut shape =
+                                    egui::epaint::RectShape::filled(rect, 4.0, text.gamma_multiply(0.16));
+                                shape.stroke = Stroke::new(1.5, text.gamma_multiply(0.75));
+                                shape.stroke_kind = StrokeKind::Inside;
+                                ui.painter().set(background, egui::Shape::Rect(shape));
+                            } else if hit.hovered() {
                                 let fill = ui.visuals().widgets.hovered.weak_bg_fill;
                                 ui.painter().set(background, egui::Shape::rect_filled(row.rect.expand(2.0), 4.0, fill));
                             }
@@ -561,15 +739,29 @@ unsafe fn tags_edit(tags: &Bound<'_, Tags>, kwargs: Option<&Bound<'_, PyDict>>) 
                                 picked = Some(suggestion.clone());
                             }
                         }
+                        });
                     });
                 });
             if let Some(suggestion) = picked {
                 changed |= state.insert(&suggestion);
-                state.input.clear();
+                input.clear();
                 ui.ctx().data_mut(|d| d.insert_temp(refocus_id, true));
+                highlight = None;
             }
         }
+        // for the next frame: the rows of the list, the one highlighted
+        let shown = if field.has_focus() { matching.len() } else { 0 };
+        let highlight = highlight.filter(|h| *h < shown);
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(count_id, shown);
+            d.insert_temp(highlight_id, highlight);
+        });
     });
+    if on_hover {
+        ui.ctx().data_mut(|d| d.insert_temp(input_id, input));
+    } else {
+        state.input = input;
+    }
     Ok(changed)
 }
 

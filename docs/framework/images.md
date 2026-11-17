@@ -77,3 +77,20 @@ if icon:
 else:
     label("📁", size=40)
 ```
+
+
+## `set_blue_folders(enabled=True)`
+
+Draws the icons of the folders in blue, in the style of the Finder of macOS, instead of the
+yellow of the Explorer of Windows. It changes the icons given by file_icon and drawn by the
+file views. It has no effect on macOS (already blue) nor on Linux. Default is False
+
+**Args**
+
+- `enabled` (bool): True for blue folders, False for the native ones
+
+**Example:**
+
+```python
+set_blue_folders(True)  # once, before the first frame
+```

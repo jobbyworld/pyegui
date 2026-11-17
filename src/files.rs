@@ -2,7 +2,7 @@
 //! selection, keyboard, sorting and native icons. Their folders are listed through a FileWatcher,
 //! so a change made by any program shows at the next frame.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -14,15 +14,25 @@ use eframe::egui::{
 use egui_ltreeview::{Action, NodeBuilder, TreeViewBuilder, TreeViewState};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyTuple};
 
+use crate::columns::{self, hscroll_bar, hscroll_wheel, Cell, ColumnsState, DataType, Filter, HeaderOptions, Value, Zones};
 use crate::icons::icon_uri;
 use crate::watcher::{default_core, entry, expand, lock, natural_cmp, Core, Entry, FileWatcher};
 use crate::style::extract_color;
 use crate::{current_ui, kwarg, run_nested_call, UI};
 
-// what the three views share
+/// The same path, where the disk does not tell capitals apart (Windows): the tags of the Finder
+/// keep their paths in lower case
+fn same_path(a: &Path, b: &Path) -> bool {
+    if cfg!(windows) {
+        a.to_string_lossy().replace('/', "\\").to_lowercase() == b.to_string_lossy().replace('/', "\\").to_lowercase()
+    } else {
+        a == b
+    }
+}
 
+// what the three views share
 fn core_of(watcher: Option<PyRef<'_, FileWatcher>>) -> Arc<Mutex<Core>> {
     match watcher {
         Some(w) => w.core.clone(),
@@ -230,14 +240,38 @@ struct Extra<'py> {
     title: String,
     width: f32,
     cell: Bound<'py, PyAny>,
+    /// what the column holds, for its sort and its filter
+    ty: DataType,
+    /// called with the path of a row, returns its value: without it the column does not sort or filter
+    value: Option<Bound<'py, PyAny>>,
 }
 
 impl<'py> Hooks<'py> {
     fn read(kwargs: Option<&Bound<'py, PyDict>>) -> PyResult<Self> {
         let mut extras = vec![];
-        if let Some(columns) = kwarg::<Vec<(String, f32, Bound<'py, PyAny>)>>(kwargs, "extra_columns")? {
-            for (title, width, cell) in columns {
-                extras.push(Extra { title, width, cell });
+        if let Some(columns) = kwarg::<Vec<Bound<'py, PyTuple>>>(kwargs, "extra_columns")? {
+            for column in columns {
+                if column.len() != 3 && column.len() != 4 {
+                    return Err(PyValueError::new_err(
+                        "an extra column is (title, width, cell) or (title, width, cell, options)",
+                    ));
+                }
+                let (mut ty, mut value) = (DataType::Text, None);
+                if column.len() == 4 {
+                    let options = column.get_item(3)?;
+                    let options = options.cast::<PyDict>()?;
+                    if let Some(t) = kwarg::<String>(Some(options), "type")? {
+                        ty = DataType::parse(&t)?;
+                    }
+                    value = kwarg::<Bound<'py, PyAny>>(Some(options), "value")?;
+                }
+                extras.push(Extra {
+                    title: column.get_item(0)?.extract()?,
+                    width: column.get_item(1)?.extract()?,
+                    cell: column.get_item(2)?,
+                    ty,
+                    value,
+                });
             }
         }
         Ok(Hooks {
@@ -310,6 +344,185 @@ impl SortBy {
             SortBy::Kind => "kind",
         }
     }
+
+    fn data_type(self) -> DataType {
+        match self {
+            SortBy::Name => DataType::Text,
+            SortBy::Modified => DataType::Date,
+            SortBy::Size => DataType::Number,
+            SortBy::Kind => DataType::Choice,
+        }
+    }
+}
+
+/// A column of the list or of the tree: one of the columns of the view, or one drawn by Python
+/// (its index in the extra columns)
+#[derive(Clone, Copy, PartialEq)]
+enum Column {
+    Sort(SortBy),
+    Extra(usize),
+}
+
+impl Column {
+    /// The key of the column in the state of the view: its name, or the title of an extra column
+    fn key(self, hooks: &Hooks<'_>) -> String {
+        match self {
+            Column::Sort(sort) => sort.name().into(),
+            Column::Extra(i) => hooks.extras[i].title.clone(),
+        }
+    }
+
+    fn data_type(self, hooks: &Hooks<'_>) -> DataType {
+        match self {
+            Column::Sort(sort) => sort.data_type(),
+            Column::Extra(i) => hooks.extras[i].ty,
+        }
+    }
+
+    /// Sorts and filters: a column of Python needs a value function
+    fn has_value(self, hooks: &Hooks<'_>) -> bool {
+        match self {
+            Column::Sort(_) => true,
+            Column::Extra(i) => hooks.extras[i].value.is_some(),
+        }
+    }
+
+    fn of_key(key: &str, hooks: &Hooks<'_>) -> Option<Column> {
+        if let Ok(sort) = SortBy::parse(key) {
+            return Some(Column::Sort(sort));
+        }
+        hooks.extras.iter().position(|e| e.title == key).map(Column::Extra)
+    }
+}
+
+/// The values of the columns of Python, kept for a second: the functions are not called at every
+/// frame for every item
+#[derive(Default)]
+struct Values {
+    map: HashMap<(usize, PathBuf), Value>,
+    since: Option<Instant>,
+}
+
+impl Values {
+    fn refresh(&mut self) {
+        if self.since.is_none_or(|t| t.elapsed() > Duration::from_secs(1)) {
+            self.map.clear();
+            self.since = Some(Instant::now());
+        }
+    }
+}
+
+/// The value of an item in a column. An error of a Python function is printed and gives no value
+fn value_of(e: &Entry, column: Column, hooks: &Hooks<'_>, values: &mut Values) -> Value {
+    match column {
+        Column::Sort(SortBy::Name) => Value::Text(e.name.clone()),
+        Column::Sort(SortBy::Modified) => match e.modified.and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok()) {
+            Some(d) => Value::Num(d.as_secs_f64()),
+            None => Value::None,
+        },
+        Column::Sort(SortBy::Size) if e.is_dir => Value::None,
+        Column::Sort(SortBy::Size) => Value::Num(e.size as f64),
+        Column::Sort(SortBy::Kind) => Value::Text(kind(e)),
+        Column::Extra(i) => {
+            let Some(function) = &hooks.extras[i].value else { return Value::None };
+            let key = (i, e.path.clone());
+            if let Some(v) = values.map.get(&key) {
+                return v.clone();
+            }
+            let result = function.call1((to_str(&e.path),)).map(|r| Value::from_py(&r, hooks.extras[i].ty));
+            let v = result.unwrap_or_else(|err| {
+                err.display(function.py());
+                Value::None
+            });
+            values.map.insert(key, v.clone());
+            v
+        }
+    }
+}
+
+/// What the user chose: which items stay, and in which order
+struct Rules {
+    filters: Vec<(Column, DataType, Filter)>,
+    sort: Column,
+    ascending: bool,
+    dirs_first: bool,
+}
+
+impl Rules {
+    fn new(state: &ColumnsState, hooks: &Hooks<'_>, dirs_first: bool) -> Self {
+        let filters = state
+            .filters
+            .iter()
+            .filter(|(_, f)| !f.is_empty())
+            .filter_map(|(key, f)| {
+                let column = Column::of_key(key, hooks).filter(|c| c.has_value(hooks))?;
+                Some((column, column.data_type(hooks), f.clone()))
+            })
+            .collect();
+        let sort = Column::of_key(&state.sort_key, hooks)
+            .filter(|c| c.has_value(hooks))
+            .unwrap_or(Column::Sort(SortBy::Name));
+        Rules { filters, sort, ascending: state.ascending, dirs_first }
+    }
+}
+
+/// The items kept by the filters and sorted. `filter_dirs` false keeps the folders whatever the
+/// filters say (the tree: a folder holds items that may match)
+fn arrange<T>(
+    items: Vec<T>,
+    entry: impl Fn(&T) -> &Entry,
+    rules: &Rules,
+    hooks: &Hooks<'_>,
+    values: &mut Values,
+    filter_dirs: bool,
+    sorted: bool,
+) -> Vec<T> {
+    let items: Vec<T> = items
+        .into_iter()
+        .filter(|item| {
+            let e = entry(item);
+            (e.is_dir && !filter_dirs)
+                || rules.filters.iter().all(|(column, ty, filter)| filter.matches(*ty, &value_of(e, *column, hooks, values)))
+        })
+        .collect();
+    if !sorted {
+        return items;
+    }
+    let keys: Vec<Value> = items.iter().map(|item| value_of(entry(item), rules.sort, hooks, values)).collect();
+    let mut order: Vec<usize> = (0..items.len()).collect();
+    order.sort_by(|&a, &b| {
+        let by = keys[a].compare(&keys[b]).then_with(|| natural_cmp(&entry(&items[a]).name, &entry(&items[b]).name));
+        if rules.ascending {
+            by
+        } else {
+            by.reverse()
+        }
+    });
+    if rules.dirs_first {
+        order.sort_by_key(|&i| !entry(&items[i]).is_dir); // stable: the order above is kept inside each group
+    }
+    let mut slots: Vec<Option<T>> = items.into_iter().map(Some).collect();
+    order.into_iter().filter_map(|i| slots[i].take()).collect()
+}
+
+/// The distinct values of a column of choices, for its filter
+fn distinct_values<'a>(
+    entries: impl Iterator<Item = &'a Entry>,
+    key: &str,
+    hooks: &Hooks<'_>,
+    values: &mut Values,
+) -> Vec<String> {
+    let Some(column) = Column::of_key(key, hooks) else { return vec![] };
+    let mut found: Vec<String> = entries
+        .filter_map(|e| match value_of(e, column, hooks, values) {
+            Value::Text(t) => Some(t),
+            _ => None,
+        })
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    found.sort_by(|a, b| natural_cmp(a, b));
+    found
 }
 
 /// The state of a list or icon view
@@ -322,9 +535,12 @@ pub(crate) struct FolderView {
     multi_select: bool,
     navigate: bool,
     dirs_first: bool,
-    filter: String,
-    sort_by: SortBy,
-    ascending: bool,
+    /// width, order, sort and filters of the columns
+    columns: ColumnsState,
+    /// values of the columns of Python
+    values: Values,
+    /// the items of the folder at the last frame, before the filters (for the choices of a filter)
+    listing: Arc<Vec<Entry>>,
     selected: Vec<PathBuf>,
     anchor: Option<PathBuf>,
     cursor: Option<PathBuf>,
@@ -367,9 +583,9 @@ impl FolderView {
             multi_select,
             navigate,
             dirs_first,
-            filter: String::new(),
-            sort_by: SortBy::parse(sort_by)?,
-            ascending: true,
+            columns: ColumnsState::new(sort_by),
+            values: Values::default(),
+            listing: Arc::new(vec![]),
             selected: vec![],
             anchor: None,
             cursor: None,
@@ -486,7 +702,7 @@ impl FolderView {
     }
 
     /// The items of the folder as the view shows them: filtered and sorted
-    fn entries(&mut self, ctx: &egui::Context) -> Vec<Entry> {
+    fn entries(&mut self, ctx: &egui::Context, hooks: &Hooks<'_>) -> Vec<Entry> {
         let all = match &self.paths {
             None => {
                 let folder = self.folder().to_path_buf();
@@ -498,7 +714,7 @@ impl FolderView {
                 let mut found = vec![];
                 for path in paths {
                     let Some(parent) = path.parent() else { continue };
-                    if let Some(e) = core.list(Some(ctx), parent).iter().find(|e| &e.path == path) {
+                    if let Some(e) = core.list(Some(ctx), parent).iter().find(|e| same_path(&e.path, path)) {
                         found.push(e.clone());
                     }
                 }
@@ -511,31 +727,11 @@ impl FolderView {
         if self.cursor.as_ref().is_some_and(|c| !present.contains(c.as_path())) {
             self.cursor = self.selected.last().cloned();
         }
-        let filter = self.filter.to_lowercase();
-        let mut entries: Vec<Entry> = all
-            .iter()
-            .filter(|e| self.show_hidden || !e.hidden)
-            .filter(|e| filter.is_empty() || e.name.to_lowercase().contains(&filter))
-            .cloned()
-            .collect();
-        let sort_by = self.sort_by;
-        entries.sort_by(|a, b| {
-            let by_name = natural_cmp(&a.name, &b.name);
-            let order = match sort_by {
-                SortBy::Name => by_name,
-                SortBy::Modified => a.modified.cmp(&b.modified).then(by_name),
-                SortBy::Size => a.size.cmp(&b.size).then(by_name),
-                SortBy::Kind => kind(a).cmp(&kind(b)).then(by_name),
-            };
-            if self.ascending {
-                order
-            } else {
-                order.reverse()
-            }
-        });
-        if self.dirs_first {
-            entries.sort_by_key(|e| !e.is_dir); // stable: the order above is kept inside each group
-        }
+        self.listing = all.clone();
+        let rules = Rules::new(&self.columns, hooks, self.dirs_first);
+        self.values.refresh();
+        let visible: Vec<Entry> = all.iter().filter(|e| self.show_hidden || !e.hidden).cloned().collect();
+        let entries = arrange(visible, |e| e, &rules, hooks, &mut self.values, true, true);
         self.shown = entries.iter().map(|e| e.path.clone()).collect();
         entries
     }
@@ -613,14 +809,6 @@ impl FolderView {
     }
 }
 
-/// A column of the list: one of the columns of the view, or one drawn by Python (its index in
-/// the extra columns)
-#[derive(Clone, Copy, PartialEq)]
-enum Column {
-    Sort(SortBy),
-    Extra(usize),
-}
-
 /// How the items are placed: rows of a list or tiles of a grid
 enum Shape {
     List {
@@ -675,83 +863,70 @@ impl Shape {
     }
 }
 
-/// The columns of a list that fit the width: the name takes the rest
-fn list_columns(wanted: &[Column], extras: &[Extra<'_>], width: f32) -> Vec<(Column, f32)> {
-    let width_of = |c: Column| match c {
+/// The width of a column that the user did not change
+fn default_width(column: Column, hooks: &Hooks<'_>) -> f32 {
+    match column {
         Column::Sort(SortBy::Name) => 0.0,
         Column::Sort(SortBy::Modified) => 150.0,
         Column::Sort(SortBy::Size) => 80.0,
         Column::Sort(SortBy::Kind) => 130.0,
-        Column::Extra(i) => extras[i].width,
-    };
-    let mut others: Vec<Column> =
-        wanted.iter().copied().filter(|c| *c != Column::Sort(SortBy::Name)).collect();
-    // the last columns go first when the window is narrow
-    while !others.is_empty() && width - others.iter().map(|c| width_of(*c)).sum::<f32>() < 160.0 {
-        others.pop();
+        Column::Extra(i) => hooks.extras[i].width,
     }
-    let name = width - others.iter().map(|c| width_of(*c)).sum::<f32>();
-    std::iter::once((Column::Sort(SortBy::Name), name))
-        .chain(others.into_iter().map(|c| (c, width_of(c))))
+}
+
+/// The columns of a list, in the order the user chose. The name takes what the others leave (at
+/// least 160), unless the user gave it a width
+fn resolve_columns(state: &ColumnsState, wanted: &[Column], hooks: &Hooks<'_>, width: f32) -> Vec<(Column, f32)> {
+    let default: Vec<String> = wanted.iter().map(|c| c.key(hooks)).collect();
+    let columns: Vec<Column> = state
+        .ordered(&default)
+        .iter()
+        .filter_map(|key| wanted.iter().copied().find(|c| c.key(hooks) == *key))
+        .collect();
+    let name = Column::Sort(SortBy::Name);
+    let width_of = |c: Column| state.widths.get(&c.key(hooks)).copied().unwrap_or_else(|| default_width(c, hooks));
+    let name_fixed = state.widths.get("name").copied();
+    let others = |columns: &[Column]| columns.iter().filter(|c| **c != name).map(|c| width_of(*c)).sum::<f32>();
+    // a view too narrow for its columns scrolls horizontally: the name keeps a minimum width
+    let rest = (width - others(&columns)).max(160.0);
+    columns
+        .into_iter()
+        .map(|c| (c, if c == name { name_fixed.unwrap_or(rest) } else { width_of(c) }))
         .collect()
 }
 
-fn paint_sort_arrow(ui: &egui::Ui, at: Pos2, ascending: bool, color: Color32) {
-    let s = 3.5;
-    let points = if ascending {
-        vec![at + vec2(-s, s * 0.6), at + vec2(s, s * 0.6), at + vec2(0.0, -s * 0.6)]
-    } else {
-        vec![at + vec2(-s, -s * 0.6), at + vec2(s, -s * 0.6), at + vec2(0.0, s * 0.6)]
-    };
-    ui.painter().add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
-}
-
-/// The header of a list: a click on a column sorts by it, a second click reverses the order
-fn list_header(ui: &mut egui::Ui, view: &mut FolderView, shape: &Shape, hooks: &Hooks<'_>, id: Id) {
+/// The header of a list: a click on a column sorts by it (a second click reverses the order), a
+/// drag on a title moves the column, a drag on its border resizes it, the funnel filters it
+fn list_header(ui: &mut egui::Ui, view: &mut FolderView, shape: &Shape, hooks: &Hooks<'_>, id: Id, opts: HeaderOptions) {
     let Shape::List { columns, headers, row_height, .. } = shape else { return };
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), *row_height), Sense::hover());
-    let mut x = rect.left();
-    for (i, (column, width)) in columns.iter().enumerate() {
-        let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(*width, rect.height()));
-        x += width;
-        let sort = match column {
-            Column::Sort(sort) => Some(*sort),
-            Column::Extra(_) => None, // a column of Python does not sort
-        };
-        let response = ui.interact(cell, id.with(("header", i)), Sense::click());
-        if let (true, Some(sort)) = (response.clicked(), sort) {
-            if view.sort_by == sort {
-                view.ascending = !view.ascending;
-            } else {
-                view.sort_by = sort;
-                view.ascending = true;
+    let zones = list_zones(&view.columns, columns, hooks, rect.width());
+    hscroll_wheel(ui, &mut view.columns, &zones, Rect::from_min_max(rect.min, ui.max_rect().max));
+    let cells: Vec<Cell> = columns
+        .iter()
+        .map(|(column, _)| {
+            let title = match column {
+                Column::Sort(sort) => headers[*sort as usize].clone(),
+                Column::Extra(k) => hooks.extras[*k].title.clone(),
+            };
+            Cell {
+                key: column.key(hooks),
+                title,
+                rect,
+                ty: column.data_type(hooks),
+                sortable: column.has_value(hooks),
+                filterable: column.has_value(hooks),
+                movable: true,
+                resizable: true,
             }
-        }
-        let active = sort == Some(view.sort_by);
-        let color = if active || (response.hovered() && sort.is_some()) {
-            ui.visuals().strong_text_color()
-        } else {
-            ui.visuals().weak_text_color()
-        };
-        let text = match column {
-            Column::Sort(sort) => &headers[*sort as usize],
-            Column::Extra(k) => &hooks.extras[*k].title,
-        };
-        let galley = truncated(ui, text, width - 26.0, Some(color));
-        let pos = pos2(cell.left() + 8.0, cell.center().y - galley.size().y / 2.0);
-        let text_right = pos.x + galley.size().x;
-        ui.painter().galley(pos, galley, color);
-        if active {
-            paint_sort_arrow(ui, pos2(text_right + 9.0, cell.center().y), view.ascending, color);
-        }
-        if i > 0 {
-            ui.painter().vline(
-                cell.left(),
-                cell.y_range().shrink(4.0),
-                Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
-            );
-        }
-    }
+        })
+        .collect();
+    let (listing, show_hidden) = (view.listing.clone(), view.show_hidden);
+    let mut values = std::mem::take(&mut view.values);
+    columns::zoned_header(ui, id, rect, &zones, cells, &mut view.columns, opts, &mut |key| {
+        distinct_values(listing.iter().filter(|e| show_hidden || !e.hidden), key, hooks, &mut values)
+    });
+    view.values = values;
     ui.painter().hline(
         rect.x_range(),
         rect.bottom(),
@@ -759,21 +934,37 @@ fn list_header(ui: &mut egui::Ui, view: &mut FolderView, shape: &Shape, hooks: &
     );
 }
 
+/// The zones (pinned at the left, scrolling, pinned at the right) of the columns of a list
+fn list_zones(state: &ColumnsState, columns: &[(Column, f32)], hooks: &Hooks<'_>, width: f32) -> Zones {
+    let keys: Vec<String> = columns.iter().map(|(c, _)| c.key(hooks)).collect();
+    let widths: Vec<f32> = columns.iter().map(|(_, w)| *w).collect();
+    Zones::new(&keys, &widths, state, width, None)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn paint_list_row(
-    ui: &mut egui::Ui,
+    row_ui: &mut egui::Ui,
     e: &Entry,
     rect: Rect,
     shape: &Shape,
     hooks: &Hooks<'_>,
     badges: &[Color32],
     text_color: Option<Color32>,
+    zones: &Zones,
+    scroll: f32,
 ) {
     let Shape::List { columns, date_format, .. } = shape else { return };
-    let mut x = rect.left();
-    for (column, width) in columns {
-        let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(*width, rect.height()));
-        x += width;
+    for placed in &zones.placed {
+        let (column, width) = &columns[placed.index];
+        let cell = zones.cell_rect(rect, placed, scroll);
+        let visible = zones.visible(rect, placed, scroll);
+        if visible.width() <= 0.0 {
+            continue;
+        }
+        // a column pinned or scrolling is cut by its zone
+        let mut zone_ui = row_ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        zone_ui.shrink_clip_rect(visible);
+        let ui = &mut zone_ui;
         let column = match column {
             Column::Sort(sort) => *sort,
             Column::Extra(k) => {
@@ -852,14 +1043,27 @@ fn paint_tile(ui: &egui::Ui, e: &Entry, rect: Rect, icon: f32, badges: &[Color32
 }
 
 /// Draws a list or icon view. Returns the context menus to open once the view is released
-fn draw_folder(ui: &mut egui::Ui, view: &mut FolderView, mut shape: Shape, hooks: &Hooks<'_>, has_menu: bool) -> Menus {
+fn draw_folder(ui: &mut egui::Ui, view: &mut FolderView, shape: Shape, hooks: &Hooks<'_>, has_menu: bool, opts: HeaderOptions) -> Menus {
+    let viewport = ui.available_width();
+    draw_folder_in(ui, view, shape, hooks, has_menu, opts, viewport)
+}
+
+fn draw_folder_in(
+    ui: &mut egui::Ui,
+    view: &mut FolderView,
+    mut shape: Shape,
+    hooks: &Hooks<'_>,
+    has_menu: bool,
+    opts: HeaderOptions,
+    viewport: f32,
+) -> Menus {
     let id = ui.make_persistent_id(&view.id);
     let ctx = ui.ctx().clone();
     view.activated.clear();
     view.folder_changed = false;
     let mut menus = Menus::new();
 
-    let width = ui.available_width();
+    let width = viewport;
     if let Shape::Icons { icon, tile, per_row } = &mut shape {
         let line = ui.text_style_height(&TextStyle::Body);
         let min_w = (*icon + 44.0).max(84.0);
@@ -869,9 +1073,12 @@ fn draw_folder(ui: &mut egui::Ui, view: &mut FolderView, mut shape: Shape, hooks
             h: 6.0 + *icon + 6.0 + 2.0 * line + 10.0,
         };
     }
+    let wanted: Vec<Column> = match &shape {
+        Shape::List { columns, .. } => columns.iter().map(|(c, _)| *c).collect(),
+        Shape::Icons { .. } => vec![],
+    };
     if let Shape::List { columns, .. } = &mut shape {
-        let wanted: Vec<Column> = columns.iter().map(|(c, _)| *c).collect();
-        *columns = list_columns(&wanted, &hooks.extras, width);
+        *columns = resolve_columns(&view.columns, &wanted, hooks, width);
     }
 
     match view.focus.take() {
@@ -884,10 +1091,20 @@ fn draw_folder(ui: &mut egui::Ui, view: &mut FolderView, mut shape: Shape, hooks
     let focused = ui.memory(|m| m.has_focus(id));
 
     if matches!(shape, Shape::List { .. }) {
-        list_header(ui, view, &shape, hooks, id);
+        list_header(ui, view, &shape, hooks, id, opts);
+        // the header may have changed the widths and the order of the columns
+        if let Shape::List { columns, .. } = &mut shape {
+            *columns = resolve_columns(&view.columns, &wanted, hooks, width);
+        }
     }
-    // the header may have changed the order
-    let entries = view.entries(&ctx);
+    // the header may have changed the sort or the filters
+    let entries = view.entries(&ctx, hooks);
+    let zones = match &shape {
+        Shape::List { columns, .. } => list_zones(&view.columns, columns, hooks, width),
+        Shape::Icons { .. } => Zones::new(&[], &[], &view.columns, width, None),
+    };
+    view.columns.scroll = view.columns.scroll.clamp(0.0, zones.max_scroll());
+    let scroll = view.columns.scroll;
 
     if focused {
         let keys = read_keys(ui);
@@ -904,7 +1121,7 @@ fn draw_folder(ui: &mut egui::Ui, view: &mut FolderView, mut shape: Shape, hooks
 
     let n = entries.len();
     let scroll_to = view.scroll_to.take();
-    egui::ScrollArea::vertical()
+    let output = egui::ScrollArea::vertical()
         .id_salt(id.with(view.folder()))
         .auto_shrink([false, false])
         .show_viewport(ui, |ui, viewport| {
@@ -966,7 +1183,7 @@ fn draw_folder(ui: &mut egui::Ui, view: &mut FolderView, mut shape: Shape, hooks
                         if e.hidden {
                             ui.multiply_opacity(HIDDEN_OPACITY);
                         }
-                        paint_list_row(ui, e, rect, &shape, hooks, &badges, selected.then_some(selected_text));
+                        paint_list_row(ui, e, rect, &shape, hooks, &badges, selected.then_some(selected_text), &zones, scroll);
                     }
                     Shape::Icons { icon, .. } => {
                         if e.hidden {
@@ -989,6 +1206,7 @@ fn draw_folder(ui: &mut egui::Ui, view: &mut FolderView, mut shape: Shape, hooks
 
             rubber_band(ui, view, &background, &shape, &entries, origin, width, seen, mods);
         });
+    hscroll_bar(ui, id, &mut view.columns, &zones, output.inner_rect);
     menus
 }
 
@@ -1154,15 +1372,16 @@ macro_rules! folder_view_methods {
                 self.view.shown.iter().map(|p| to_str(p)).collect()
             }
 
-            /// Only the items whose name contains this text are shown (without case). Empty shows all
+            /// Only the items whose name contains this text are shown (without case). Empty shows all.
+            /// It is the filter of the column "name"
             #[getter]
             fn get_filter(&self) -> String {
-                self.view.filter.clone()
+                self.view.columns.name_text().to_string()
             }
 
             #[setter]
             fn set_filter(&mut self, filter: String) {
-                self.view.filter = filter;
+                self.view.columns.set_name_text(filter);
             }
 
             /// Shows the hidden items: a name starting with a dot, or hidden by the system
@@ -1176,28 +1395,100 @@ macro_rules! folder_view_methods {
                 self.view.show_hidden = show;
             }
 
-            /// The order of the items: "name", "modified", "size" or "kind". A click on a column of
-            /// the list view changes it
+            /// The order of the items: "name", "modified", "size", "kind", or the title of a column of your
+            /// own that has a value function. A click on a title of the header changes it
             #[getter]
-            fn get_sort_by(&self) -> &'static str {
-                self.view.sort_by.name()
+            fn get_sort_by(&self) -> String {
+                self.view.columns.sort_key.clone()
             }
 
             #[setter]
-            fn set_sort_by(&mut self, sort_by: &str) -> PyResult<()> {
-                self.view.sort_by = SortBy::parse(sort_by)?;
-                Ok(())
+            fn set_sort_by(&mut self, sort_by: String) {
+                self.view.columns.sort_key = sort_by;
             }
 
             /// False reverses the order
             #[getter]
             fn get_ascending(&self) -> bool {
-                self.view.ascending
+                self.view.columns.ascending
             }
 
             #[setter]
             fn set_ascending(&mut self, ascending: bool) {
-                self.view.ascending = ascending;
+                self.view.columns.ascending = ascending;
+            }
+
+            /// The widths the user gave to the columns by dragging their border, by column key ("name",
+            /// "modified", "size", "kind" or the title of a column of your own). Save and give them back at
+            /// the next run. A column without width has its default one
+            #[getter]
+            fn get_column_widths<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+                self.view.columns.widths_py(py)
+            }
+
+            #[setter]
+            fn set_column_widths(&mut self, widths: HashMap<String, f32>) {
+                self.view.columns.set_widths(widths);
+            }
+
+            /// The columns pinned at the left (by column key): they stay in place while the others scroll
+            /// horizontally. The user pins a column with a right click on its title
+            #[getter]
+            fn get_pinned_left(&self) -> Vec<String> {
+                self.view.columns.pinned_left.clone()
+            }
+
+            #[setter]
+            fn set_pinned_left(&mut self, columns: Vec<String>) {
+                self.view.columns.pinned_left = columns;
+            }
+
+            /// The columns pinned at the right (by column key)
+            #[getter]
+            fn get_pinned_right(&self) -> Vec<String> {
+                self.view.columns.pinned_right.clone()
+            }
+
+            #[setter]
+            fn set_pinned_right(&mut self, columns: Vec<String>) {
+                self.view.columns.pinned_right = columns;
+            }
+
+            /// The keys of the columns in the order the user gave them by dragging their title. Empty while
+            /// the order is the default one. Save and give it back at the next run
+            #[getter]
+            fn get_column_order(&self) -> Vec<String> {
+                self.view.columns.order.clone()
+            }
+
+            #[setter]
+            fn set_column_order(&mut self, order: Vec<String>) {
+                self.view.columns.order = order;
+            }
+
+            /// The filters of the columns, by column key: a text for a column of text (the items whose value
+            /// contains it, without case), a (min, max) tuple for a number or a date (None for no bound; a
+            /// size is "10 KB", a date "2024-05-01"), a list of values for a column of choices. The funnel of
+            /// the header sets them too. Assign a dict to replace them all
+            #[getter]
+            fn get_column_filters<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+                self.view.columns.filters_py(py)
+            }
+
+            #[setter]
+            fn set_column_filters(&mut self, filters: &Bound<'_, PyDict>) -> PyResult<()> {
+                self.view.columns.set_filters(filters)
+            }
+
+            /// Removes the filters of all the columns, the name included
+            fn clear_filters(&mut self) {
+                self.view.columns.filters.clear();
+            }
+
+            /// Asks the functions `value` of the columns of your own again at the next frame, e.g. after the
+            /// tags changed. They are otherwise kept for a second
+            fn refresh_columns(&mut self) {
+                self.view.values.map.clear();
             }
 
             /// Gives the keyboard focus to the view (True, the default) or takes it away (False) at
@@ -1251,7 +1542,15 @@ macro_rules! folder_view_methods {
 /// shows at the next frame. A click selects, Cmd (Ctrl) and Shift extend the selection, a drag on
 /// the background draws a rubber band, a double click or Enter opens. The arrows, Home, End, Page
 /// Up and Page Down move, Cmd+A selects all, Cmd+Up enters the parent folder, and typing the start
-/// of a name selects it. A click on a column header sorts by it.
+/// of a name selects it.
+///
+/// The header of the columns is interactive: a click on a title sorts by the column (a second click
+/// reverses the order), a drag on a title moves the column, a drag on the border of a title
+/// resizes it (a double click gives it its default width back), and the funnel at the right of a
+/// title filters it, with a filter that fits the type of the column: a text for the name, a minimum
+/// and a maximum for the size, a period for the date, the values to keep for the kind. Everything
+/// is also a property of the view (sort_by, ascending, column_widths, column_order,
+/// column_filters), to save at the end of the run and give back at the next one.
 ///
 /// Args:
 ///     id (str): unique id of the view
@@ -1270,7 +1569,8 @@ macro_rules! folder_view_methods {
 ///
 ///     dirs_first (bool): folders before files. Default is True
 ///
-///     sort_by (str): "name", "modified", "size" or "kind". Default is "name"
+///     sort_by (str): "name", "modified", "size", "kind" or the title of a column of your own that
+///         has a value function. Default is "name"
 ///
 /// Usage::
 ///
@@ -1312,7 +1612,8 @@ folder_view_methods!(FileListView);
 ///
 ///     dirs_first (bool): folders before files. Default is True
 ///
-///     sort_by (str): "name", "modified", "size" or "kind". Default is "name"
+///     sort_by (str): "name", "modified", "size", "kind" or the title of a column of your own that
+///         has a value function. Default is "name"
 ///
 /// The size of the grid is icon_size, which can change at any time, e.g. from a slider.
 ///
@@ -1373,7 +1674,7 @@ fn parse_columns(kwargs: Option<&Bound<'_, PyDict>>, extras: usize) -> PyResult<
 ///
 /// Keyword args:
 ///     columns (list[str]): the columns after the name, among "modified", "size" and "kind".
-///         Default is all three. The last ones are hidden when the view is narrow
+///         Default is all three. A view narrower than its columns scrolls horizontally
 ///
 ///     headers (list[str]): the titles of the columns name, modified, size and kind. Default is
 ///         ["Name", "Date Modified", "Size", "Kind"]
@@ -1382,9 +1683,19 @@ fn parse_columns(kwargs: Option<&Bound<'_, PyDict>>, extras: usize) -> PyResult<
 ///
 ///     row_height (float): height of a row. Default is 24
 ///
-///     extra_columns (list[tuple[str, float, callable]]): columns of your own, after the name: a
-///         title, a width and a function called with the path of the row inside the cell, to draw
-///         it with the usual widgets. They do not sort
+///     extra_columns (list[tuple]): columns of your own, after the name: a title, a width and a
+///         function called with the path of the row inside the cell, to draw it with the usual
+///         widgets. They sort and filter when a fourth item, a dict, gives the type of their data
+///         and a function that returns the value of a row: {"type": "text" | "number" | "date" |
+///         "choice", "value": function(path) -> value}. A date is seconds since 1970 or a
+///         datetime. The values are kept for a second (see refresh_columns). The function runs
+///         while the view is drawn: it must not read or change the view itself
+///
+///     resizable (bool): the border of a column can be dragged. Default is True
+///
+///     reorderable (bool): the title of a column can be dragged to another place. Default is True
+///
+///     filterable (bool): the funnel of the header opens the filter of the column. Default is True
 ///
 ///     badges (callable): called with the path of each row shown, returns a list of colors drawn
 ///         as dots at the right end of the name, e.g. the tags of a file
@@ -1405,6 +1716,18 @@ fn parse_columns(kwargs: Option<&Bound<'_, PyDict>>, extras: usize) -> PyResult<
 ///
 ///     def update_func(ctx):
 ///         file_list_view(files, columns=["modified", "size"], context_menu=menu)
+///
+/// A column of your own that sorts and filters::
+///
+///     def stars(path):
+///         rating = ratings.get(path, 0)
+///         label("★" * rating)
+///
+///     file_list_view(
+///         files,
+///         extra_columns=[("Rating", 80, stars, {"type": "number", "value": lambda p: ratings.get(p, 0)})],
+///     )
+///     files.column_filters = {"size": ("1 MB", None), "kind": ["PDF document"]}
 #[pyfunction]
 #[pyo3(signature = (view, **kwargs))]
 unsafe fn file_list_view(view: &Bound<'_, FileListView>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
@@ -1422,7 +1745,7 @@ unsafe fn file_list_view(view: &Bound<'_, FileListView>, kwargs: Option<&Bound<'
     };
     let menu = kwarg::<Bound<'_, PyAny>>(kwargs, "context_menu")?;
     let ui = current_ui(&UI)?;
-    let menus = draw_folder(ui, &mut view.borrow_mut().view, shape, &hooks, menu.is_some());
+    let menus = draw_folder(ui, &mut view.borrow_mut().view, shape, &hooks, menu.is_some(), HeaderOptions::read(kwargs, false)?);
     run_menus(menus, menu.as_ref())
 }
 
@@ -1459,7 +1782,7 @@ unsafe fn file_icon_view(view: &Bound<'_, FileIconView>, kwargs: Option<&Bound<'
     };
     let menu = kwarg::<Bound<'_, PyAny>>(kwargs, "context_menu")?;
     let ui = current_ui(&UI)?;
-    let menus = draw_folder(ui, &mut view.borrow_mut().view, shape, &hooks, menu.is_some());
+    let menus = draw_folder(ui, &mut view.borrow_mut().view, shape, &hooks, menu.is_some(), HeaderOptions::read(kwargs, false)?);
     run_menus(menus, menu.as_ref())
 }
 
@@ -1511,7 +1834,12 @@ pub(crate) struct FileTreeView {
     multi_select: bool,
     show_root: bool,
     dirs_first: bool,
-    filter: String,
+    /// width, order, sort and filters of the columns
+    columns: ColumnsState,
+    /// values of the columns of Python
+    values: Values,
+    /// the items shown at the last frame, for the choices of a filter (only kept when a column has some)
+    listing: Arc<Vec<Entry>>,
     /// taken out while the tree is drawn, so the context menu can read the view
     state: TreeViewState<String>,
     /// what Python reads, also while the tree is drawn
@@ -1553,7 +1881,9 @@ impl FileTreeView {
             multi_select,
             show_root,
             dirs_first,
-            filter: String::new(),
+            columns: ColumnsState::new("name"),
+            values: Values::default(),
+            listing: Arc::new(vec![]),
             state: TreeViewState::default(),
             selected: vec![],
             open: HashSet::new(),
@@ -1648,15 +1978,16 @@ impl FileTreeView {
         self.scroll_to = Some(to_str(&path));
     }
 
-    /// Only the files whose name contains this text are shown (without case), the folders always
+    /// Only the files whose name contains this text are shown (without case), the folders always.
+    /// It is the filter of the column "name"
     #[getter]
     fn get_filter(&self) -> String {
-        self.filter.clone()
+        self.columns.name_text().to_string()
     }
 
     #[setter]
     fn set_filter(&mut self, filter: String) {
-        self.filter = filter;
+        self.columns.set_name_text(filter);
     }
 
     /// Shows the hidden items: a name starting with a dot, or hidden by the system
@@ -1668,6 +1999,102 @@ impl FileTreeView {
     #[setter]
     fn set_show_hidden(&mut self, show: bool) {
         self.show_hidden = show;
+    }
+
+    /// The order of the items: "name", "modified", "size", "kind", or the title of a column of your
+    /// own that has a value function. A click on a title of the header changes it
+    #[getter]
+    fn get_sort_by(&self) -> String {
+        self.columns.sort_key.clone()
+    }
+
+    #[setter]
+    fn set_sort_by(&mut self, sort_by: String) {
+        self.columns.sort_key = sort_by;
+    }
+
+    /// False reverses the order
+    #[getter]
+    fn get_ascending(&self) -> bool {
+        self.columns.ascending
+    }
+
+    #[setter]
+    fn set_ascending(&mut self, ascending: bool) {
+        self.columns.ascending = ascending;
+    }
+
+    /// The widths the user gave to the columns by dragging their border, by column key ("name",
+    /// "modified", "size", "kind" or the title of a column of your own). Save and give them back at
+    /// the next run. A column without width has its default one
+    #[getter]
+    fn get_column_widths<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        self.columns.widths_py(py)
+    }
+
+    #[setter]
+    fn set_column_widths(&mut self, widths: HashMap<String, f32>) {
+        self.columns.set_widths(widths);
+    }
+
+    /// The columns pinned at the left (by column key): they stay in place while the others scroll
+    /// horizontally. The user pins a column with a right click on its title
+    #[getter]
+    fn get_pinned_left(&self) -> Vec<String> {
+        self.columns.pinned_left.clone()
+    }
+
+    #[setter]
+    fn set_pinned_left(&mut self, columns: Vec<String>) {
+        self.columns.pinned_left = columns;
+    }
+
+    /// The columns pinned at the right (by column key)
+    #[getter]
+    fn get_pinned_right(&self) -> Vec<String> {
+        self.columns.pinned_right.clone()
+    }
+
+    #[setter]
+    fn set_pinned_right(&mut self, columns: Vec<String>) {
+        self.columns.pinned_right = columns;
+    }
+
+    /// The keys of the columns in the order the user gave them by dragging their title. Empty while
+    /// the order is the default one. Save and give it back at the next run
+    #[getter]
+    fn get_column_order(&self) -> Vec<String> {
+        self.columns.order.clone()
+    }
+
+    #[setter]
+    fn set_column_order(&mut self, order: Vec<String>) {
+        self.columns.order = order;
+    }
+
+    /// The filters of the columns, by column key: a text for a column of text (the items whose value
+    /// contains it, without case), a (min, max) tuple for a number or a date (None for no bound; a
+    /// size is "10 KB", a date "2024-05-01"), a list of values for a column of choices. The funnel of
+    /// the header sets them too. Assign a dict to replace them all
+    #[getter]
+    fn get_column_filters<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        self.columns.filters_py(py)
+    }
+
+    #[setter]
+    fn set_column_filters(&mut self, filters: &Bound<'_, PyDict>) -> PyResult<()> {
+        self.columns.set_filters(filters)
+    }
+
+    /// Removes the filters of all the columns, the name included
+    fn clear_filters(&mut self) {
+        self.columns.filters.clear();
+    }
+
+    /// Asks the functions `value` of the columns of your own again at the next frame, e.g. after the
+    /// tags changed. They are otherwise kept for a second
+    fn refresh_columns(&mut self) {
+        self.values.map.clear();
     }
 
     /// Gives the keyboard focus to the tree (True, the default) or takes it away (False) at the
@@ -1719,10 +2146,10 @@ struct Node {
 
 struct TreeOptions {
     show_hidden: bool,
-    dirs_first: bool,
-    filter: String,
 }
 
+/// The items of a folder as nodes, in the order of the disk: arrange puts them in order once the
+/// listing is free again
 fn tree_children(
     core: &mut Core,
     ctx: &egui::Context,
@@ -1732,19 +2159,55 @@ fn tree_children(
     known_dirs: &mut HashSet<String>,
 ) -> Vec<Node> {
     let all = core.list(Some(ctx), dir);
-    let mut entries: Vec<&Entry> = all
-        .iter()
-        .filter(|e| options.show_hidden || !e.hidden)
-        .filter(|e| e.is_dir || options.filter.is_empty() || e.name.to_lowercase().contains(&options.filter))
-        .collect();
-    entries.sort_by(|a, b| natural_cmp(&a.name, &b.name));
-    if options.dirs_first {
-        entries.sort_by_key(|e| !e.is_dir);
-    }
+    let entries: Vec<&Entry> = all.iter().filter(|e| options.show_hidden || !e.hidden).collect();
     entries
         .into_iter()
         .map(|e| tree_node(core, ctx, e.clone(), options, state, known_dirs, false))
         .collect()
+}
+
+/// The nodes sorted and filtered by the columns, the folders inside too. `top` is the level of the
+/// first nodes: sorted unless the items were given by the Python code
+fn arrange_nodes(nodes: Vec<Node>, rules: &Rules, hooks: &Hooks<'_>, values: &mut Values, sort_top: bool) -> Vec<Node> {
+    let mut nodes = arrange(nodes, |n| &n.entry, rules, hooks, values, false, sort_top);
+    for node in &mut nodes {
+        if let Some(children) = node.children.take() {
+            node.children = Some(arrange_nodes(children, rules, hooks, values, true));
+        }
+    }
+    nodes
+}
+
+fn collect_entries(nodes: &[Node], into: &mut Vec<Entry>) {
+    for node in nodes {
+        into.push(node.entry.clone());
+        if let Some(children) = &node.children {
+            collect_entries(children, into);
+        }
+    }
+}
+
+/// The columns at the right end of the rows of the tree, in the order of the user: the columns of
+/// Python, then the ones of the view that were asked for
+fn tree_columns(state: &ColumnsState, hooks: &Hooks<'_>, builtin: &[SortBy]) -> Vec<(Column, f32)> {
+    let wanted: Vec<Column> =
+        (0..hooks.extras.len()).map(Column::Extra).chain(builtin.iter().map(|s| Column::Sort(*s))).collect();
+    let default: Vec<String> = wanted.iter().map(|c| c.key(hooks)).collect();
+    state
+        .ordered(&default)
+        .iter()
+        .filter_map(|key| wanted.iter().copied().find(|c| c.key(hooks) == *key))
+        .map(|c| (c, state.widths.get(&c.key(hooks)).copied().unwrap_or_else(|| default_width(c, hooks))))
+        .collect()
+}
+
+/// The titles of the columns of the view: name, modified, size and kind
+fn parse_headers(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<[String; 4]> {
+    Ok(match kwarg::<Vec<String>>(kwargs, "headers")? {
+        Some(h) if h.len() == 4 => [h[0].clone(), h[1].clone(), h[2].clone(), h[3].clone()],
+        Some(_) => return Err(PyValueError::new_err("headers needs 4 titles: name, modified, size and kind")),
+        None => ["Name".into(), "Date Modified".into(), "Size".into(), "Kind".into()],
+    })
 }
 
 fn tree_node(
@@ -1779,52 +2242,158 @@ fn fill_badges(nodes: &mut [Node], hooks: &Hooks<'_>) {
     }
 }
 
-/// The right end of a row of the tree: the columns drawn by Python, then the badges at their left
+/// Where the columns are in the tree: the name (always pinned at the left) and the columns, in
+/// the three zones of the pinned columns
+#[derive(Clone)]
+struct TreeLayout {
+    width: f32,
+    name: f32,
+    zones: Zones,
+    scroll: f32,
+    /// the width of the tree is known: the header can be drawn
+    finite: bool,
+}
+
+impl TreeLayout {
+    /// The width of the name: the one the user chose, else what the columns leave. Without a width
+    /// (a tree in a ui as wide as it wants) the name has none and the columns end the rows
+    fn new(width: f32, columns: &[(Column, f32)], hooks: &Hooks<'_>, state: &ColumnsState) -> Self {
+        let total = columns.iter().map(|(_, w)| w).sum::<f32>();
+        let finite = width.is_finite();
+        let (width, name) = if finite {
+            (width, state.widths.get("name").copied().unwrap_or((width - total).max(120.0)))
+        } else {
+            (total, 0.0)
+        };
+        let mut keys = vec!["name".to_string()];
+        keys.extend(columns.iter().map(|(c, _)| c.key(hooks)));
+        let mut widths = vec![name];
+        widths.extend(columns.iter().map(|(_, w)| *w));
+        let zones = Zones::new(&keys, &widths, state, width, Some("name"));
+        let scroll = state.scroll.clamp(0.0, zones.max_scroll());
+        TreeLayout { width, name, zones, scroll, finite }
+    }
+}
+
+/// The right part of a row of the tree: the columns, from the right of the name, and the badges
+/// at the end of the name. The cells are placed from the row, the same way as the titles of the
+/// header, so they stay under them whatever the room
 fn with_tree_accessory<'a>(
     b: NodeBuilder<'a, String>,
     badges: Vec<Color32>,
-    path: &'a str,
+    entry: &'a Entry,
     hooks: &'a Hooks<'_>,
+    columns: &'a [(Column, f32)],
+    layout: Option<&'a TreeLayout>,
+    date_format: &'a str,
 ) -> NodeBuilder<'a, String> {
-    if badges.is_empty() && hooks.extras.is_empty() {
+    let Some(layout) = layout else { return b };
+    if badges.is_empty() && columns.is_empty() {
         return b;
     }
     b.accessory(move |ui| {
-        // the ui goes from right to left: the last column first
-        for extra in hooks.extras.iter().rev() {
-            let (cell, _) = ui.allocate_exact_size(vec2(extra.width, ui.available_height()), Sense::hover());
-            let mut cell_ui = ui.new_child(
-                egui::UiBuilder::new()
-                    .max_rect(cell.shrink2(vec2(4.0, 0.0)))
-                    .layout(egui::Layout::left_to_right(Align::Center)),
-            );
-            cell_ui.shrink_clip_rect(cell);
-            if let Err(err) = unsafe { run_nested_call(&mut cell_ui, &extra.cell, (path.to_owned(),)) } {
-                err.display(extra.cell.py());
+        let area = ui.max_rect();
+        let row = Rect::from_min_max(pos2(area.right() - layout.width, area.top()), area.max);
+        // the left edge of the first column
+        let first = row.left() + layout.name;
+        for placed in layout.zones.placed.iter().filter(|p| p.index > 0) {
+            let (column, width) = &columns[placed.index - 1];
+            let cell = layout.zones.cell_rect(row, placed, layout.scroll);
+            let visible = layout.zones.visible(row, placed, layout.scroll);
+            if visible.width() <= 0.0 {
+                continue;
+            }
+            match column {
+                Column::Extra(k) => {
+                    let extra = &hooks.extras[*k];
+                    let mut cell_ui = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(cell.shrink2(vec2(4.0, 0.0)))
+                            .layout(egui::Layout::left_to_right(Align::Center)),
+                    );
+                    cell_ui.shrink_clip_rect(visible);
+                    if let Err(err) = unsafe { run_nested_call(&mut cell_ui, &extra.cell, (to_str(&entry.path),)) } {
+                        err.display(extra.cell.py());
+                    }
+                }
+                Column::Sort(sort) => {
+                    let text = match sort {
+                        SortBy::Modified => date(entry.modified, date_format),
+                        SortBy::Size if entry.is_dir => "--".into(),
+                        SortBy::Size => human_size(entry.size),
+                        _ => kind(entry),
+                    };
+                    let color = ui.visuals().weak_text_color();
+                    let galley = truncated(ui, &text, width - 8.0, Some(color));
+                    let left = if *sort == SortBy::Size { cell.right() - 4.0 - galley.size().x } else { cell.left() + 4.0 };
+                    ui.painter().with_clip_rect(visible).galley(pos2(left, cell.center().y - galley.size().y / 2.0), galley, color);
+                }
             }
         }
         if !badges.is_empty() {
-            let (rect, _) = ui.allocate_exact_size(vec2(dots_width(&badges, 9.0) + 4.0, 12.0), Sense::hover());
-            paint_dots(ui, &badges, rect.left(), rect.center().y, 9.0);
+            let dots = dots_width(&badges, 9.0);
+            paint_dots(ui, &badges, first - dots - 8.0, area.center().y, 9.0);
         }
     })
 }
 
-/// The titles of the columns of Python above the tree, over the cells of the rows
-fn tree_header(ui: &mut egui::Ui, extras: &[Extra<'_>]) {
-    let width = ui.available_width();
-    if extras.is_empty() || !width.is_finite() {
-        return;
+/// The header above the tree: the name at the left, the columns over the cells of the rows. It is
+/// pinned: `slot` is the room kept for it at the top of the content, and it is drawn over the rows
+/// at the top of what can be seen when the tree is scrolled
+fn tree_header(
+    ui: &mut egui::Ui,
+    id: Id,
+    view: &Bound<'_, FileTreeView>,
+    columns: &[(Column, f32)],
+    headers: &[String; 4],
+    hooks: &Hooks<'_>,
+    opts: HeaderOptions,
+    slot: Rect,
+    layout: &TreeLayout,
+) {
+    let shift = (ui.clip_rect().top() - slot.top()).max(0.0);
+    let rect = slot.translate(vec2(0.0, shift));
+    if shift > 0.5 {
+        ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
     }
-    let height = ui.text_style_height(&egui::TextStyle::Small) + 6.0;
-    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-    let color = ui.visuals().weak_text_color();
-    let font = egui::TextStyle::Small.resolve(ui.style());
-    let mut right = rect.right();
-    for extra in extras.iter().rev() {
-        right -= extra.width;
-        ui.painter().text(pos2(right + 4.0, rect.center().y), Align2::LEFT_CENTER, &extra.title, font.clone(), color);
+    let mut cells: Vec<Cell> = vec![Cell {
+        key: "name".into(),
+        title: headers[0].clone(),
+        rect,
+        ty: DataType::Text,
+        sortable: true,
+        filterable: true,
+        movable: false,
+        resizable: true,
+    }];
+    for (column, _) in columns {
+        let title = match column {
+            Column::Sort(sort) => headers[*sort as usize].clone(),
+            Column::Extra(k) => hooks.extras[*k].title.clone(),
+        };
+        cells.push(Cell {
+            key: column.key(hooks),
+            title,
+            rect,
+            ty: column.data_type(hooks),
+            sortable: column.has_value(hooks),
+            filterable: column.has_value(hooks),
+            movable: true,
+            resizable: true,
+        });
     }
+    let listing = view.borrow().listing.clone();
+    let mut values = std::mem::take(&mut view.borrow_mut().values);
+    let mut v = view.borrow_mut();
+    let before = (v.columns.sort_key.clone(), v.columns.ascending, v.columns.filters.clone(), v.columns.widths.clone(), v.columns.order.clone());
+    columns::zoned_header(ui, id.with("columns"), rect, &layout.zones, cells, &mut v.columns, opts, &mut |key| {
+        distinct_values(listing.iter(), key, hooks, &mut values)
+    });
+    let after = (v.columns.sort_key.clone(), v.columns.ascending, v.columns.filters.clone(), v.columns.widths.clone(), v.columns.order.clone());
+    if before != after {
+        ui.ctx().request_repaint(); // the rows follow at the next frame
+    }
+    v.values = values;
     ui.painter().hline(rect.x_range(), rect.bottom(), egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
 }
 
@@ -1848,6 +2417,9 @@ fn add_tree_nodes<'a>(
     open_by_default: bool,
     activatable_dirs: bool,
     hooks: &'a Hooks<'_>,
+    columns: &'a [(Column, f32)],
+    layout: Option<&'a TreeLayout>,
+    date_format: &'a str,
 ) {
     for node in nodes {
         let side = 16.0;
@@ -1863,7 +2435,7 @@ fn add_tree_nodes<'a>(
             egui::RichText::new(label)
         };
         let with_icon = |b| {
-            with_tree_accessory(with_tree_icon(b, uri.clone(), side, node.entry.hidden), node.badges.clone(), &node.id, hooks)
+            with_tree_accessory(with_tree_icon(b, uri.clone(), side, node.entry.hidden), node.badges.clone(), &node.entry, hooks, columns, layout, date_format)
         };
         if node.entry.is_dir {
             builder.node(with_icon(
@@ -1873,7 +2445,7 @@ fn add_tree_nodes<'a>(
                     .label(label),
             ));
             if let Some(children) = &node.children {
-                add_tree_nodes(builder, children, ctx, false, activatable_dirs, hooks);
+                add_tree_nodes(builder, children, ctx, false, activatable_dirs, hooks, columns, layout, date_format);
             }
             builder.close_dir();
         } else {
@@ -1912,9 +2484,37 @@ fn tree_row(nodes: &[Node], id: &str, row: &mut usize) -> Option<usize> {
 ///     badges (callable): called with the path of each item, returns a list of colors drawn as
 ///         dots at the right end of its row, e.g. the tags of a file
 ///
-///     extra_columns (list[tuple[str, float, callable]]): columns of your own at the right end of
-///         the rows: a title (shown above the tree), a width, and a function called with the path
-///         of each row to draw its cell, e.g. ("Tags", 160, lambda path: tags_edit(...))
+///     columns (list[str]): columns of the view at the right end of the rows, among "modified",
+///         "size" and "kind". Default is none, the tree is then only names
+///
+///     headers (list[str]): the titles of the columns name, modified, size and kind. Default is
+///         ["Name", "Date Modified", "Size", "Kind"]
+///
+///     date_format (str): format of the dates, like strftime. Default is "%d %b %Y %H:%M"
+///
+///     extra_columns (list[tuple]): columns of your own at the right end of the rows: a title
+///         (shown above the tree), a width, and a function called with the path of each row to draw
+///         its cell, e.g. ("Tags", 160, lambda path: tags_edit(...)). A fourth item, a dict, makes
+///         the column sort and filter: {"type": "text" | "number" | "date" | "choice", "value":
+///         function(path) -> value}. A date is seconds since 1970 or a datetime
+///
+///     header (bool): draws the header of the columns above the tree, pinned at the top while the
+///         tree scrolls. Default is True when there are columns
+///
+///     resizable (bool): the border of a column can be dragged. Default is True
+///
+///     reorderable (bool): the title of a column can be dragged to another place. Default is True
+///
+///     pinnable (bool): a right click on a title offers to pin the column at the left (after the
+///         name) or at the right: the other columns then scroll horizontally. Default is True
+///
+///     filterable (bool): the funnel of the header opens the filter of the column, which fits its
+///         type: a text, a minimum and a maximum, a period, or the values to keep. The folders
+///         stay, only the files are filtered. Default is True
+///
+/// A click on a title sorts the items of each folder by the column, a second click reverses the
+/// order. See sort_by, ascending, column_widths, column_order and column_filters of the view to
+/// read, save and set them.
 ///
 /// Example::
 ///
@@ -1928,10 +2528,41 @@ fn tree_row(nodes: &[Node], id: &str, row: &mut usize) -> Option<usize> {
 unsafe fn file_tree_view(py: Python<'_>, view: &Bound<'_, FileTreeView>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
     let menu = kwarg::<Bound<'_, PyAny>>(kwargs, "context_menu")?;
     let hooks = Hooks::read(kwargs)?;
+    let opts = HeaderOptions::read(kwargs, false)?;
+    let headers = parse_headers(kwargs)?;
+    let date_format = kwarg::<String>(kwargs, "date_format")?.unwrap_or_else(|| "%d %b %Y %H:%M".into());
+    let mut builtin = vec![];
+    for name in kwarg::<Vec<String>>(kwargs, "columns")?.unwrap_or_default() {
+        let sort = SortBy::parse(&name)?;
+        if sort != SortBy::Name && !builtin.contains(&sort) {
+            builtin.push(sort);
+        }
+    }
     let ui = current_ui(&UI)?;
     let ctx = ui.ctx().clone();
 
-    let (mut state, mut nodes, id, multi_select, show_root, activatable_dirs, scroll_to) = {
+    let id = ui.make_persistent_id(&view.borrow().id);
+    let columns = tree_columns(&view.borrow().columns, &hooks, &builtin);
+    let mut values = std::mem::take(&mut view.borrow_mut().values);
+    values.refresh();
+    let available = ui.available_width();
+    let mut layout = Some(TreeLayout::new(available, &columns, &hooks, &view.borrow().columns));
+    let origin_x = ui.cursor().min.x;
+    // the room of the header, which is drawn once the rows are, over them
+    let slot = match (&layout, kwarg::<bool>(kwargs, "header")?.unwrap_or(true)) {
+        (Some(layout), true) if layout.finite && !columns.is_empty() => Some(ui.allocate_exact_size(vec2(layout.width, 24.0), Sense::hover()).0),
+        _ => None,
+    };
+    // the columns that are not pinned scroll with the wheel over the tree
+    if let Some(layout) = layout.as_mut().filter(|l| l.finite) {
+        let clip = ui.clip_rect();
+        let seen = Rect::from_min_max(pos2(origin_x, clip.top()), pos2(origin_x + layout.width, clip.bottom()));
+        let mut v = view.borrow_mut();
+        hscroll_wheel(ui, &mut v.columns, &layout.zones, seen);
+        layout.scroll = v.columns.scroll;
+    }
+
+    let (mut state, mut nodes, multi_select, show_root, activatable_dirs, scroll_to, rules, given) = {
         let mut v = view.borrow_mut();
         let mut state = std::mem::take(&mut v.state);
         for (path, open) in std::mem::take(&mut v.pending_open) {
@@ -1945,20 +2576,18 @@ unsafe fn file_tree_view(py: Python<'_>, view: &Bound<'_, FileTreeView>, kwargs:
         if selected.len() != state.selected().len() {
             state.set_selected(selected);
         }
-        let options = TreeOptions {
-            show_hidden: v.show_hidden,
-            dirs_first: v.dirs_first,
-            filter: v.filter.to_lowercase(),
-        };
+        let options = TreeOptions { show_hidden: v.show_hidden };
+        let rules = Rules::new(&v.columns, &hooks, v.dirs_first);
         let core = v.core.clone();
         let mut core = lock(&core);
         let mut known = std::mem::take(&mut v.known_dirs);
+        let given = v.paths.is_some();
         let nodes = if let Some(paths) = v.paths.clone() {
             // given paths at the top: each one from the listing of its folder
             let mut top = vec![];
             for path in &paths {
                 let Some(parent) = path.parent() else { continue };
-                let found = core.list(Some(&ctx), parent).iter().find(|e| &e.path == path).cloned();
+                let found = core.list(Some(&ctx), parent).iter().find(|e| same_path(&e.path, path)).cloned();
                 if let Some(e) = found.filter(|e| options.show_hidden || !e.hidden) {
                     top.push(tree_node(&mut core, &ctx, e, &options, &state, &mut known, false));
                 }
@@ -1973,16 +2602,28 @@ unsafe fn file_tree_view(py: Python<'_>, view: &Bound<'_, FileTreeView>, kwargs:
             tree_children(&mut core, &ctx, &v.root, &options, &state, &mut known)
         };
         v.known_dirs = known;
-        let id = ui.make_persistent_id(&v.id);
         match v.focus.take() {
             Some(true) => ui.memory_mut(|m| m.request_focus(id)),
             Some(false) => ui.memory_mut(|m| m.surrender_focus(id)),
             None if v.keep_focus && !ctx.text_edit_focused() => ui.memory_mut(|m| m.request_focus(id)),
             None => {}
         }
-        (state, nodes, id, v.multi_select, v.show_root, v.activatable_dirs, v.scroll_to.take())
+        (state, nodes, v.multi_select, v.show_root, v.activatable_dirs, v.scroll_to.take(), rules, given)
     };
+    // the folders are read and free: the functions of Python of the columns can run
+    nodes = arrange_nodes(nodes, &rules, &hooks, &mut values, !given);
     fill_badges(&mut nodes, &hooks);
+    {
+        let mut v = view.borrow_mut();
+        v.listing = Arc::new(if columns.iter().any(|(c, _)| c.data_type(&hooks) == DataType::Choice) {
+            let mut all = vec![];
+            collect_entries(&nodes, &mut all);
+            all
+        } else {
+            vec![]
+        });
+        v.values = std::mem::take(&mut values);
+    }
 
     if let Some(target) = &scroll_to {
         // the rows out of the window are not drawn, so the row is placed from its index
@@ -2003,9 +2644,18 @@ unsafe fn file_tree_view(py: Python<'_>, view: &Bound<'_, FileTreeView>, kwargs:
             menu_result = run_nested_call(menu_ui, menu_fun, (ids.clone(),));
         });
     }
-    tree_header(ui, &hooks.extras);
-    let (_, actions) =
-        tree.show_state(ui, &mut state, |builder| add_tree_nodes(builder, &nodes, &ctx, show_root, activatable_dirs, &hooks));
+    let (_, actions) = tree.show_state(ui, &mut state, |builder| {
+        add_tree_nodes(builder, &nodes, &ctx, show_root, activatable_dirs, &hooks, &columns, layout.as_ref(), &date_format)
+    });
+
+    if let (Some(slot), Some(layout)) = (slot, &layout) {
+        tree_header(ui, id, view, &columns, &headers, &hooks, opts, slot, layout);
+    }
+    if let Some(layout) = layout.as_ref().filter(|l| l.finite) {
+        let clip = ui.clip_rect();
+        let seen = Rect::from_min_max(pos2(origin_x, clip.top()), pos2(origin_x + layout.width, clip.bottom()));
+        hscroll_bar(ui, id, &mut view.borrow_mut().columns, &layout.zones, seen);
+    }
 
     let mut v = view.borrow_mut();
     v.activated.clear();

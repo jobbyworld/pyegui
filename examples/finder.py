@@ -85,6 +85,7 @@ from pyegui import (
     pointer_pos,
     pointer_pressed,
     run_native,
+    set_blue_folders,
     scroll_area_both,
     scroll_area_vertical,
     scroll_to_rect,
@@ -277,6 +278,7 @@ scroll_target = Str("")  # path of the item the view has to scroll to this frame
 view = Int(TREE)
 search = Str("")
 show_sidebar = Bool(True)
+blue_folders = Bool(not MACOS)  # Windows: the folders in the blue of the Finder, not the yellow of the Explorer
 show_hidden = Bool(False)  # the hidden items (a name with a dot, a hidden flag), faded when shown
 path_editing = Bool(False)  # the path bar is a text field holding the full path
 path_text = Str("")
@@ -760,10 +762,22 @@ def snapshot():
         "show_sidebar": show_sidebar.value,
         "show_dock": show_dock.value,
         "show_hidden": show_hidden.value,
+        "blue_folders": blue_folders.value,
         "folded": sorted(folded),
         "tag_tree_folded": tag_tree.folded,
         "folder": str(current()),
         "tree_open": tree.open_folders,
+        "columns": {
+            name: {
+                "widths": v.column_widths,
+                "order": v.column_order,
+                "pinned_left": v.pinned_left,
+                "pinned_right": v.pinned_right,
+                "sort_by": v.sort_by,
+                "ascending": v.ascending,
+            }
+            for name, v in (("tree", tree), ("list", files_list))
+        },
         "dock": dock.save(),  # the panes still open, their tabs and sizes
         "watched": [str(p) for p in watched],
     }
@@ -783,9 +797,19 @@ def restore(saved):
     show_sidebar.value = saved.get("show_sidebar", show_sidebar.value)
     show_dock.value = saved.get("show_dock", show_dock.value)
     set_hidden(bool(saved.get("show_hidden", show_hidden.value)))
+    set_blue(bool(saved.get("blue_folders", blue_folders.value)))
     folded.update(saved.get("folded", []))
     tag_tree.folded = [p for p in saved.get("tag_tree_folded", []) if isinstance(p, str)]
     tree.open_folders = [p for p in saved.get("tree_open", []) if isinstance(p, str)]
+    for name, v in (("tree", tree), ("list", files_list)):
+        columns = saved.get("columns", {}).get(name)
+        if isinstance(columns, dict):
+            v.column_widths = columns.get("widths", {})
+            v.column_order = columns.get("order", [])
+            v.pinned_left = columns.get("pinned_left", [])
+            v.pinned_right = columns.get("pinned_right", [])
+            v.sort_by = columns.get("sort_by", v.sort_by)
+            v.ascending = bool(columns.get("ascending", True))
     for folder in saved.get("watched", []):
         if isinstance(folder, str) and is_dir_within(folder):
             watch_folder_path(Path(folder))
@@ -840,6 +864,12 @@ def set_glass(value):
 def set_accent_name(name):
     accent_name.value = name
     apply_style()
+
+
+def set_blue(value):
+    """the folders of Windows in blue (the style of the Finder) or in the yellow of the Explorer"""
+    blue_folders.value = value
+    set_blue_folders(value)
 
 
 def set_tab_style(value):
@@ -1081,18 +1111,34 @@ TAGS_COLUMN = 200  # the width of the Tags column of the tree
 
 
 def tags_cell(path):
-    """the Tags column of the tree and of the list: on the selected row the own tags of the item to edit, on the
-    others its tags and those of its folders, small chips"""
-    if len(picked) == 1 and path == selected.value:
-        # one chip, +N and the field fit in the column; +N shows them all
-        edit_own_tags(path, small=True, max_visible=1, field_width=64, hint_text="+ tag", id=f"tree tags {path}")
-        return
+    """the Tags column of the tree and of the list: small chips, the tags of the item then those of its
+    folders (desaturated). The mouse over the cell shows a cross on the own tags and an empty tag, a
+    field with the list of the tags to choose one or to type a new one (Enter)"""
     sync_library()
     found = [("/".join(tag_path(tag["id"])), how) for tag, how in tags_of(path) if how != "parent"]
-    if found:
-        cell = Tags([p for p, _ in found], colors=library.colors)
-        inherited = [p for p, how in found if how == "folder"]  # desaturated: they come from a folder
-        tags_edit(cell, editable=False, small=True, max_visible=2, muted=inherited, id=f"tree tags {path}")
+    inherited = [p for p, how in found if how == "folder"]  # desaturated: they come from a folder
+    cell = Tags([p for p, _ in found], colors=library.colors)
+    before = set(cell.tags)
+    if tags_edit(
+        cell,
+        small=True,
+        fit=True,
+        field_width=64,
+        hint_text="+ tag",
+        on_hover=True,
+        dropdown=True,
+        suggestions=list(library_state["ids"]),
+        muted=inherited,
+        id=f"tree tags {path}",
+    ):
+        ids = library_state["ids"]
+        now = set(cell.tags)
+        for added in now - before:
+            tags.tag(path, create_tag_path(split_tag_path(added)))
+        for removed in before - now:
+            if removed in ids:
+                tags.untag(path, ids[removed])
+        store_colors(cell)
 
 
 def matching_tags(parts):
@@ -1802,6 +1848,12 @@ def settings_menu():
     choices("Accent", list(accents.items()), accent_name.value, set_accent_name)
     separator()
     choices("Onglets", [(False, "Classiques"), (True, "En pilule")], pill_tabs.value, set_tab_style)
+    if not MACOS:
+        separator()
+        before_blue = blue_folders.value
+        toggle_value(blue_folders, "Dossiers bleus")
+        if blue_folders.value != before_blue:
+            set_blue(blue_folders.value)
     separator()
     before_layout = unified.value
     toggle_value(unified, "Disposition unifiée")
@@ -1829,9 +1881,6 @@ def sidebar_bottom():
     def row():
         image(svg("drive"), size=16, tint=icon_tint())
         weak(f"{usage.free / 1e9:.0f} Go libres")
-        add_space(max(available_width() - THEME_W, 4))
-        # light, dark or the theme of the system, at the right like the settings of the Claude app
-        theme_control()
 
     horizontal_centered(row)
 
@@ -1920,10 +1969,10 @@ def drives():
 widths = {
     "view": 130,
     "panes": 60,
-    "count": 110,
-    "dock": 50,
+    "count": 230,
+    "dock": 170,
+    "edit": 41,  # the "…" that ends the path bar, with its spacing (40.1 measured)
 }
-THEME_W = 116  # the width of the theme control: three icons in a segmented control
 
 
 def measure(key, draw, last=False):
@@ -1935,13 +1984,14 @@ def measure(key, draw, last=False):
     if last:
         add_space(-8)  # takes back the spacing a row adds after its last thing
     after = available_width()
-    taken = before - after if after > 0.5 else before + 8
+    # when it did not fit, the width is only ever made larger: guessing it from the room left
+    # (before + 8) would go under the real one and back at every frame
+    taken = before - after if after > 0.5 else max(before + 8, widths[key])
     if abs(taken - widths[key]) > 0.5:
         widths[key] = taken
         context[0].request_repaint()  # the next frame is laid out with the new width
 
 
-EDIT_BUTTON = 34  # the room of the "…" that ends the path: the button and its spacing
 SLACK = 1  # room kept in a row, to see that what is at its right grew
 SEARCH_WIDTH, SEARCH_MIN = (
     240,
@@ -2097,6 +2147,25 @@ def recent_panel():
             vertical(text)
 
         tooltip(str(path).replace(str(HOME), "~"), lambda row=row: horizontal(row))
+
+
+def tags_value(path):
+    """the Tags column as a text, to filter and sort it"""
+    sync_library()
+    return " ".join("/".join(tag_path(tag["id"])) for tag, how in tags_of(path) if how != "parent")
+
+
+def opened_value(path):
+    """the Last Opened column as a date, to filter and sort it"""
+    return opened_data()["dates"].get(tag_key(Path(path)))
+
+
+def noted_value(path):
+    return "Yes" if tag_key(Path(path)) in tag_data()["noted"] else "No"
+
+
+def protected_value(path):
+    return "Yes" if pdf_cell_info(path)[1] else "No"
 
 
 def note_cell(path):
@@ -2273,7 +2342,10 @@ def content():
         scroll_area_both(
             lambda: file_tree_view(
                 tree,
-                extra_columns=[("Tags", TAGS_COLUMN, tags_cell), ("Last Opened", OPENED_COLUMN, opened_cell)],
+                extra_columns=[
+                    ("Tags", TAGS_COLUMN, tags_cell, {"type": "text", "value": tags_value}),
+                    ("Last Opened", OPENED_COLUMN, opened_cell, {"type": "date", "value": opened_value}),
+                ],
                 context_menu=view_menu,
             )
         )
@@ -2284,11 +2356,11 @@ def content():
             # columns drawn by the Finder: the notes, and the tags as in the tree (editable on the
             # selected row)
             extra_columns=[
-                ("Notes", 50, note_cell),
-                ("Pages", 55, pages_cell),
-                ("Prot.", 45, protected_cell),
-                ("Tags", TAGS_COLUMN, tags_cell),
-                ("Last Opened", OPENED_COLUMN, opened_cell),
+                ("Notes", 50, note_cell, {"type": "choice", "value": noted_value}),
+                ("Pages", 55, pages_cell, {"type": "number", "value": lambda p: pdf_cell_info(p)[0]}),
+                ("Prot.", 45, protected_cell, {"type": "choice", "value": protected_value}),
+                ("Tags", TAGS_COLUMN, tags_cell, {"type": "text", "value": tags_value}),
+                ("Last Opened", OPENED_COLUMN, opened_cell, {"type": "date", "value": opened_value}),
             ],
             context_menu=view_menu,
         )
@@ -3005,6 +3077,14 @@ ACTIONS = [
         lambda: set_hidden(False),
     ),
     ("Affichage", "Modifier le chemin", "open", "Cmd+L", lambda: True, edit_path),
+    (
+        "Affichage",
+        "Dossiers bleus",
+        "folder",
+        None,
+        lambda: not MACOS,
+        lambda: set_blue(not blue_folders.value),
+    ),
     ("Affichage", "Thème clair", "gear", None, lambda: True, lambda: set_theme(LIGHT)),
     ("Affichage", "Thème sombre", "gear", None, lambda: True, lambda: set_theme(DARK)),
     (
@@ -3342,13 +3422,19 @@ def path_bar():
         else:
             path_breadcrumb(
                 here,
-                max_width=available_width() - widths[key] - SLACK - 8 - EDIT_BUTTON,
+                max_width=available_width() - widths[key] - SLACK - 8 - widths["edit"],
                 on_click=go_or_select,
                 context_menu=path_menu,
             )
             # the last element of the path: its full text, to type or paste a path
+            before_edit = available_width()
             if small_button_clicked("…"):
                 edit_path()
+            # the button and its spacing, as drawn: learned, it depends on the font and the style
+            drawn = before_edit - available_width()
+            if drawn > 0.5 and abs(drawn - widths["edit"]) > 0.5:
+                widths["edit"] = drawn
+                context[0].request_repaint()
         # no minimum: when the breadcrumb takes all its max_width, what is left is exactly the width
         # of the right side; a few more points would push it out, measure() would widen it, the
         # breadcrumb shrink, and the row would go back and forth at every frame
@@ -3358,6 +3444,9 @@ def path_bar():
             if with_text:
                 weak(text)
                 add_space(4)
+            # light, dark or the theme of the system, between the count and the toggle of the docks
+            theme_control()
+            add_space(4)
             if image_button_clicked(
                 svg("dock"), size=16, tint=toggle_tint(show_dock.value), selected=show_dock.value
             ):
@@ -3553,6 +3642,7 @@ if __name__ == "__main__":
         import ctypes
 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+    set_blue_folders(blue_folders.value)  # restore() changes it again when the user chose otherwise
     run_native(
         "Finder",
         update_func,

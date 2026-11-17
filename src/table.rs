@@ -122,6 +122,22 @@ fn table_builder<'a>(
 ///     the contents or "remainder" for the rest of the width. Default fits the contents, the last
 ///     column takes the rest
 ///
+///     view (TableView): the state of the table. With it the header is interactive: a click on a
+///         title sorts (again to reverse), a drag on a title moves the column, a drag on its border
+///         resizes it, the funnel filters it and a right click pins it at the left or at the right
+///         (the columns that are not pinned scroll horizontally). `selected` then holds the index
+///         of the row in `rows`, whatever the sort and the filters. Widths are numbers or None
+///
+///     types (list[str]): with `view`, the type of the data of each column: "text" (default),
+///         "number" (sorted by value, filtered by a minimum and a maximum, "10 KB" is understood),
+///         "date" (YYYY-MM-DD) or "choice" (filtered by the values kept)
+///
+///     sortable (bool): with `view`, a click on a title sorts. Default is True
+///
+///     pinnable (bool): with `view`, the right click on a title offers to pin the column. Default is True
+///
+///     reorderable, filterable (bool): with `view`, the columns can be moved and filtered. Default is True
+///
 /// Example::
 ///
 ///     selected = Int(-1)
@@ -151,6 +167,10 @@ unsafe fn table(
     }
 
     let ui = current_ui(&UI)?;
+    if let Some(view) = kwargs.map(|k| k.get_item("view")).transpose()?.flatten().filter(|v| !v.is_none()) {
+        let view = view.cast::<crate::table_view::TableView>().map_err(PyErr::from)?;
+        return crate::table_view::draw(ui, view, &headers, &rows, num_columns, &mut selected, kwargs);
+    }
     let min_width = natural_width(kwargs)?;
     in_clipped_width(ui, min_width, |ui| {
     let row_height = ui.spacing().interact_size.y;
