@@ -207,6 +207,24 @@ if dropped and sorted(dropped) == sorted(dragged_files()):
 ```
 
 
+## `system_modifiers()`
+
+The modifier keys held now, read from the system. Unlike ``modifiers`` it is right while files
+are dragged, when the window gets no keyboard event: it is what decides if a drop copies or
+moves. ``command`` is the Command key on macOS and Ctrl elsewhere; ``alt`` is Option on macOS.
+
+**Returns**
+
+- `dict`: the keys shift, ctrl, alt and command, each a bool
+
+**Example:**
+
+```python
+if dropped_files():
+    copy = system_modifiers()["alt"]  # Option copies on a same disk, on macOS
+```
+
+
 ## `hovered_files()`
 
 The files being dragged over the window, from the Finder (the Explorer or another application),

@@ -36,6 +36,51 @@ fn start_file_drag(paths: Vec<String>) -> bool {
     start_drag(&paths)
 }
 
+/// The modifier keys held now, read from the system. Unlike ``modifiers`` it is right while files
+/// are dragged, when the window gets no keyboard event: it is what decides if a drop copies or
+/// moves. ``command`` is the Command key on macOS and Ctrl elsewhere; ``alt`` is Option on macOS.
+///
+/// Returns:
+///     dict: the keys shift, ctrl, alt and command, each a bool
+///
+/// Example::
+///
+///     if dropped_files():
+///         copy = system_modifiers()["alt"]  # Option copies on a same disk, on macOS
+#[pyfunction]
+unsafe fn system_modifiers(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyDict>> {
+    let dict = pyo3::types::PyDict::new(py);
+    let (shift, ctrl, alt, command) = match held_modifiers() {
+        Some(held) => held,
+        None => {
+            let held = panel_parent_ui(&UI)?.ctx().input(|i| i.modifiers);
+            (held.shift, held.ctrl, held.alt, held.command)
+        }
+    };
+    dict.set_item("shift", shift)?;
+    dict.set_item("ctrl", ctrl)?;
+    dict.set_item("alt", alt)?;
+    dict.set_item("command", command)?;
+    Ok(dict)
+}
+
+#[cfg(target_os = "macos")]
+fn held_modifiers() -> Option<(bool, bool, bool, bool)> {
+    use objc2_app_kit::{NSEvent, NSEventModifierFlags as Flags};
+    let flags = NSEvent::modifierFlags_class();
+    Some((
+        flags.contains(Flags::Shift),
+        flags.contains(Flags::Control),
+        flags.contains(Flags::Option),
+        flags.contains(Flags::Command),
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn held_modifiers() -> Option<(bool, bool, bool, bool)> {
+    None
+}
+
 thread_local! {
     // the files of the last drag started by this window
     static LAST_DRAG: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -244,6 +289,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(start_file_drag, m)?)?;
     m.add_function(wrap_pyfunction!(dropped_files, m)?)?;
     m.add_function(wrap_pyfunction!(dragged_files, m)?)?;
+    m.add_function(wrap_pyfunction!(system_modifiers, m)?)?;
     m.add_function(wrap_pyfunction!(hovered_files, m)?)?;
     Ok(())
 }

@@ -31,7 +31,7 @@ from finder_tags import TagStore
 from finder_tags import key as tag_key
 from pyegui import (
     RGB,
-    dragged_files,
+    system_modifiers,
     dropped_files,
     hovered_files,
     Backdrop,
@@ -2336,7 +2336,9 @@ def content():
     if drop_job["running"] > 0:
         copy_progress()
     elif hovered_files():
-        colored_label(ACCENTS[accent_name.value], f"Drop to copy into {drop_folder().name or drop_folder()}")
+        folder = drop_folder()
+        verb = "move" if drop_operation([Path(p) for p in hovered_files()], folder) == "move" else "copy"
+        colored_label(ACCENTS[accent_name.value], f"Drop to {verb} into {folder.name or folder}")
     tag_header()
     if not listing_here() or (search.value and not visible_entries()):
         weak("No items" if not search.value else f"No items match “{search.value}”")
@@ -2531,36 +2533,69 @@ def copy_counting(source, target):
     shutil.copystat(source, target)
 
 
+def same_volume(a, b):
+    """True if two paths are on the same disk (the same volume)"""
+    try:
+        return os.stat(a).st_dev == os.stat(b).st_dev
+    except OSError:
+        return False
+
+
+def drop_operation(sources, folder):
+    """"move" or "copy" for files dropped on a folder, by the usual rules of the file managers. On the
+    same volume a drop moves, and Option (macOS) or Ctrl (Windows) copies. On two volumes it is the
+    contrary: a drop copies, and Cmd (macOS) or Shift (Windows) moves"""
+    held = system_modifiers()
+    mac = sys.platform == "darwin"
+    flip = held["command"] if mac else held["shift"]  # asks to move whatever the volumes
+    copy = held["alt"] if mac else held["ctrl"]  # asks to copy whatever the volumes
+    if sources and all(same_volume(s, folder) for s in sources):
+        return "copy" if copy else "move"
+    return "move" if flip else "copy"
+
+
+def move_counting(source, target):
+    """moves a file or a folder: a rename on the same volume, else a copy that moves the bytes
+    counted by the bar, then the source is removed"""
+    if same_volume(source, target.parent):
+        size = tree_size(source)
+        shutil.move(source, target)
+        drop_job["done"] += size
+        return
+    copy_counting(source, target)
+    shutil.rmtree(source) if source.is_dir() else source.unlink()
+
+
 def receive_drops():
-    """files dropped from the Finder of the system: copied into the folder shown, in a thread (a big
-    file would freeze the window), a folder dropped on its own parent is skipped. The way out is the
-    drag of the views, which start a drag of the selection to the Finder (drag_out)"""
-    # a folder of the list or of the icons under the pointer takes the files (the value of the last
-    # frame, drawn while the files hovered), else the folder shown
+    """files dropped on the window, from the Finder or from the views of this window: moved or copied
+    into the folder under the pointer (else the folder shown), by drop_operation. It runs in a thread
+    (a big file would freeze the window). A folder dropped on its own parent or on itself is skipped.
+    The way out is the drag of the views, which start a drag of the selection to the Finder
+    (drag_out)"""
+    # a folder of the views under the pointer takes the files (the value of the last frame, drawn
+    # while the files hovered), else the folder shown
     folder = drop_folder()
     dropped = [Path(p) for p in dropped_files()]
-    # the files of a drag started by this window are moved, the ones of another app are copied
-    internal = bool(dropped) and sorted(map(str, dropped)) == sorted(dragged_files())
     sources = [s for s in dropped if s.exists() and s.parent != folder and s != folder and s not in folder.parents]
     if sources:
         if not drop_job["running"]:
             drop_job["total"] = drop_job["done"] = 0
         drop_job["running"] += len(sources)
+        move = drop_operation(sources, folder) == "move"  # decided now, with the keys held at the drop
 
         def work():
             for source in sources:
                 try:
                     drop_job["total"] += tree_size(source)
                     target = unique(folder / source.name)
-                    if internal:
-                        shutil.move(source, target)
-                        drop_job["done"] += tree_size(target)
+                    if move:
+                        move_counting(source, target)
                         refresh(source.parent)
                     else:
                         copy_counting(source, target)
                     drop_job["copied"].append((folder, target))
                 except Exception as error:  # whatever happens, the count must go down
-                    print(f"drop: {source} not copied: {error}", file=sys.stderr)
+                    print(f"drop: {source} not dropped: {error}", file=sys.stderr)
                 finally:
                     drop_job["running"] -= 1
 

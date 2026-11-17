@@ -101,7 +101,7 @@ THEMES = [
      "Shortcuts are read with `key_pressed`; what the user did to a widget is read from its "
      "`Response` or from the value the function returns.",
      ["key_pressed", "typed_text", "modifiers", "pointer_pos", "pointer_pressed", "ui_contains_pointer", "interactive", "draw_rect",
-      "dnd_drag_source", "dnd_drop_zone", "dropped_files", "dragged_files", "hovered_files", "start_file_drag"]),
+      "dnd_drag_source", "dnd_drop_zone", "dropped_files", "dragged_files", "system_modifiers", "hovered_files", "start_file_drag"]),
     ("styling", "Themes, colors, fonts and glass",
      "Everything that changes the look is a method of the `Context`, given to the update "
      "function of the top level. Call them from the first frame; `reset_style` goes back to the "
