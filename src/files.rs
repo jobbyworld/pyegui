@@ -545,6 +545,8 @@ pub(crate) struct FolderView {
     anchor: Option<PathBuf>,
     cursor: Option<PathBuf>,
     activated: Vec<PathBuf>,
+    /// the folder under the pointer while files are dragged over the view or dropped on it
+    drop_target: Option<PathBuf>,
     /// the items shown at the last frame, in their order
     shown: Vec<PathBuf>,
     scroll_to: Option<PathBuf>,
@@ -590,6 +592,7 @@ impl FolderView {
             anchor: None,
             cursor: None,
             activated: vec![],
+            drop_target: None,
             shown: vec![],
             scroll_to: None,
             focus: None,
@@ -1060,6 +1063,7 @@ fn draw_folder_in(
     let id = ui.make_persistent_id(&view.id);
     let ctx = ui.ctx().clone();
     view.activated.clear();
+    view.drop_target = None;
     view.folder_changed = false;
     let mut menus = Menus::new();
 
@@ -1145,10 +1149,28 @@ fn draw_folder_in(
             }
 
             let (fill, selected_text) = selection_colors(ui, focused);
+            // files from the Finder over the view: the system gives the pointer, the window does not
+            let files_over = ctx.input(|i| !i.raw.hovered_files.is_empty() || !i.raw.dropped_files.is_empty());
+            let pointer = if files_over { crate::native_dnd::native_pointer() } else { None };
+            if files_over {
+                ctx.request_repaint(); // the window gets no pointer event while the files are dragged
+            }
             for i in shape.visible(viewport, n) {
                 let e = &entries[i];
                 let rect = shape.item_rect(i, width).translate(origin.to_vec2());
-                let response = ui.interact(rect.shrink(1.0), id.with(("item", &e.path)), Sense::click());
+                let sense = if opts.drag_out { Sense::click_and_drag() } else { Sense::click() };
+                let response = ui.interact(rect.shrink(1.0), id.with(("item", &e.path)), sense);
+                if response.drag_started() {
+                    // the item dragged is part of what goes out, with the rest of the selection
+                    if !view.selected.contains(&e.path) {
+                        view.select_only(e.path.clone());
+                    }
+                    ui.memory_mut(|m| m.request_focus(id));
+                    let paths: Vec<PathBuf> = view.selected.iter().cloned().collect();
+                    if crate::native_dnd::start_drag(&paths) {
+                        ui.ctx().stop_dragging(); // the mouse is the drag session's now
+                    }
+                }
                 if response.clicked() || response.secondary_clicked() {
                     ui.memory_mut(|m| m.request_focus(id));
                 }
@@ -1161,6 +1183,12 @@ fn draw_folder_in(
                 if response.double_clicked() {
                     view.select_only(e.path.clone());
                     view.activate(vec![e.path.clone()]);
+                }
+                let drop_here = e.is_dir
+                    && files_over
+                    && pointer.is_some_and(|p| rect.contains(p) && ui.clip_rect().contains(p));
+                if drop_here {
+                    view.drop_target = Some(e.path.clone());
                 }
                 let selected = view.selected.contains(&e.path);
                 let badges = hooks.badges(&e.path);
@@ -1193,6 +1221,11 @@ fn draw_folder_in(
                     }
                 }
                 ui.set_opacity(opacity);
+                if drop_here {
+                    // after the row: its background would hide the frame
+                    ui.painter().rect_filled(rect, 4.0, ui.visuals().selection.bg_fill.gamma_multiply(0.25));
+                    ui.painter().rect_stroke(rect.shrink(1.0), 4.0, Stroke::new(2.0, ui.visuals().selection.bg_fill), egui::StrokeKind::Inside);
+                }
             }
             if view.folder_changed {
                 return; // a double click entered a folder
@@ -1364,6 +1397,14 @@ macro_rules! folder_view_methods {
             #[getter]
             fn activated(&self) -> Vec<String> {
                 self.view.activated.iter().map(|p| to_str(p)).collect()
+            }
+
+            /// The folder of the view under the pointer while files are dragged over it from the Finder
+            /// (``hovered_files``) or on the frame they are dropped on it (``dropped_files``), else
+            /// None. The folder is drawn framed while files hover it
+            #[getter]
+            fn drop_target(&self) -> Option<String> {
+                self.view.drop_target.as_ref().map(|p| to_str(p))
             }
 
             /// Paths of the items shown at the last frame, in their order
@@ -1695,6 +1736,9 @@ fn parse_columns(kwargs: Option<&Bound<'_, PyDict>>, extras: usize) -> PyResult<
 ///
 ///     reorderable (bool): the title of a column can be dragged to another place. Default is True
 ///
+///     drag_out (bool): a drag of the selection starts a drag of the files to the Finder (the Explorer,
+///         another application), see start_file_drag. Default is True
+///
 ///     filterable (bool): the funnel of the header opens the filter of the column. Default is True
 ///
 ///     badges (callable): called with the path of each row shown, returns a list of colors drawn
@@ -1850,6 +1894,8 @@ pub(crate) struct FileTreeView {
     pending_open: Vec<(String, bool)>,
     known_dirs: HashSet<String>,
     activated: Vec<String>,
+    /// the folder under the pointer while files are dragged over the tree or dropped on it
+    drop_target: Option<String>,
     focus: Option<bool>,
     keep_focus: bool,
     scroll_to: Option<String>,
@@ -1891,6 +1937,7 @@ impl FileTreeView {
             pending_open: vec![],
             known_dirs: HashSet::new(),
             activated: vec![],
+            drop_target: None,
             focus: None,
             keep_focus: false,
             scroll_to: None,
@@ -1927,6 +1974,14 @@ impl FileTreeView {
     #[getter]
     fn activated(&self) -> Vec<String> {
         self.activated.clone()
+    }
+
+    /// The folder of the tree under the pointer while files are dragged over it from the Finder or
+    /// from the window itself, or on the frame they are dropped on it, else None. The folder is
+    /// drawn framed while files hover it
+    #[getter]
+    fn drop_target(&self) -> Option<String> {
+        self.drop_target.clone()
     }
 
     /// Opens or closes a folder of the tree
@@ -2454,6 +2509,22 @@ fn add_tree_nodes<'a>(
     }
 }
 
+/// The node shown at a row, counting the rows the same way as tree_row
+fn tree_node_at<'a>(nodes: &'a [Node], index: usize, row: &mut usize) -> Option<&'a Node> {
+    for node in nodes {
+        if *row == index {
+            return Some(node);
+        }
+        *row += 1;
+        if let Some(children) = &node.children {
+            if let Some(found) = tree_node_at(children, index, row) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
 /// The row of a node among the rows shown
 fn tree_row(nodes: &[Node], id: &str, row: &mut usize) -> Option<usize> {
     for node in nodes {
@@ -2504,6 +2575,9 @@ fn tree_row(nodes: &[Node], id: &str, row: &mut usize) -> Option<usize> {
 ///     resizable (bool): the border of a column can be dragged. Default is True
 ///
 ///     reorderable (bool): the title of a column can be dragged to another place. Default is True
+///
+///     drag_out (bool): a drag of the selection starts a drag of the files to the Finder (the Explorer,
+///         another application), see start_file_drag. Default is True
 ///
 ///     pinnable (bool): a right click on a title offers to pin the column at the left (after the
 ///         name) or at the right: the other columns then scroll horizontally. Default is True
@@ -2638,15 +2712,36 @@ unsafe fn file_tree_view(py: Python<'_>, view: &Bound<'_, FileTreeView>, kwargs:
     let mut menu_result = Ok(());
     let mut tree = egui_ltreeview::TreeView::new(id)
         .allow_multi_selection(multi_select)
-        .allow_drag_and_drop(false);
+        .allow_drag_and_drop(false); // the tree would draw its own drop markers and panic once the pointer is gone
     if let Some(menu_fun) = &menu {
         tree = tree.fallback_context_menu(|menu_ui, ids: &Vec<String>| {
             menu_result = run_nested_call(menu_ui, menu_fun, (ids.clone(),));
         });
     }
-    let (_, actions) = tree.show_state(ui, &mut state, |builder| {
+    let tree_top = ui.cursor().min;
+    let (tree_response, actions) = tree.show_state(ui, &mut state, |builder| {
         add_tree_nodes(builder, &nodes, &ctx, show_root, activatable_dirs, &hooks, &columns, layout.as_ref(), &date_format)
     });
+
+    // files from the Finder or from the window over the tree: the folder under the pointer takes them
+    let mut drop_target = None;
+    if ctx.input(|i| !i.raw.hovered_files.is_empty() || !i.raw.dropped_files.is_empty()) {
+        ctx.request_repaint(); // the window gets no pointer event while the files are dragged
+        if let Some(p) = crate::native_dnd::native_pointer().filter(|p| ui.clip_rect().contains(*p) && tree_response.rect.x_range().contains(p.x)) {
+            let step = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+            if p.y >= tree_top.y {
+                let index = ((p.y - tree_top.y) / step) as usize;
+                if let Some(node) = tree_node_at(&nodes, index, &mut 0).filter(|n| n.entry.is_dir) {
+                    let top = tree_top.y + index as f32 * step;
+                    let row = Rect::from_min_max(pos2(tree_response.rect.left(), top), pos2(tree_response.rect.right(), top + step - ui.spacing().item_spacing.y));
+                    ui.painter().rect_filled(row, 4.0, ui.visuals().selection.bg_fill.gamma_multiply(0.25));
+                    ui.painter().rect_stroke(row.shrink(1.0), 4.0, Stroke::new(2.0, ui.visuals().selection.bg_fill), egui::StrokeKind::Inside);
+                    drop_target = Some(node.id.clone());
+                }
+            }
+        }
+    }
+    view.borrow_mut().drop_target = drop_target;
 
     if let (Some(slot), Some(layout)) = (slot, &layout) {
         tree_header(ui, id, view, &columns, &headers, &hooks, opts, slot, layout);
@@ -2660,8 +2755,9 @@ unsafe fn file_tree_view(py: Python<'_>, view: &Bound<'_, FileTreeView>, kwargs:
     let mut v = view.borrow_mut();
     v.activated.clear();
     for action in actions {
-        if let Action::Activate(activate) = action {
-            v.activated = activate.selected;
+        match action {
+            Action::Activate(activate) => v.activated = activate.selected,
+            _ => {}
         }
     }
     // a change asked for by the menu wins over the state of this frame
@@ -2669,6 +2765,13 @@ unsafe fn file_tree_view(py: Python<'_>, view: &Bound<'_, FileTreeView>, kwargs:
         state.set_selected(selected);
     }
     v.selected = state.selected().clone();
+    if opts.drag_out && tree_response.drag_started() && !v.selected.is_empty() {
+        // a drag from the row pressed (selected by this press): the selection goes out as files
+        let paths: Vec<PathBuf> = v.selected.iter().map(PathBuf::from).collect();
+        if crate::native_dnd::start_drag(&paths) {
+            ctx.stop_dragging();
+        }
+    }
     let open: HashSet<String> = v
         .known_dirs
         .iter()

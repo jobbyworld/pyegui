@@ -31,6 +31,9 @@ from finder_tags import TagStore
 from finder_tags import key as tag_key
 from pyegui import (
     RGB,
+    dragged_files,
+    dropped_files,
+    hovered_files,
     Backdrop,
     Bool,
     Dock,
@@ -2330,6 +2333,10 @@ def content():
     if reading.value:
         reader()
         return
+    if drop_job["running"] > 0:
+        copy_progress()
+    elif hovered_files():
+        colored_label(ACCENTS[accent_name.value], f"Drop to copy into {drop_folder().name or drop_folder()}")
     tag_header()
     if not listing_here() or (search.value and not visible_entries()):
         weak("No items" if not search.value else f"No items match “{search.value}”")
@@ -2489,6 +2496,92 @@ def paste():
         picked.clear()
         picked.update(map(str, pasted))
         selected.value = anchor.value = str(pasted[-1])
+
+
+def drop_folder():
+    """where the files dropped now would go: the folder of the list or of the icons under the pointer,
+    else the folder shown"""
+    over = {TREE: tree, LIST: files_list, ICONS: files_icons}.get(view.value)
+    return Path(over.drop_target) if over is not None and over.drop_target else current()
+
+
+drop_job = {"running": 0, "total": 0, "done": 0, "copied": []}  # bytes to copy and copied, by a thread
+
+
+def tree_size(path):
+    """the bytes of a file, or of all the files of a folder"""
+    if not path.is_dir():
+        return path.stat().st_size
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file() and not f.is_symlink())
+
+
+def copy_counting(source, target):
+    """copies a file or a folder like shutil.copy2 and copytree, in blocks, adding the bytes copied
+    to drop_job["done"] so that the bar moves while a big file is copied"""
+    if source.is_dir():
+        target.mkdir()
+        for child in source.iterdir():
+            copy_counting(child, target / child.name)
+        shutil.copystat(source, target)
+        return
+    with open(source, "rb") as src, open(target, "wb") as dst:
+        while block := src.read(4 * 1024 * 1024):
+            dst.write(block)
+            drop_job["done"] += len(block)
+    shutil.copystat(source, target)
+
+
+def receive_drops():
+    """files dropped from the Finder of the system: copied into the folder shown, in a thread (a big
+    file would freeze the window), a folder dropped on its own parent is skipped. The way out is the
+    drag of the views, which start a drag of the selection to the Finder (drag_out)"""
+    # a folder of the list or of the icons under the pointer takes the files (the value of the last
+    # frame, drawn while the files hovered), else the folder shown
+    folder = drop_folder()
+    dropped = [Path(p) for p in dropped_files()]
+    # the files of a drag started by this window are moved, the ones of another app are copied
+    internal = bool(dropped) and sorted(map(str, dropped)) == sorted(dragged_files())
+    sources = [s for s in dropped if s.exists() and s.parent != folder and s != folder and s not in folder.parents]
+    if sources:
+        if not drop_job["running"]:
+            drop_job["total"] = drop_job["done"] = 0
+        drop_job["running"] += len(sources)
+
+        def work():
+            for source in sources:
+                try:
+                    drop_job["total"] += tree_size(source)
+                    target = unique(folder / source.name)
+                    if internal:
+                        shutil.move(source, target)
+                        drop_job["done"] += tree_size(target)
+                        refresh(source.parent)
+                    else:
+                        copy_counting(source, target)
+                    drop_job["copied"].append((folder, target))
+                except Exception as error:  # whatever happens, the count must go down
+                    print(f"drop: {source} not copied: {error}", file=sys.stderr)
+                finally:
+                    drop_job["running"] -= 1
+
+        threading.Thread(target=work, daemon=True).start()
+    done = []
+    while drop_job["copied"]:  # pop one by one: the thread appends meanwhile
+        done.append(drop_job["copied"].pop(0))
+    if done:
+        refresh(*{folder for folder, _ in done})
+        if done[-1][0] == current():
+            picked.clear()
+            picked.update(str(t) for f, t in done if f == current())
+            selected.value = anchor.value = str(done[-1][1])
+
+
+def copy_progress():
+    """the bar of the copy of the dropped files, while it runs"""
+    job = drop_job
+    total = max(job["total"], 1)
+    colored_label(ACCENTS[accent_name.value], f"Copying {job['running']} item(s)… {human_size(job['done'])} of {human_size(job['total'])}")
+    progress(min(job["done"] / total, 1.0))
 
 
 def duplicate():
@@ -3571,6 +3664,7 @@ def update_func(ctx):
 
     keyboard()
     action_keys()
+    receive_drops()
     open_requested_panes()  # before the dock is drawn
     collect_activity()
     follow_in_shell()

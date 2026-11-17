@@ -22,6 +22,7 @@ mod layout;
 mod dock;
 mod files;
 mod markdown;
+mod native_dnd;
 mod path;
 mod plot;
 mod style;
@@ -2927,6 +2928,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     tree::register(m)?;
     widgets::register(m)?;
     icons::register(m)?;
+    native_dnd::register(m)?;
     dock::register(m)?;
     plot::register(m)?;
     markdown::register(m)?;

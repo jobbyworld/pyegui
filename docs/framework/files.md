@@ -72,6 +72,11 @@ def update_func(ctx):
   "modified", "size", "kind" or the title of a column of your own). Save and give them back at
   the next run. A column without width has its default one
 
+- `FileListView.drop_target` (attribute): The folder of the view under the pointer while files are dragged over it from the Finder
+
+  (``hovered_files``) or on the frame they are dropped on it (``dropped_files``), else
+  None. The folder is drawn framed while files hover it
+
 - `FileListView.filter` (attribute): Only the items whose name contains this text are shown (without case). Empty shows all.
 
   It is the filter of the column "name"
@@ -178,6 +183,11 @@ def update_func(ctx):
   "modified", "size", "kind" or the title of a column of your own). Save and give them back at
   the next run. A column without width has its default one
 
+- `FileIconView.drop_target` (attribute): The folder of the view under the pointer while files are dragged over it from the Finder
+
+  (``hovered_files``) or on the frame they are dropped on it (``dropped_files``), else
+  None. The folder is drawn framed while files hover it
+
 - `FileIconView.filter` (attribute): Only the items whose name contains this text are shown (without case). Empty shows all.
 
   It is the filter of the column "name"
@@ -283,6 +293,11 @@ def update_func(ctx):
   "modified", "size", "kind" or the title of a column of your own). Save and give them back at
   the next run. A column without width has its default one
 
+- `FileTreeView.drop_target` (attribute): The folder of the tree under the pointer while files are dragged over it from the Finder or
+
+  from the window itself, or on the frame they are dropped on it, else None. The folder is
+  drawn framed while files hover it
+
 - `FileTreeView.filter` (attribute): Only the files whose name contains this text are shown (without case), the folders always.
 
   It is the filter of the column "name"
@@ -340,6 +355,7 @@ in the ui and scrolls; only the visible rows are drawn, so large folders stay fa
 - `extra_columns` (list[tuple]): columns of your own, after the name: a title, a width and a function called with the path of the row inside the cell, to draw it with the usual widgets. They sort and filter when a fourth item, a dict, gives the type of their data and a function that returns the value of a row: {"type": "text" | "number" | "date" | "choice", "value": function(path) -> value}. A date is seconds since 1970 or a datetime. The values are kept for a second (see refresh_columns). The function runs while the view is drawn: it must not read or change the view itself
 - `resizable` (bool): the border of a column can be dragged. Default is True
 - `reorderable` (bool): the title of a column can be dragged to another place. Default is True
+- `drag_out` (bool): a drag of the selection starts a drag of the files to the Finder (the Explorer, another application), see start_file_drag. Default is True
 - `filterable` (bool): the funnel of the header opens the filter of the column. Default is True
 - `badges` (callable): called with the path of each row shown, returns a list of colors drawn as dots at the right end of the name, e.g. the tags of a file
 - `context_menu` (callable): called with the list of paths concerned on a right click, inside a menu: the selection if the item clicked is in it, else the item clicked, and [] on the background. Build the menu in it
@@ -419,6 +435,7 @@ when they are opened and watched while they are open.
 - `header` (bool): draws the header of the columns above the tree, pinned at the top while the tree scrolls. Default is True when there are columns
 - `resizable` (bool): the border of a column can be dragged. Default is True
 - `reorderable` (bool): the title of a column can be dragged to another place. Default is True
+- `drag_out` (bool): a drag of the selection starts a drag of the files to the Finder (the Explorer, another application), see start_file_drag. Default is True
 - `pinnable` (bool): a right click on a title offers to pin the column at the left (after the name) or at the right: the other columns then scroll horizontally. Default is True
 - `filterable` (bool): the funnel of the header opens the filter of the column, which fits its type: a text, a minimum and a maximum, a period, or the values to keep. The folders stay, only the files are filtered. Default is True
 

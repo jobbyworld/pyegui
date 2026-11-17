@@ -357,6 +357,8 @@ pub(crate) struct HeaderOptions {
     pub pinnable: bool,
     pub reorderable: bool,
     pub filterable: bool,
+    /// a drag of items out of the window starts a drag of the files to the Finder
+    pub drag_out: bool,
     /// the columns are at the right end and grow to the left (the tree)
     pub grow_left: bool,
 }
@@ -369,6 +371,7 @@ impl HeaderOptions {
             pinnable: flag("pinnable")?,
             reorderable: flag("reorderable")?,
             filterable: flag("filterable")?,
+            drag_out: flag("drag_out")?,
             grow_left,
         })
     }

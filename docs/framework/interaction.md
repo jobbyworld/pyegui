@@ -168,3 +168,85 @@ def update_func(ctx):
     if dropped is not None:
         basket.append(dropped)
 ```
+
+
+## `dropped_files()`
+
+The files dropped on the window this frame, from the Finder (the Explorer or another
+application). Empty most of the time. The drop is a copy request: it is up to the app to copy
+or move them, see ``hovered_files`` to show where they would go.
+
+**Returns**
+
+- list[str]: the full paths
+
+**Example:**
+
+```python
+for path in dropped_files():
+    shutil.copy(path, current_folder)
+```
+
+
+## `dragged_files()`
+
+The files of the last drag started by this window (``start_file_drag``, the drag of the file
+views). When ``dropped_files`` gives these same files, the drop comes from the window itself:
+the app moves them instead of copying them, as the Finder does inside a disk.
+
+**Returns**
+
+- list[str]: the full paths, empty before a first drag
+
+**Example:**
+
+```python
+dropped = dropped_files()
+if dropped and sorted(dropped) == sorted(dragged_files()):
+    move(dropped, folder)
+```
+
+
+## `hovered_files()`
+
+The files being dragged over the window, from the Finder (the Explorer or another application),
+not dropped yet. Empty when nothing is dragged over the window. It is the moment to show a
+frame or a message "Drop here".
+
+**Returns**
+
+- list[str]: the full paths
+
+**Example:**
+
+```python
+if hovered_files():
+    draw_rect(rect, stroke=(accent, 2))
+```
+
+
+## `start_file_drag(paths)`
+
+Starts a drag of files out of the window, to the Finder or to any application that takes files.
+Call it on the frame a drag starts on an item (``response.drag_started`` of an
+``interactive`` area, or a drag of the file views with ``drag_out=True``): the mouse button has
+to be down. The drag goes on by itself, with the icons of the files under the pointer, and the
+drop is done by the receiver (a copy in the Finder, a move with Cmd held). The window gets no
+pointer event until the mouse button is released. Works on macOS, returns False elsewhere or if
+there is nothing to drag.
+
+**Args**
+
+- `paths` (list[str]): the files and folders to drag
+
+**Returns**
+
+- `bool`: True if the drag started
+
+**Example:**
+
+```python
+r = interactive("row", lambda: label(name))
+if r.drag_started:
+    start_file_drag([path])
+```
