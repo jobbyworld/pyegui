@@ -2719,6 +2719,7 @@ unsafe fn file_tree_view(py: Python<'_>, view: &Bound<'_, FileTreeView>, kwargs:
         });
     }
     let tree_top = ui.cursor().min;
+    let selected_before = state.selected().clone(); // the press of a drag selects the row pressed alone
     let (tree_response, actions) = tree.show_state(ui, &mut state, |builder| {
         add_tree_nodes(builder, &nodes, &ctx, show_root, activatable_dirs, &hooks, &columns, layout.as_ref(), &date_format)
     });
@@ -2764,10 +2765,21 @@ unsafe fn file_tree_view(py: Python<'_>, view: &Bound<'_, FileTreeView>, kwargs:
     if let Some(selected) = v.pending_selected.clone() {
         state.set_selected(selected);
     }
+    let mut dragged: Vec<String> = vec![];
+    if opts.drag_out && tree_response.drag_started() {
+        let now = state.selected().clone();
+        // a drag from a row of the selection takes the whole selection: the tree, which takes the
+        // start of the drag for a click, selected the row pressed alone
+        if now.len() == 1 && selected_before.len() > 1 && selected_before.contains(&now[0]) {
+            state.set_selected(selected_before.clone());
+            dragged = selected_before;
+        } else {
+            dragged = now;
+        }
+    }
     v.selected = state.selected().clone();
-    if opts.drag_out && tree_response.drag_started() && !v.selected.is_empty() {
-        // a drag from the row pressed (selected by this press): the selection goes out as files
-        let paths: Vec<PathBuf> = v.selected.iter().map(PathBuf::from).collect();
+    if !dragged.is_empty() {
+        let paths: Vec<PathBuf> = dragged.iter().map(PathBuf::from).collect();
         if crate::native_dnd::start_drag(&paths) {
             ctx.stop_dragging();
         }

@@ -92,7 +92,8 @@ THEMES = [
      "next frame. Give the same watcher to all the views of an app. `path_breadcrumb` and "
      "`path_combo` show where a folder is and go to one of its ancestors.",
      ["FileListView", "FileIconView", "FileTreeView", "file_list_view", "file_icon_view",
-      "file_tree_view", "FileWatcher", "path_breadcrumb", "path_combo"]),
+      "file_tree_view", "FileWatcher", "path_breadcrumb", "path_combo",
+      "FileTransfer", "drop_operation", "same_volume"]),
     ("images", "Images and icons",
      "Images are given as uri: `file://` followed by a path, or an `http(s)` url. SVG icons stay "
      "sharp at any size and can be tinted.",

@@ -30,6 +30,7 @@ mod table;
 mod table_view;
 mod tags;
 mod terminal;
+mod transfer;
 mod tree;
 mod watcher;
 mod widgets;
@@ -2929,6 +2930,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     widgets::register(m)?;
     icons::register(m)?;
     native_dnd::register(m)?;
+    transfer::register(m)?;
     dock::register(m)?;
     plot::register(m)?;
     markdown::register(m)?;

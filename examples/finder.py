@@ -31,7 +31,8 @@ from finder_tags import TagStore
 from finder_tags import key as tag_key
 from pyegui import (
     RGB,
-    system_modifiers,
+    FileTransfer,
+    drop_operation,
     dropped_files,
     hovered_files,
     Backdrop,
@@ -2333,11 +2334,11 @@ def content():
     if reading.value:
         reader()
         return
-    if drop_job["running"] > 0:
+    if transfer.running:
         copy_progress()
     elif hovered_files():
         folder = drop_folder()
-        verb = "move" if drop_operation([Path(p) for p in hovered_files()], folder) == "move" else "copy"
+        verb = drop_operation(hovered_files(), str(folder))  # "move" or "copy", by the keys held now
         colored_label(ACCENTS[accent_name.value], f"Drop to {verb} into {folder.name or folder}")
     tag_header()
     if not listing_here() or (search.value and not visible_entries()):
@@ -2500,123 +2501,47 @@ def paste():
         selected.value = anchor.value = str(pasted[-1])
 
 
-def drop_folder():
-    """where the files dropped now would go: the folder of the list or of the icons under the pointer,
-    else the folder shown"""
-    over = {TREE: tree, LIST: files_list, ICONS: files_icons}.get(view.value)
-    return Path(over.drop_target) if over is not None and over.drop_target else current()
-
-
-drop_job = {"running": 0, "total": 0, "done": 0, "copied": []}  # bytes to copy and copied, by a thread
-
-
-def tree_size(path):
-    """the bytes of a file, or of all the files of a folder"""
-    if not path.is_dir():
-        return path.stat().st_size
-    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file() and not f.is_symlink())
-
-
-def copy_counting(source, target):
-    """copies a file or a folder like shutil.copy2 and copytree, in blocks, adding the bytes copied
-    to drop_job["done"] so that the bar moves while a big file is copied"""
-    if source.is_dir():
-        target.mkdir()
-        for child in source.iterdir():
-            copy_counting(child, target / child.name)
-        shutil.copystat(source, target)
-        return
-    with open(source, "rb") as src, open(target, "wb") as dst:
-        while block := src.read(4 * 1024 * 1024):
-            dst.write(block)
-            drop_job["done"] += len(block)
-    shutil.copystat(source, target)
-
-
-def same_volume(a, b):
-    """True if two paths are on the same disk (the same volume)"""
-    try:
-        return os.stat(a).st_dev == os.stat(b).st_dev
-    except OSError:
-        return False
-
-
-def drop_operation(sources, folder):
-    """"move" or "copy" for files dropped on a folder, by the usual rules of the file managers. On the
-    same volume a drop moves, and Option (macOS) or Ctrl (Windows) copies. On two volumes it is the
-    contrary: a drop copies, and Cmd (macOS) or Shift (Windows) moves"""
-    held = system_modifiers()
-    mac = sys.platform == "darwin"
-    flip = held["command"] if mac else held["shift"]  # asks to move whatever the volumes
-    copy = held["alt"] if mac else held["ctrl"]  # asks to copy whatever the volumes
-    if sources and all(same_volume(s, folder) for s in sources):
-        return "copy" if copy else "move"
-    return "move" if flip else "copy"
-
-
-def move_counting(source, target):
-    """moves a file or a folder: a rename on the same volume, else a copy that moves the bytes
-    counted by the bar, then the source is removed"""
-    if same_volume(source, target.parent):
-        size = tree_size(source)
-        shutil.move(source, target)
-        drop_job["done"] += size
-        return
-    copy_counting(source, target)
-    shutil.rmtree(source) if source.is_dir() else source.unlink()
+transfer = FileTransfer()  # copies and moves the files dropped on the window, in a thread
 
 
 def receive_drops():
     """files dropped on the window, from the Finder or from the views of this window: moved or copied
-    into the folder under the pointer (else the folder shown), by drop_operation. It runs in a thread
-    (a big file would freeze the window). A folder dropped on its own parent or on itself is skipped.
-    The way out is the drag of the views, which start a drag of the selection to the Finder
-    (drag_out)"""
+    into the folder under the pointer (else the folder shown) by the rules of the file managers
+    (drop_operation), in a thread with a progress (FileTransfer). The way out is the drag of the
+    views, which start a drag of the selection to the Finder (drag_out)"""
     # a folder of the views under the pointer takes the files (the value of the last frame, drawn
     # while the files hovered), else the folder shown
     folder = drop_folder()
-    dropped = [Path(p) for p in dropped_files()]
-    sources = [s for s in dropped if s.exists() and s.parent != folder and s != folder and s not in folder.parents]
+    sources = [p for p in dropped_files() if Path(p).parent != folder]
     if sources:
-        if not drop_job["running"]:
-            drop_job["total"] = drop_job["done"] = 0
-        drop_job["running"] += len(sources)
-        move = drop_operation(sources, folder) == "move"  # decided now, with the keys held at the drop
-
-        def work():
-            for source in sources:
-                try:
-                    drop_job["total"] += tree_size(source)
-                    target = unique(folder / source.name)
-                    if move:
-                        move_counting(source, target)
-                        refresh(source.parent)
-                    else:
-                        copy_counting(source, target)
-                    drop_job["copied"].append((folder, target))
-                except Exception as error:  # whatever happens, the count must go down
-                    print(f"drop: {source} not dropped: {error}", file=sys.stderr)
-                finally:
-                    drop_job["running"] -= 1
-
-        threading.Thread(target=work, daemon=True).start()
-    done = []
-    while drop_job["copied"]:  # pop one by one: the thread appends meanwhile
-        done.append(drop_job["copied"].pop(0))
+        # decided now, with the keys held at the drop
+        transfer.start(sources, str(folder), operation=drop_operation(sources, str(folder)))
+    for error in transfer.errors():
+        print(f"drop: {error}", file=sys.stderr)
+    done = transfer.finished()  # each item once
     if done:
-        refresh(*{folder for folder, _ in done})
-        if done[-1][0] == current():
+        refresh(*{Path(f) for f, _ in done}, *{Path(p).parent for p in sources})
+        shown = [Path(t) for f, t in done if Path(f) == current()]
+        if shown:
             picked.clear()
-            picked.update(str(t) for f, t in done if f == current())
-            selected.value = anchor.value = str(done[-1][1])
+            picked.update(map(str, shown))
+            selected.value = anchor.value = str(shown[-1])
 
 
 def copy_progress():
-    """the bar of the copy of the dropped files, while it runs"""
-    job = drop_job
-    total = max(job["total"], 1)
-    colored_label(ACCENTS[accent_name.value], f"Copying {job['running']} item(s)… {human_size(job['done'])} of {human_size(job['total'])}")
-    progress(min(job["done"] / total, 1.0))
+    """the bar of the files dropped, while they are copied or moved"""
+    colored_label(
+        ACCENTS[accent_name.value],
+        f"{transfer.running} item(s)… {human_size(transfer.done)} of {human_size(transfer.total)}",
+    )
+    progress(transfer.progress)
+
+
+def drop_folder():
+    """where the files dropped now would go: the folder of the views under the pointer, else the
+    folder shown"""
+    over = {TREE: tree, LIST: files_list, ICONS: files_icons}.get(view.value)
+    return Path(over.drop_target) if over is not None and over.drop_target else current()
 
 
 def duplicate():

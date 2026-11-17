@@ -65,7 +65,7 @@ unsafe fn system_modifiers(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::Py
 }
 
 #[cfg(target_os = "macos")]
-fn held_modifiers() -> Option<(bool, bool, bool, bool)> {
+pub(crate) fn held_modifiers() -> Option<(bool, bool, bool, bool)> {
     use objc2_app_kit::{NSEvent, NSEventModifierFlags as Flags};
     let flags = NSEvent::modifierFlags_class();
     Some((
@@ -77,7 +77,7 @@ fn held_modifiers() -> Option<(bool, bool, bool, bool)> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn held_modifiers() -> Option<(bool, bool, bool, bool)> {
+pub(crate) fn held_modifiers() -> Option<(bool, bool, bool, bool)> {
     None
 }
 
