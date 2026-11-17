@@ -3813,6 +3813,7 @@ dependencies = [
  "egui_tiles",
  "image",
  "jiff",
+ "kurbo 0.13.1",
  "log",
  "mermaid-svg",
  "notify",

@@ -128,7 +128,7 @@ pub(crate) fn names_encryption(bytes: &[u8]) -> bool {
 
 /// PDFDocEncoding is Latin-1 for the text we meet; UTF-16BE with a BOM and UTF-8 are the others.
 /// Control characters become spaces, the text is cut and trimmed; `None` when nothing is left.
-fn decode_text(bytes: &[u8]) -> Option<String> {
+pub(crate) fn decode_text(bytes: &[u8]) -> Option<String> {
     let text = if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
         let units: Vec<u16> = rest.chunks_exact(2).map(|p| u16::from_be_bytes([p[0], p[1]])).collect();
         String::from_utf16_lossy(&units)
@@ -449,5 +449,40 @@ mod tests {
         assert!(info.error.is_some() && info.pages.is_none() && !info.needs_password);
         let missing = info_of_path("Z:/does/not/exist.pdf");
         assert!(missing.error.is_some());
+    }
+}
+
+/// A small PDF built by hand for the tests of the readers: two pages (the first has two lines of text, an
+/// internal link, a web link), and one bookmark that goes to the second page.
+#[cfg(test)]
+pub(crate) mod sample {
+    pub(crate) fn pdf() -> Vec<u8> {
+        let stream = |body: &str| format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len());
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R /Outlines 7 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 9 0 R >> >> /Annots [10 0 R 11 0 R] >>".to_owned(),
+            stream("BT /F1 24 Tf 72 700 Td (Hello world) Tj 0 -40 Td (Second line) Tj ET"),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 6 0 R /Resources << /Font << /F1 9 0 R >> >> >>".to_owned(),
+            stream("BT /F1 24 Tf 72 700 Td (Chapter two) Tj ET"),
+            "<< /Type /Outlines /First 8 0 R /Last 8 0 R /Count 1 >>".to_owned(),
+            "<< /Title (Chapter) /Parent 7 0 R /Dest [5 0 R /XYZ 0 500 0] >>".to_owned(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+            "<< /Type /Annot /Subtype /Link /Rect [72 690 200 720] /Border [0 0 0] /Dest [5 0 R /XYZ 0 500 0] >>".to_owned(),
+            "<< /Type /Annot /Subtype /Link /Rect [72 650 200 680] /Border [0 0 0] /A << /S /URI /URI (https://example.com) >> >>".to_owned(),
+        ];
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, object) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for offset in offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+        out
     }
 }

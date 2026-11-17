@@ -27,6 +27,10 @@ mod path;
 #[cfg(feature = "pdf")]
 mod pdf;
 #[cfg(feature = "pdf")]
+mod pdf_nav;
+#[cfg(feature = "pdf")]
+mod pdf_text;
+#[cfg(feature = "pdf")]
 mod pdf_view;
 mod plot;
 mod style;
