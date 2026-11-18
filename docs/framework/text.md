@@ -94,7 +94,7 @@ Shows source code with syntax highlighting and line numbers, in a scroll area. T
 selected and copied.
 
 Highlighted languages: Python, JavaScript and TypeScript, Rust, shell (bash, zsh, and
-PowerShell as shell), C and C++, JSON, SQL, TOML and YAML, and reStructuredText ("rst": titles, directives, comments, lists, fields and inline markup). Another language is shown plain.
+PowerShell as shell), C and C++, JSON, SQL, TOML and YAML, reStructuredText ("rst": titles, directives, comments, lists, fields and inline markup) and Gherkin ("feature": the keywords of the blocks and of the steps in English and French, tags, comments, tables, doc strings and the parameters of an outline). Another language is shown plain.
 
 **Args**
 

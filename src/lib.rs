@@ -22,6 +22,7 @@ mod icons;
 mod layout;
 mod dock;
 mod files;
+mod gherkin;
 mod markdown;
 mod native_dnd;
 mod path;
