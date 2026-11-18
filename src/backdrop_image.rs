@@ -33,7 +33,7 @@ pub(crate) enum Lum {
 
 /// the mean brightness (0 to 1) the "auto" luminance aims at: a dark picture under the light theme
 /// is lifted, a bright one under the dark theme is toned down
-const AUTO_LIGHT: f32 = 0.75;
+const AUTO_LIGHT: f32 = 0.65;
 const AUTO_DARK: f32 = 0.25;
 
 #[derive(Clone, PartialEq)]
@@ -43,6 +43,8 @@ struct Settings {
     luminance: (Lum, Lum),
     saturation: (f32, f32),
     blur: f32,
+    /// 1.0 as it is, less flattens the picture toward its mean brightness (the text reads better over it)
+    contrast: (f32, f32),
     /// the veil over the picture, 0 to 1: black under the dark theme, white under the light one
     scrim: (f32, f32),
     opacity: f32,
@@ -63,7 +65,7 @@ struct Cache {
     mean: f32,
     error: Option<String>,
     /// the luminance, the saturation and the blur of the texture
-    applied: Option<(f32, f32, f32)>,
+    applied: Option<(f32, f32, f32, f32)>,
     texture: Option<TextureHandle>,
 }
 
@@ -138,6 +140,7 @@ pub(crate) fn set(
     luminance: (Lum, Lum),
     saturation: (f32, f32),
     blur: f32,
+    contrast: (f32, f32),
     scrim: (f32, f32),
     opacity: f32,
     fit: &str,
@@ -148,6 +151,7 @@ pub(crate) fn set(
             luminance,
             saturation: (saturation.0.clamp(0.0, 4.0), saturation.1.clamp(0.0, 4.0)),
             blur: blur.clamp(0.0, 200.0),
+            contrast: (contrast.0.clamp(0.0, 2.0), contrast.1.clamp(0.0, 2.0)),
             scrim: (scrim.0.clamp(0.0, 0.95), scrim.1.clamp(0.0, 0.95)),
             opacity: opacity.clamp(0.0, 1.0),
             fit: parse_fit(fit)?,
@@ -180,7 +184,7 @@ fn start_loading(ctx: &egui::Context, cache: &mut Cache, source: &str) {
 /// the pixels blurred (by a radius in pixels of the working copy), then with the saturation and the
 /// luminance applied (1.0 leaves them as they are). A blur works on a smaller copy, the texture
 /// is stretched back when it is drawn: what is blurred loses nothing, and it is much faster
-fn filtered(original: &image::RgbaImage, luminance: f32, saturation: f32, blur: f32) -> ColorImage {
+fn filtered(original: &image::RgbaImage, luminance: f32, saturation: f32, contrast: f32, pivot: f32, blur: f32) -> ColorImage {
     let small;
     let original = if blur > 0.5 {
         let factor = (blur / 4.0).max(1.0);
@@ -198,7 +202,8 @@ fn filtered(original: &image::RgbaImage, luminance: f32, saturation: f32, blur: 
         let [r, g, b, a] = p.0;
         let (r, g, b) = (f32::from(r), f32::from(g), f32::from(b));
         let gray = 0.299 * r + 0.587 * g + 0.114 * b;
-        let mix = |c: f32| (gray + (c - gray) * saturation) * luminance;
+        // the contrast turns about the mean brightness of the picture, as it is after the luminance
+        let mix = |c: f32| pivot + ((gray + (c - gray) * saturation) * luminance - pivot) * contrast;
         pixels.push(Color32::from_rgba_unmultiplied(clamp(mix(r)), clamp(mix(g)), clamp(mix(b)), a));
     }
     ColorImage { size, source_size: egui::Vec2::new(size[0] as f32, size[1] as f32), pixels }
@@ -241,14 +246,16 @@ pub(crate) fn paint(ctx: &egui::Context, area: Rect) {
             Lum::Auto => (if dark { AUTO_DARK } else { AUTO_LIGHT } / cache.mean.max(0.02)).clamp(0.3, 2.0),
         };
         let saturation = pick(s.saturation);
+        let contrast = pick(s.contrast);
+        let pivot = cache.mean * luminance * 255.0;
         if let Some(original) = &cache.original {
-            if cache.applied != Some((luminance, saturation, s.blur)) || cache.texture.is_none() {
-                let image = filtered(original, luminance, saturation, s.blur);
+            if cache.applied != Some((luminance, saturation, contrast, s.blur)) || cache.texture.is_none() {
+                let image = filtered(original, luminance, saturation, contrast, pivot, s.blur);
                 match &mut cache.texture {
                     Some(texture) => texture.set(image, TextureOptions::LINEAR),
                     None => cache.texture = Some(ctx.load_texture("pyegui_backdrop_image", image, TextureOptions::LINEAR)),
                 }
-                cache.applied = Some((luminance, saturation, s.blur));
+                cache.applied = Some((luminance, saturation, contrast, s.blur));
             }
         }
         let Some(texture) = &cache.texture else { return };

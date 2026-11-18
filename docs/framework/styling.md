@@ -197,7 +197,7 @@ run_native("Glass", update_func, backdrop=Backdrop.LIQUID_GLASS_CLEAR)
 ```
 
 
-## `Context.set_backdrop_image(source=None, luminance=None, saturation=None, blur=0.0, scrim=None, opacity=1.0, fit='cover')`
+## `Context.set_backdrop_image(source=None, luminance=None, saturation=None, blur=0.0, contrast=None, scrim=None, opacity=1.0, fit='cover')`
 
 Draws a picture under the whole window, as its backdrop, with a luminance, a saturation, a
 blur and an opacity. It is seen where nothing is drawn over it: with a transparent window and
@@ -223,6 +223,9 @@ slider if you like). `None` removes the picture.
 - `saturation` (float | tuple): the strength of the colors, 1.0 as they are, 0 gray, up to 4.
 - A number or a pair `(light, dark)` like the luminance. Default is 1.0
 - `blur` (float): the radius of a gaussian blur in pixels, 0 is sharp. Default is 0
+- `contrast` (float | tuple): 1.0 as it is; less flattens the picture toward its mean
+- brightness, which keeps the text readable over a picture with bright and dark parts. A
+- number or a pair `(light, dark)`, from 0 to 2. Default is 1.0
 - `scrim` (float | tuple): a veil over the picture, from 0 (none) to 0.95: black under the dark
 - theme, white under the light one, which keeps the text readable without spoiling the
 - picture. A number, or a pair `(light, dark)`. Default is 0

@@ -538,6 +538,10 @@ impl Context {
     ///
     ///     blur (float): the radius of a gaussian blur in pixels, 0 is sharp. Default is 0
     ///
+    ///     contrast (float | tuple): 1.0 as it is; less flattens the picture toward its mean
+    ///     brightness, which keeps the text readable over a picture with bright and dark parts. A
+    ///     number or a pair `(light, dark)`, from 0 to 2. Default is 1.0
+    ///
     ///     scrim (float | tuple): a veil over the picture, from 0 (none) to 0.95: black under the dark
     ///     theme, white under the light one, which keeps the text readable without spoiling the
     ///     picture. A number, or a pair `(light, dark)`. Default is 0
@@ -552,21 +556,23 @@ impl Context {
     ///     ctx.set_backdrop_image("wallpaper.jpg", luminance=(1.0, 0.5), saturation=0.8, blur=12)
     ///     ctx.set_backdrop_image("wallpaper.jpg", luminance="auto", scrim=(0.1, 0.3))
     ///     ctx.set_backdrop_image(None)  # removed
-    #[pyo3(signature = (source=None, luminance=None, saturation=None, blur=0.0, scrim=None, opacity=1.0, fit="cover"))]
+    #[pyo3(signature = (source=None, luminance=None, saturation=None, blur=0.0, contrast=None, scrim=None, opacity=1.0, fit="cover"))]
     fn set_backdrop_image(
         &self,
         source: Option<&str>,
         luminance: Option<&Bound<'_, PyAny>>,
         saturation: Option<&Bound<'_, PyAny>>,
         blur: f32,
+        contrast: Option<&Bound<'_, PyAny>>,
         scrim: Option<&Bound<'_, PyAny>>,
         opacity: f32,
         fit: &str,
     ) -> PyResult<()> {
         let luminance = luminance.map_or(Ok((backdrop_image::Lum::Value(1.0), backdrop_image::Lum::Value(1.0))), backdrop_image::lum_pair)?;
         let saturation = saturation.map_or(Ok((1.0, 1.0)), |v| backdrop_image::pair(v, "saturation"))?;
+        let contrast = contrast.map_or(Ok((1.0, 1.0)), |v| backdrop_image::pair(v, "contrast"))?;
         let scrim = scrim.map_or(Ok((0.0, 0.0)), |v| backdrop_image::pair(v, "scrim"))?;
-        backdrop_image::set(source, luminance, saturation, blur, scrim, opacity, fit)?;
+        backdrop_image::set(source, luminance, saturation, blur, contrast, scrim, opacity, fit)?;
         self.0.request_repaint();
         Ok(())
     }

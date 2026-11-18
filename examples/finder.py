@@ -299,8 +299,9 @@ bg_image = Str("")
 bg_luminance = {"light": Float(1.0), "dark": Float(0.6)}
 bg_saturation = {"light": Float(1.0), "dark": Float(0.9)}
 bg_auto = Bool(True)  # the luminance is measured and set for the theme, the sliders of it are off
-bg_scrim = {"light": Float(0.1), "dark": Float(0.25)}  # a veil over the picture, white or black
-bg_blur = Float(0.0)
+bg_scrim = {"light": Float(0.55), "dark": Float(0.3)}  # a veil over the picture, white or black
+bg_contrast = {"light": Float(0.5), "dark": Float(0.6)}  # less than 1 flattens the picture: the text reads better
+bg_blur = Float(12.0)
 bg_opacity = Float(1.0)
 bg_fit = Int(0)  # the index of BACKGROUND_FITS
 bg_open = Bool(False)  # the window of the settings of the picture
@@ -792,14 +793,15 @@ def apply_background():
         "auto" if bg_auto.value else (bg_luminance["light"].value, bg_luminance["dark"].value),
         (bg_saturation["light"].value, bg_saturation["dark"].value),
         bg_blur.value,
+        (bg_contrast["light"].value, bg_contrast["dark"].value),
         (bg_scrim["light"].value, bg_scrim["dark"].value),
         bg_opacity.value,
         BACKGROUND_FITS[bg_fit.value],
     )
     if wanted != bg_applied[0]:
         bg_applied[0] = wanted
-        path, lum, sat, blur, scrim, opacity, fit = wanted
-        context[0].set_backdrop_image(path, luminance=lum, saturation=sat, blur=blur, scrim=scrim, opacity=opacity, fit=fit)
+        path, lum, sat, blur, contrast, scrim, opacity, fit = wanted
+        context[0].set_backdrop_image(path, luminance=lum, saturation=sat, blur=blur, contrast=contrast, scrim=scrim, opacity=opacity, fit=fit)
 
 
 def background_window():
@@ -822,6 +824,7 @@ def background_window():
     def theme_sliders(name):
         add_enabled(not bg_auto.value, lambda: slider_float(bg_luminance[name], 0.0, 2.0, "Luminance"))
         slider_float(bg_saturation[name], 0.0, 2.0, "Saturation")
+        slider_float(bg_contrast[name], 0.0, 1.5, "Contraste")
         slider_float(bg_scrim[name], 0.0, 0.9, "Voile")
 
     small("Thème clair")
@@ -840,9 +843,10 @@ def background_window():
                 holder.value = 1.0
             bg_luminance["dark"].value = 0.6
             bg_saturation["dark"].value = 0.9
-            bg_scrim["light"].value, bg_scrim["dark"].value = 0.1, 0.25
+            bg_scrim["light"].value, bg_scrim["dark"].value = 0.55, 0.3
+            bg_contrast["light"].value, bg_contrast["dark"].value = 0.5, 0.6
             bg_auto.value = True
-            bg_blur.value = 0.0
+            bg_blur.value = 12.0
         if button_clicked("Retirer l'image"):
             bg_image.value = ""
 
@@ -876,6 +880,7 @@ def snapshot():
             "saturation": {k: v.value for k, v in bg_saturation.items()},
             "auto": bg_auto.value,
             "scrim": {k: v.value for k, v in bg_scrim.items()},
+            "contrast": {k: v.value for k, v in bg_contrast.items()},
             "blur": bg_blur.value,
             "opacity": bg_opacity.value,
             "fit": bg_fit.value,
@@ -919,7 +924,7 @@ def restore(saved):
     if isinstance(background, dict):
         bg_image.value = str(background.get("image", ""))
         bg_auto.value = bool(background.get("auto", bg_auto.value))
-        for holders, key in ((bg_luminance, "luminance"), (bg_saturation, "saturation"), (bg_scrim, "scrim")):
+        for holders, key in ((bg_luminance, "luminance"), (bg_saturation, "saturation"), (bg_scrim, "scrim"), (bg_contrast, "contrast")):
             values = background.get(key)
             for name, holder in holders.items():
                 if isinstance(values, dict) and isinstance(values.get(name), (int, float)):
