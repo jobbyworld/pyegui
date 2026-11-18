@@ -44,6 +44,7 @@ from pyegui import (
     FileListView,
     FileTreeView,
     FileWatcher,
+    Float,
     Int,
     PdfDocument,
     PdfView,
@@ -123,6 +124,8 @@ from pyegui import (
     vertical,
     vertical_centered,
     weak,
+    window,
+    slider_float,
 )
 
 BACKDROP = {"win32": Backdrop.ACRYLIC, "darwin": Backdrop.LIQUID_GLASS}.get(
@@ -289,6 +292,17 @@ view = Int(TREE)
 search = Str("")
 show_sidebar = Bool(True)
 blue_folders = Bool(not MACOS)  # Windows: the folders in the blue of the Finder, not the yellow of the Explorer
+# a picture as the backdrop of the window (ctx.set_backdrop_image), with a filter for each theme
+BACKGROUND_FITS = ["cover", "contain", "stretch", "center"]
+BACKGROUND_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+bg_image = Str("")
+bg_luminance = {"light": Float(1.0), "dark": Float(0.6)}
+bg_saturation = {"light": Float(1.0), "dark": Float(0.9)}
+bg_blur = Float(0.0)
+bg_opacity = Float(1.0)
+bg_fit = Int(0)  # the index of BACKGROUND_FITS
+bg_open = Bool(False)  # the window of the settings of the picture
+bg_applied = [None]  # what was given to pyegui last, it is given again when it changes
 show_hidden = Bool(False)  # the hidden items (a name with a dot, a hidden flag), faded when shown
 path_editing = Bool(False)  # the path bar is a text field holding the full path
 path_text = Str("")
@@ -763,6 +777,68 @@ def apply_style():
     ctx.set_backdrop_blur(BACKDROP_BLUR)  # macOS only, added to the blur of the backdrop
 
 
+def background_path():
+    """the picture of the backdrop if it can be read, else None"""
+    path = bg_image.value.strip().strip("'\"")
+    return path if path and Path(path).is_file() else None
+
+
+def apply_background():
+    """gives the picture and its filters to pyegui when one of them changed"""
+    wanted = (
+        background_path(),
+        (bg_luminance["light"].value, bg_luminance["dark"].value),
+        (bg_saturation["light"].value, bg_saturation["dark"].value),
+        bg_blur.value,
+        bg_opacity.value,
+        BACKGROUND_FITS[bg_fit.value],
+    )
+    if wanted != bg_applied[0]:
+        bg_applied[0] = wanted
+        path, lum, sat, blur, opacity, fit = wanted
+        context[0].set_backdrop_image(path, luminance=lum, saturation=sat, blur=blur, opacity=opacity, fit=fit)
+
+
+def background_window():
+    """the floating window of the picture: its file, a luminance and a saturation for each theme, a
+    blur, the opacity and the fit. The changes show at once behind the app"""
+    text_edit_singleline(bg_image, hint_text="Chemin de l'image")
+    chosen = Path(selected.value) if selected.value else None
+    if chosen and chosen.suffix.lower() in BACKGROUND_TYPES:
+        if button_clicked(f"Utiliser « {chosen.name} »"):
+            bg_image.value = str(chosen)
+    if bg_image.value and not background_path():
+        weak("Fichier introuvable")
+    elif context[0].backdrop_image_error():
+        weak("⚠ " + context[0].backdrop_image_error())
+    if glass.value == NO_GLASS:
+        weak("L'image est cachée sans vitre: choisir Partielle ou Complète dans les réglages")
+    separator()
+    small("Thème clair")
+    slider_float(bg_luminance["light"], 0.0, 2.0, "Luminance")
+    slider_float(bg_saturation["light"], 0.0, 2.0, "Saturation")
+    small("Thème sombre")
+    slider_float(bg_luminance["dark"], 0.0, 2.0, "Luminance")
+    slider_float(bg_saturation["dark"], 0.0, 2.0, "Saturation")
+    separator()
+    slider_float(bg_blur, 0.0, 60.0, "Flou")
+    slider_float(bg_opacity, 0.0, 1.0, "Transparence")
+    segmented_control(bg_fit, [(None, name) for name in BACKGROUND_FITS])
+    separator()
+
+    def buttons():
+        if button_clicked("Réinitialiser"):
+            for holder in (*bg_luminance.values(), *bg_saturation.values(), bg_opacity):
+                holder.value = 1.0
+            bg_luminance["dark"].value = 0.6
+            bg_saturation["dark"].value = 0.9
+            bg_blur.value = 0.0
+        if button_clicked("Retirer l'image"):
+            bg_image.value = ""
+
+    horizontal(buttons)
+
+
 def apply_gaps():
     """the unified layout lays out the gaps itself: no margin in the central panel, and the gap of
     the dock between its panes; the boxes layout keeps the margin of egui and its own gap"""
@@ -784,6 +860,14 @@ def snapshot():
         "show_dock": show_dock.value,
         "show_hidden": show_hidden.value,
         "blue_folders": blue_folders.value,
+        "background": {
+            "image": bg_image.value,
+            "luminance": {k: v.value for k, v in bg_luminance.items()},
+            "saturation": {k: v.value for k, v in bg_saturation.items()},
+            "blur": bg_blur.value,
+            "opacity": bg_opacity.value,
+            "fit": bg_fit.value,
+        },
         "folded": sorted(folded),
         "tag_tree_folded": tag_tree.folded,
         "folder": str(current()),
@@ -819,6 +903,19 @@ def restore(saved):
     show_dock.value = saved.get("show_dock", show_dock.value)
     set_hidden(bool(saved.get("show_hidden", show_hidden.value)))
     set_blue(bool(saved.get("blue_folders", blue_folders.value)))
+    background = saved.get("background")
+    if isinstance(background, dict):
+        bg_image.value = str(background.get("image", ""))
+        for holders, key in ((bg_luminance, "luminance"), (bg_saturation, "saturation")):
+            values = background.get(key)
+            for name, holder in holders.items():
+                if isinstance(values, dict) and isinstance(values.get(name), (int, float)):
+                    holder.value = float(values[name])
+        for holder, key in ((bg_blur, "blur"), (bg_opacity, "opacity")):
+            if isinstance(background.get(key), (int, float)):
+                holder.value = float(background[key])
+        if isinstance(background.get("fit"), int) and 0 <= background["fit"] < len(BACKGROUND_FITS):
+            bg_fit.value = background["fit"]
     folded.update(saved.get("folded", []))
     tag_tree.folded = [p for p in saved.get("tag_tree_folded", []) if isinstance(p, str)]
     tree.open_folders = [p for p in saved.get("tree_open", []) if isinstance(p, str)]
@@ -1875,6 +1972,10 @@ def settings_menu():
         toggle_value(blue_folders, "Dossiers bleus")
         if blue_folders.value != before_blue:
             set_blue(blue_folders.value)
+    separator()
+    if selectable_label_clicked(bg_open.value, "Image de fond…"):
+        bg_open.value = True
+        close_menu()
     separator()
     before_layout = unified.value
     toggle_value(unified, "Disposition unifiée")
@@ -3851,6 +3952,8 @@ def update_func(ctx):
         unified_layout()
     else:
         boxes_layout()
+    apply_background()
+    window("Image de fond", background_window, open=bg_open, default_width=300, resizable=False)
     if renaming.value:
         rename_dialog()
     if palette_open.value:
