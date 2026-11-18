@@ -298,6 +298,8 @@ BACKGROUND_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 bg_image = Str("")
 bg_luminance = {"light": Float(1.0), "dark": Float(0.6)}
 bg_saturation = {"light": Float(1.0), "dark": Float(0.9)}
+bg_auto = Bool(True)  # the luminance is measured and set for the theme, the sliders of it are off
+bg_scrim = {"light": Float(0.1), "dark": Float(0.25)}  # a veil over the picture, white or black
 bg_blur = Float(0.0)
 bg_opacity = Float(1.0)
 bg_fit = Int(0)  # the index of BACKGROUND_FITS
@@ -787,16 +789,17 @@ def apply_background():
     """gives the picture and its filters to pyegui when one of them changed"""
     wanted = (
         background_path(),
-        (bg_luminance["light"].value, bg_luminance["dark"].value),
+        "auto" if bg_auto.value else (bg_luminance["light"].value, bg_luminance["dark"].value),
         (bg_saturation["light"].value, bg_saturation["dark"].value),
         bg_blur.value,
+        (bg_scrim["light"].value, bg_scrim["dark"].value),
         bg_opacity.value,
         BACKGROUND_FITS[bg_fit.value],
     )
     if wanted != bg_applied[0]:
         bg_applied[0] = wanted
-        path, lum, sat, blur, opacity, fit = wanted
-        context[0].set_backdrop_image(path, luminance=lum, saturation=sat, blur=blur, opacity=opacity, fit=fit)
+        path, lum, sat, blur, scrim, opacity, fit = wanted
+        context[0].set_backdrop_image(path, luminance=lum, saturation=sat, blur=blur, scrim=scrim, opacity=opacity, fit=fit)
 
 
 def background_window():
@@ -814,12 +817,17 @@ def background_window():
     if glass.value == NO_GLASS:
         weak("L'image est cachée sans vitre: choisir Partielle ou Complète dans les réglages")
     separator()
+    toggle_value(bg_auto, "Luminance automatique")
+
+    def theme_sliders(name):
+        add_enabled(not bg_auto.value, lambda: slider_float(bg_luminance[name], 0.0, 2.0, "Luminance"))
+        slider_float(bg_saturation[name], 0.0, 2.0, "Saturation")
+        slider_float(bg_scrim[name], 0.0, 0.9, "Voile")
+
     small("Thème clair")
-    slider_float(bg_luminance["light"], 0.0, 2.0, "Luminance")
-    slider_float(bg_saturation["light"], 0.0, 2.0, "Saturation")
+    theme_sliders("light")
     small("Thème sombre")
-    slider_float(bg_luminance["dark"], 0.0, 2.0, "Luminance")
-    slider_float(bg_saturation["dark"], 0.0, 2.0, "Saturation")
+    theme_sliders("dark")
     separator()
     slider_float(bg_blur, 0.0, 60.0, "Flou")
     slider_float(bg_opacity, 0.0, 1.0, "Transparence")
@@ -832,6 +840,8 @@ def background_window():
                 holder.value = 1.0
             bg_luminance["dark"].value = 0.6
             bg_saturation["dark"].value = 0.9
+            bg_scrim["light"].value, bg_scrim["dark"].value = 0.1, 0.25
+            bg_auto.value = True
             bg_blur.value = 0.0
         if button_clicked("Retirer l'image"):
             bg_image.value = ""
@@ -864,6 +874,8 @@ def snapshot():
             "image": bg_image.value,
             "luminance": {k: v.value for k, v in bg_luminance.items()},
             "saturation": {k: v.value for k, v in bg_saturation.items()},
+            "auto": bg_auto.value,
+            "scrim": {k: v.value for k, v in bg_scrim.items()},
             "blur": bg_blur.value,
             "opacity": bg_opacity.value,
             "fit": bg_fit.value,
@@ -906,7 +918,8 @@ def restore(saved):
     background = saved.get("background")
     if isinstance(background, dict):
         bg_image.value = str(background.get("image", ""))
-        for holders, key in ((bg_luminance, "luminance"), (bg_saturation, "saturation")):
+        bg_auto.value = bool(background.get("auto", bg_auto.value))
+        for holders, key in ((bg_luminance, "luminance"), (bg_saturation, "saturation"), (bg_scrim, "scrim")):
             values = background.get(key)
             for name, holder in holders.items():
                 if isinstance(values, dict) and isinstance(values.get(name), (int, float)):

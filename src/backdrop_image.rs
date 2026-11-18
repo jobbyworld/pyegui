@@ -24,13 +24,27 @@ enum Fit {
     Center,
 }
 
+/// a luminance: a factor, or the one that brings the picture to the brightness that suits the theme
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Lum {
+    Value(f32),
+    Auto,
+}
+
+/// the mean brightness (0 to 1) the "auto" luminance aims at: a dark picture under the light theme
+/// is lifted, a bright one under the dark theme is toned down
+const AUTO_LIGHT: f32 = 0.75;
+const AUTO_DARK: f32 = 0.25;
+
 #[derive(Clone, PartialEq)]
 struct Settings {
     source: String,
     /// (light theme, dark theme)
-    luminance: (f32, f32),
+    luminance: (Lum, Lum),
     saturation: (f32, f32),
     blur: f32,
+    /// the veil over the picture, 0 to 1: black under the dark theme, white under the light one
+    scrim: (f32, f32),
     opacity: f32,
     fit: Fit,
 }
@@ -45,6 +59,8 @@ struct Cache {
     source: String,
     loading: Option<Loaded>,
     original: Option<image::RgbaImage>,
+    /// the mean brightness of the picture, 0 to 1
+    mean: f32,
     error: Option<String>,
     /// the luminance, the saturation and the blur of the texture
     applied: Option<(f32, f32, f32)>,
@@ -101,13 +117,38 @@ pub(crate) fn pair(value: &Bound<'_, PyAny>, name: &str) -> PyResult<(f32, f32)>
         .map_err(|_| PyValueError::new_err(format!("{name} is a number, or a pair (light, dark)")))
 }
 
-pub(crate) fn set(source: Option<&str>, luminance: (f32, f32), saturation: (f32, f32), blur: f32, opacity: f32, fit: &str) -> PyResult<()> {
+fn lum(value: &Bound<'_, PyAny>) -> PyResult<Lum> {
+    if let Ok(text) = value.extract::<String>() {
+        return if text == "auto" { Ok(Lum::Auto) } else { Err(PyValueError::new_err("luminance is a number, \"auto\", or a pair (light, dark)")) };
+    }
+    Ok(Lum::Value(value.extract::<f32>()?.clamp(0.0, 4.0)))
+}
+
+/// the luminance for both themes: a value or "auto", or a pair (light, dark) of them
+pub(crate) fn lum_pair(value: &Bound<'_, PyAny>) -> PyResult<(Lum, Lum)> {
+    if let Ok((a, b)) = value.extract::<(Bound<'_, PyAny>, Bound<'_, PyAny>)>() {
+        return Ok((lum(&a)?, lum(&b)?));
+    }
+    let one = lum(value)?;
+    Ok((one, one))
+}
+
+pub(crate) fn set(
+    source: Option<&str>,
+    luminance: (Lum, Lum),
+    saturation: (f32, f32),
+    blur: f32,
+    scrim: (f32, f32),
+    opacity: f32,
+    fit: &str,
+) -> PyResult<()> {
     let wanted = match source {
         Some(source) if !source.is_empty() => Some(Settings {
             source: source.to_string(),
-            luminance: (luminance.0.clamp(0.0, 4.0), luminance.1.clamp(0.0, 4.0)),
+            luminance,
             saturation: (saturation.0.clamp(0.0, 4.0), saturation.1.clamp(0.0, 4.0)),
             blur: blur.clamp(0.0, 200.0),
+            scrim: (scrim.0.clamp(0.0, 0.95), scrim.1.clamp(0.0, 0.95)),
             opacity: opacity.clamp(0.0, 1.0),
             fit: parse_fit(fit)?,
         }),
@@ -180,6 +221,8 @@ pub(crate) fn paint(ctx: &egui::Context, area: Rect) {
             let result = slot.lock().ok().and_then(|mut r| r.take());
             match result {
                 Some(Ok(img)) => {
+                    let sum: f64 = img.pixels().map(|p| 0.299 * f64::from(p.0[0]) + 0.587 * f64::from(p.0[1]) + 0.114 * f64::from(p.0[2])).sum();
+                    cache.mean = (sum / (img.width() as f64 * img.height() as f64 * 255.0)) as f32;
                     cache.original = Some(img);
                     cache.loading = None;
                 }
@@ -193,7 +236,11 @@ pub(crate) fn paint(ctx: &egui::Context, area: Rect) {
         // the filters of the theme in use
         let dark = ctx.global_style().visuals.dark_mode;
         let pick = |p: (f32, f32)| if dark { p.1 } else { p.0 };
-        let (luminance, saturation) = (pick(s.luminance), pick(s.saturation));
+        let luminance = match if dark { s.luminance.1 } else { s.luminance.0 } {
+            Lum::Value(v) => v,
+            Lum::Auto => (if dark { AUTO_DARK } else { AUTO_LIGHT } / cache.mean.max(0.02)).clamp(0.3, 2.0),
+        };
+        let saturation = pick(s.saturation);
         if let Some(original) = &cache.original {
             if cache.applied != Some((luminance, saturation, s.blur)) || cache.texture.is_none() {
                 let image = filtered(original, luminance, saturation, s.blur);
@@ -221,6 +268,11 @@ pub(crate) fn paint(ctx: &egui::Context, area: Rect) {
         let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(area);
         let tint = Color32::from_white_alpha((s.opacity * 255.0).round() as u8);
         painter.image(texture.id(), rect, Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), tint);
+        let veil = if dark { s.scrim.1 } else { s.scrim.0 };
+        if veil > 0.0 {
+            let (base, alpha) = (if dark { 0 } else { 255 }, (veil * s.opacity * 255.0).round() as u8);
+            painter.rect_filled(area, 0.0, Color32::from_rgba_unmultiplied(base, base, base, alpha));
+        }
     });
 }
 

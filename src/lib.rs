@@ -527,14 +527,20 @@ impl Context {
     ///     source (str | None): a path or a `file://` uri (PNG, JPEG, GIF, WebP, BMP...), None to remove it
     ///
     /// Keyword args:
-    ///     luminance (float | tuple): the brightness, 1.0 as it is, 0 black, up to 4. A pair
+    ///     luminance (float | str | tuple): the brightness, 1.0 as it is, 0 black, up to 4. A pair
     ///     `(light, dark)` gives one value for the light theme and one for the dark theme, which is
-    ///     followed when the theme changes. Default is 1.0
+    ///     followed when the theme changes. `"auto"` (alone or in the pair) measures the picture and
+    ///     brings it to a brightness that suits the theme: lifted under the light theme, toned down
+    ///     under the dark one. Default is 1.0
     ///
     ///     saturation (float | tuple): the strength of the colors, 1.0 as they are, 0 gray, up to 4.
     ///     A number or a pair `(light, dark)` like the luminance. Default is 1.0
     ///
     ///     blur (float): the radius of a gaussian blur in pixels, 0 is sharp. Default is 0
+    ///
+    ///     scrim (float | tuple): a veil over the picture, from 0 (none) to 0.95: black under the dark
+    ///     theme, white under the light one, which keeps the text readable without spoiling the
+    ///     picture. A number, or a pair `(light, dark)`. Default is 0
     ///
     ///     opacity (float): from 0 (not seen, the backdrop effect shows) to 1. Default is 1.0
     ///
@@ -544,20 +550,23 @@ impl Context {
     /// Example::
     ///
     ///     ctx.set_backdrop_image("wallpaper.jpg", luminance=(1.0, 0.5), saturation=0.8, blur=12)
+    ///     ctx.set_backdrop_image("wallpaper.jpg", luminance="auto", scrim=(0.1, 0.3))
     ///     ctx.set_backdrop_image(None)  # removed
-    #[pyo3(signature = (source=None, luminance=None, saturation=None, blur=0.0, opacity=1.0, fit="cover"))]
+    #[pyo3(signature = (source=None, luminance=None, saturation=None, blur=0.0, scrim=None, opacity=1.0, fit="cover"))]
     fn set_backdrop_image(
         &self,
         source: Option<&str>,
         luminance: Option<&Bound<'_, PyAny>>,
         saturation: Option<&Bound<'_, PyAny>>,
         blur: f32,
+        scrim: Option<&Bound<'_, PyAny>>,
         opacity: f32,
         fit: &str,
     ) -> PyResult<()> {
-        let luminance = luminance.map_or(Ok((1.0, 1.0)), |v| backdrop_image::pair(v, "luminance"))?;
+        let luminance = luminance.map_or(Ok((backdrop_image::Lum::Value(1.0), backdrop_image::Lum::Value(1.0))), backdrop_image::lum_pair)?;
         let saturation = saturation.map_or(Ok((1.0, 1.0)), |v| backdrop_image::pair(v, "saturation"))?;
-        backdrop_image::set(source, luminance, saturation, blur, opacity, fit)?;
+        let scrim = scrim.map_or(Ok((0.0, 0.0)), |v| backdrop_image::pair(v, "scrim"))?;
+        backdrop_image::set(source, luminance, saturation, blur, scrim, opacity, fit)?;
         self.0.request_repaint();
         Ok(())
     }
