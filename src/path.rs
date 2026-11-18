@@ -355,6 +355,9 @@ unsafe fn path_breadcrumb(path: PathBuf, kwargs: Option<&Bound<'_, PyDict>>) -> 
 ///
 ///     id (str): id of the combo, needed if there are several in the same ui
 ///
+///     max_width (float): the widest the title may be: a longer name ends with an ellipsis (the
+///         whole name is in the tooltip). Default is the room left in the row
+///
 ///     on_right_click (callable): called with the path of the folder when the title is
 ///         right-clicked
 ///
@@ -390,14 +393,23 @@ unsafe fn path_combo(path: PathBuf, kwargs: Option<&Bound<'_, PyDict>>) -> PyRes
 
     let font = FontId::proportional(size);
     let strong = ui.visuals().strong_text_color();
-    let title = ui.painter().layout_no_wrap(name.clone(), font.clone(), strong);
     let side = (size * 1.05).round();
     let (pad, gap, chevron) = (6.0, 6.0, 12.0);
+    let room = kwarg::<f32>(kwargs, "max_width")?.unwrap_or_else(|| ui.available_width());
+    let text_room = (room - (pad + side + gap + gap + chevron + pad)).max(24.0);
+    let mut job = egui::text::LayoutJob::simple_singleline(name.clone(), font.clone(), strong);
+    job.wrap.max_width = text_room;
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('\u{2026}');
+    let title = ui.painter().layout_job(job);
+    let cut = title.rows.first().map_or(false, |r| r.ends_with_newline) || title.size().x >= text_room - 0.5;
     let height = (title.size().y + 8.0).max(side + 8.0);
     // the room of the icon and of the arrow is always kept, so nothing moves under the mouse
     let width = pad + side + gap + title.size().x + gap + chevron + pad;
     let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let response = if cut { response.on_hover_text(name.clone()) } else { response };
     // the left click opens the list: only the other buttons call functions
     events.see(&response, &path.to_string_lossy(), false);
 

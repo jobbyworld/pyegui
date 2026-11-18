@@ -271,6 +271,8 @@ enum TabBarAction {
     Add(Pane),
     Activate(String),
     Close(String),
+    /// closes a pane of the dock wherever it is, whether or not it is closable
+    Remove(String),
 }
 
 /// The changes asked from the tab bar callbacks, with the tabs container they apply to
@@ -307,6 +309,8 @@ pub(crate) struct DockTabBar {
     tile_id: TileId,
     titles: Vec<String>,
     active_title: Option<String>,
+    /// the titles of all the panes of the dock
+    dock_titles: Vec<String>,
     actions: TabBarActions,
 }
 
@@ -345,6 +349,24 @@ impl DockTabBar {
         self.titles.clone()
     }
 
+    /// Titles of the panes of the whole dock, not only of these tabs, in display order
+    #[getter]
+    fn dock_titles(&self) -> Vec<String> {
+        self.dock_titles.clone()
+    }
+
+    /// Closes the first pane of the dock with this title, in these tabs or in others, whether or not
+    /// it is `closable`
+    fn remove_pane(&self, title: String) -> PyResult<()> {
+        if !self.dock_titles.iter().any(|t| *t == title) {
+            return Err(PyValueError::new_err(format!(
+                "No pane '{}' in the dock, the panes are {:?}",
+                title, self.dock_titles
+            )));
+        }
+        self.push(TabBarAction::Remove(title))
+    }
+
     /// Title of the active tab, or None
     #[getter]
     fn active_title(&self) -> Option<String> {
@@ -371,9 +393,11 @@ struct TabBarCallbacks {
     left: Option<Py<PyAny>>,
     trailing: Option<Py<PyAny>>,
     right: Option<Py<PyAny>>,
+    /// the content of the menu of a tab, opened by a right click on it
+    menu: Option<Py<PyAny>>,
 }
 
-const CALLBACK_KEYS: [&str; 3] = ["tab_bar_left", "tab_bar_trailing", "tab_bar_right"];
+const CALLBACK_KEYS: [&str; 4] = ["tab_bar_left", "tab_bar_trailing", "tab_bar_right", "tab_menu"];
 
 impl TabBarCallbacks {
     /// Takes the callbacks out of kwargs, so the rest are style options
@@ -397,6 +421,7 @@ impl TabBarCallbacks {
             left: take(CALLBACK_KEYS[0])?,
             trailing: take(CALLBACK_KEYS[1])?,
             right: take(CALLBACK_KEYS[2])?,
+            menu: take(CALLBACK_KEYS[3])?,
         };
         Ok((callbacks, Some(rest)))
     }
@@ -406,6 +431,7 @@ impl TabBarCallbacks {
             left: self.left.as_ref().map(|f| f.clone_ref(py)),
             trailing: self.trailing.as_ref().map(|f| f.clone_ref(py)),
             right: self.right.as_ref().map(|f| f.clone_ref(py)),
+            menu: self.menu.as_ref().map(|f| f.clone_ref(py)),
         }
     }
 }
@@ -626,6 +652,9 @@ impl DockStyle {
 ///
 ///     tab_bar_right (Callable[[DockTabBar], None]): widgets on the right of the tab bar, added right to left
 ///
+///     tab_menu (Callable[[DockTabBar, str], None]): the content of the menu opened by a right click on a
+///     tab, given the tab bar and the title of the tab, e.g. `lambda bar, title: dock_menu(bar, panes)`
+///
 /// Usage::
 ///
 ///     dock = Dock(DockContainer("horizontal", [
@@ -824,6 +853,16 @@ fn pane_outline(
 fn apply_tab_bar_action(tree: &mut egui_tiles::Tree<Pane>, tabs_id: TileId, action: TabBarAction) {
     let title = match action {
         TabBarAction::Add(pane) => return add_pane_to_tabs(tree, tabs_id, pane),
+        TabBarAction::Remove(title) => {
+            let id = tree
+                .tiles
+                .iter()
+                .find_map(|(id, tile)| matches!(tile, Tile::Pane(pane) if pane.title == title).then_some(*id));
+            if let Some(id) = id {
+                tree.tiles.remove(id);
+            }
+            return;
+        }
         TabBarAction::Activate(ref title) | TabBarAction::Close(ref title) => title.clone(),
     };
     let Some(Tile::Container(Container::Tabs(tabs))) = tree.tiles.get(tabs_id) else {
@@ -848,7 +887,7 @@ fn apply_tab_bar_action(tree: &mut egui_tiles::Tree<Pane>, tabs_id: TileId, acti
                 tree.tiles.remove(pane_id);
             }
         }
-        TabBarAction::Add(_) => unreachable!(),
+        TabBarAction::Add(_) | TabBarAction::Remove(_) => unreachable!(),
     }
 }
 
@@ -915,9 +954,10 @@ impl Dock {
                 "left" => &mut self.callbacks.left,
                 "trailing" => &mut self.callbacks.trailing,
                 "right" => &mut self.callbacks.right,
+                "menu" => &mut self.callbacks.menu,
                 _ => {
                     return Err(PyTypeError::new_err(format!(
-                        "Unknown tab bar slot '{}', expected left, trailing or right",
+                        "Unknown tab bar slot '{}', expected left, trailing, right or menu",
                         key
                     )))
                 }
@@ -940,6 +980,37 @@ impl Dock {
         match &mut self.tree {
             Some(tree) => add_pane_to_tree(tree, pane),
             None => self.pending.push(pane),
+        }
+    }
+
+    /// Closes the first pane with this title, whether or not it is `closable` (that only decides
+    /// whether its tab has a close button). Returns False if there is no such pane. The pane object
+    /// is yours: add_pane() brings it back.
+    ///
+    /// Usage::
+    ///
+    ///     if button_clicked("Close the console"):
+    ///         dock.remove_pane("Console")
+    fn remove_pane(&mut self, title: &str) -> PyResult<bool> {
+        if let Some(index) = self.pending.iter().position(|pane| pane.title == title) {
+            self.pending.remove(index);
+            return Ok(true);
+        }
+        let tree = self
+            .tree
+            .as_mut()
+            .ok_or(PyRuntimeError::new_err("remove_pane cannot be called inside a pane of the same dock"))?;
+        let id = tree
+            .tiles
+            .iter()
+            .find_map(|(id, tile)| matches!(tile, Tile::Pane(pane) if pane.title == title).then_some(*id));
+        match id {
+            Some(id) => {
+                // like the close button of a tab: the tree drops the tile at the next frame
+                tree.tiles.remove(id);
+                Ok(true)
+            }
+            None => Ok(false),
         }
     }
 
@@ -1086,6 +1157,8 @@ struct Behavior<'py> {
     style: DockStyle,
     callbacks: TabBarCallbacks,
     actions: TabBarActions,
+    /// the titles of all the panes of the dock
+    all_titles: Vec<String>,
     /// Panes drawn this frame
     panes: std::collections::HashSet<TileId>,
     /// Panes whose tab bar is hidden while they are alone in their tabs
@@ -1117,6 +1190,7 @@ impl Behavior<'_> {
             tile_id,
             titles: tabs.children.iter().filter_map(title).collect(),
             active_title: tabs.active.as_ref().and_then(title),
+            dock_titles: self.all_titles.clone(),
             actions: self.actions.clone(),
         };
         let result = Bound::new(self.py, tab_bar).and_then(|tab_bar| unsafe {
@@ -1345,6 +1419,39 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
                 {
                     tiles.remove(tile_id);
                 }
+            }
+        }
+
+        // the menu of the tab, opened by a right click: a function given the tab bar and the title
+        if let Some(callback) = self.callbacks.menu.as_ref().map(|f| f.clone_ref(self.py)) {
+            let title_of = |id: &TileId| match tiles.get(*id) {
+                Some(Tile::Pane(pane)) => Some(pane.title.clone()),
+                _ => None,
+            };
+            let title = title_of(&tile_id).unwrap_or_default();
+            let parent = tiles.parent_of(tile_id).unwrap_or(tile_id);
+            let (titles, active_title) = match tiles.get(parent) {
+                Some(Tile::Container(Container::Tabs(tabs))) => (
+                    tabs.children.iter().filter_map(title_of).collect(),
+                    tabs.active.as_ref().and_then(title_of),
+                ),
+                _ => (vec![title.clone()], Some(title.clone())),
+            };
+            let tab_bar = DockTabBar {
+                tile_id: parent,
+                titles,
+                active_title,
+                dock_titles: self.all_titles.clone(),
+                actions: self.actions.clone(),
+            };
+            let py = self.py;
+            let mut result = Ok(());
+            tab_response.context_menu(|ui| {
+                result = Bound::new(py, tab_bar)
+                    .and_then(|bar| unsafe { run_nested_call(ui, callback.bind(py), (bar, title)) });
+            });
+            if let Err(err) = result {
+                self.result = Err(err);
             }
         }
 
@@ -1597,6 +1704,13 @@ unsafe fn dock_area(py: Python<'_>, dock: Py<Dock>) -> PyResult<()> {
         style,
         callbacks,
         actions: actions.clone(),
+        all_titles: {
+            let mut titles = vec![];
+            if let Some(root) = tree.root {
+                collect_titles(&tree.tiles, root, &mut titles);
+            }
+            titles
+        },
         panes: Default::default(),
         hidden_alone,
         active_tabs: Default::default(),
@@ -1618,7 +1732,102 @@ unsafe fn dock_area(py: Python<'_>, dock: Py<Dock>) -> PyResult<()> {
     behavior.result
 }
 
+/// The content of a menu that manages the panes of a dock: a check box for each pane that tells
+/// whether it is open, to show it or close it, and a button that gives back the layout the app
+/// started with. Call it in a menu (`menu_button`, `menu_image_button`), a context menu or a popup,
+/// not in a pane of the same dock. In the `tab_menu` of the dock (the menu of a right click on a
+/// tab) give it the tab bar the function receives instead of the dock.
+///
+/// Args:
+///     dock (Dock | DockTabBar): the dock to manage, or the tab bar given to a `tab_menu` function
+///
+///     panes (list[DockPane]): the panes the menu manages: the ones that can be shown or closed,
+///         open or not. Another pane of the dock, the central one for example, is not in the menu
+///
+/// Keyword args:
+///     layout (dict): a layout given by `dock.save()`, for the button that goes back to it. Without
+///     it there is no button. Not for a tab bar: the dock cannot be rebuilt while it is drawn, add
+///     your own button to the menu and call `dock.load()` for it
+///
+///     reset_text (str): the text of that button. Default is "Reset layout"
+///
+///     show (Callable[[str], None]): called with the title of a pane the user wants to show, instead
+///     of adding it to the first tabs of the dock (to the tabs of the tab bar for a tab bar): for an
+///     app that puts each pane in its own place. The dock is changed by the next frame at the latest,
+///     as for add_pane
+///
+/// Returns True during the frame a pane was shown or closed or the layout was restored.
+///
+/// Example::
+///
+///     panes = [DockPane("Files", files_ui, closable=True), DockPane("Console", console_ui, closable=True)]
+///     dock = Dock(DockContainer("horizontal", panes), tab_menu=lambda bar, title: dock_menu(bar, panes))
+///     default_layout = dock.save()
+///
+///     def update_func(ctx):
+///         menu_button("Panes", lambda: dock_menu(dock, panes, layout=default_layout))
+///         dock_area(dock)
+#[pyfunction]
+#[pyo3(signature = (dock, panes, **kwargs))]
+unsafe fn dock_menu(
+    py: Python<'_>,
+    dock: &Bound<'_, PyAny>,
+    panes: Vec<PyRef<'_, DockPane>>,
+    kwargs: Option<&Bound<'_, PyDict>>,
+) -> PyResult<bool> {
+    let ui = current_ui(&UI)?;
+    let dock_target = dock.cast::<Dock>().ok();
+    let bar_target = dock.cast::<DockTabBar>().ok();
+    if dock_target.is_none() && bar_target.is_none() {
+        return Err(PyTypeError::new_err("dock_menu takes a Dock or the DockTabBar of a tab_menu function"));
+    }
+    if dock_target.is_some_and(|d| d.borrow().tree.is_none()) {
+        return Err(PyRuntimeError::new_err("dock_menu cannot be called inside a pane of the same dock"));
+    }
+    let layout = kwargs.and_then(|k| k.get_item("layout").ok().flatten()).filter(|l| !l.is_none());
+    let reset_text = kwarg::<String>(kwargs, "reset_text")?.unwrap_or_else(|| "Reset layout".to_string());
+    let show = kwargs.and_then(|k| k.get_item("show").ok().flatten()).filter(|f| !f.is_none());
+    let open = match (dock_target, bar_target) {
+        (Some(dock), _) => dock.borrow().titles(),
+        (_, Some(bar)) => bar.borrow().dock_titles.clone(),
+        _ => vec![],
+    };
+    let mut changed = false;
+    for pane in &panes {
+        let mut on = open.contains(&pane.title);
+        if ui.checkbox(&mut on, pane.title.as_str()).changed() {
+            if on {
+                if let Some(show) = &show {
+                    show.call1((pane.title.clone(),))?;
+                } else if let Some(dock) = dock_target {
+                    let new = Pane::from_py(pane, py);
+                    let mut dock = dock.borrow_mut();
+                    match &mut dock.tree {
+                        Some(tree) => add_pane_to_tree(tree, new),
+                        None => dock.pending.push(new),
+                    }
+                } else if let Some(bar) = bar_target {
+                    bar.borrow().push(TabBarAction::Add(Pane::from_py(pane, py)))?;
+                }
+            } else if let Some(dock) = dock_target {
+                dock.borrow_mut().remove_pane(&pane.title)?;
+            } else if let Some(bar) = bar_target {
+                bar.borrow().push(TabBarAction::Remove(pane.title.clone()))?;
+            }
+            changed = true;
+        }
+    }
+    if let (Some(layout), Some(dock)) = (layout, dock_target) {
+        ui.separator();
+        if ui.button(reset_text).clicked() {
+            changed |= dock.borrow_mut().load(py, &layout, Some(panes))?;
+        }
+    }
+    Ok(changed)
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(dock_menu, m)?)?;
     m.add_class::<DockPane>()?;
     m.add_class::<DockContainer>()?;
     m.add_class::<DockTabBar>()?;

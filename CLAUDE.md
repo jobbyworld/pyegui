@@ -125,6 +125,7 @@ Index of all files: [docs/framework/README.md](docs/framework/README.md).
 | `tags.py` | `Tags` and `tags_edit`: tags with several levels, the last one shown, the full path in the colors of its levels on hover, suggestions while typing, compact dots, `max_visible`; a `TagTreeView` of all the tags in the sidebar |
 | `table_columns.py`, `file_columns.py` | `table(view=TableView())` and the file views with an interactive header: sort, filter by type, move, resize and pin columns (right click on a title) |
 | `pdf_viewer.py` | a PDF viewer: thumbnails and bookmarks in the sidebar, the pages in the middle (`PdfView`), a toolbar (page, zoom, fit, rotation, dark, hand), a search with its matches marked, text selection, password, drop a file on the window |
+| `windows.py` | `Viewport`: a second and more windows of one process (one icon of the Dock), sharing the values of the app |
 | `markdown_viewer.py` | minimal app: a sidebar listing markdown files, a viewer in the middle and three docks on the right (outline, source, infos) |
 
 `finder.py` is the reference for a real desktop layout. Its Actions pane works like the Actions
@@ -151,6 +152,7 @@ predicate, run) read by both the panel and the keyboard, so an action is declare
 | `tags.rs` | `Tags`, `tags_edit`, `TagTreeView` and `tag_tree_view` |
 | `pdf_view.rs` | `PdfDocument`, `PdfView`, `pdf_view`, `pdf_thumbnail`: pages drawn by threads (`craft-pdf` raster), textures kept in a cache with a memory budget, the search thread, selection, rotation |
 | `pdf_text.rs` | the text of a page with the box of every character (an interpreter `Device`), search folding, hit tests, selection rectangles |
+| `viewport.rs` | `Viewport`: other windows of the app (egui immediate viewports) drawn after the main window by `draw_frame` of `lib.rs`, with the same ui stack one window at a time |
 | `titlebar.rs` | `custom_titlebar`: `window_controls`, `window_drag_area` and the resize by the edges of a window without a title bar of the system (`edge_resize`, called at each frame) |
 | `cursor.rs` | `set_cursor`: custom mouse cursors from a file (`.cur`, `.ani`, `.ico`, `.png`, `.svg`), on Windows only (the window is subclassed to answer `WM_SETCURSOR`); the open and closed hands of the PDF pan are the SVG of `src/cursors/` |
 | `pdf_nav.rs` | the links of a page and the bookmarks of a document, read from the objects of the file |

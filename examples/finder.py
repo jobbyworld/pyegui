@@ -38,6 +38,7 @@ from pyegui import (
     Backdrop,
     Bool,
     Dock,
+    Viewport,
     DockContainer,
     DockPane,
     FileIconView,
@@ -67,6 +68,7 @@ from pyegui import (
     color_edit_button_rgb,
     combo_box,
     dock_area,
+    dock_menu,
     draw_rect,
     end_row,
     file_icon,
@@ -1754,6 +1756,10 @@ def add_pane_right(layout, title):
 
 
 def open_requested_panes():
+    if layout_requests:
+        layout_requests.clear()
+        pane_requests.clear()
+        dock.load(default_layout, panes=menu_panes())
     for title in dict.fromkeys(pane_requests):  # once each, in order
         if title in dock.titles:
             dock.set_active(title)
@@ -2020,10 +2026,10 @@ def sidebar():
 
 
 def sidebar_top():
-    """the top band of the sidebar: the window buttons are over it (the ones of macOS, or the ones drawn
-    by window_controls without a title bar of the system), the rest moves the window"""
-    if CUSTOM_TITLEBAR:
-        horizontal_centered(lambda: (window_controls(), window_drag_area()))
+    """the top band of the sidebar, as high as the toolbar: the window buttons are over it (the ones of
+    macOS, or the ones drawn by window_controls without a title bar of the system), the whole band moves
+    the window and a double click maximizes it or restores its size and position"""
+    horizontal_centered(lambda: (window_controls(), window_drag_area(fill_height=True)))
 
 
 def sidebar_bottom():
@@ -2141,16 +2147,29 @@ SEARCH_WIDTH, SEARCH_MIN = (
 )  # the search field: its widest, and the least worth showing
 
 
+def menu_panes():
+    return [DockPane(title, ui, closable=True) for title, ui in ALL_PANES.items()]
+
+
 def panes_menu():
-    """the panes of the dock that were closed with their tab, to bring them back"""
-    closed = [title for title in ALL_PANES if title not in dock.titles]
-    if not closed:
-        weak("Tous les panneaux sont affichés")
-    for title in closed:
-        if button_clicked(f"Afficher {title}"):
-            show_pane(title)
+    """the panes of the dock: a check box for each, to show it (on the right of the files, or under
+    them for the terminals) or close it, and the button that goes back to the first layout"""
+    dock_menu(dock, menu_panes(), layout=default_layout, reset_text="Réinitialiser la disposition", show=show_pane)
     separator()
     toggle_value(show_dock, "Dock")
+
+
+layout_requests = []  # the layout of the dock is rebuilt at the start of the next frame
+
+
+def tab_menu(tab_bar, title):
+    """the menu of a right click on the tab of a pane: the same panes as the menu of the toolbar. The
+    dock cannot be rebuilt while it is drawn, so the button of the first layout asks for it"""
+    dock_menu(tab_bar, menu_panes(), show=show_pane)
+    separator()
+    if button_clicked("Réinitialiser la disposition"):
+        layout_requests.append(True)
+        close_menu()
 
 
 def toolbar():
@@ -2179,16 +2198,28 @@ def toolbar():
             if image_button_clicked(svg("chevron-up"), size=16, tint=tint):
                 go(current().parent)
 
-        add_enabled(current().parent != current(), parent_button)  # greyed out at the root
+        if reading.value:
+            # in the viewer the button that goes up a folder becomes the one that closes the file
+            if image_button_clicked(svg("close"), size=16, tint=tint, tooltip="Fermer"):
+                leave_reader()
+        else:
+            add_enabled(current().parent != current(), parent_button)  # greyed out at the root
         add_space(6)
-        # the name of the folder; under the mouse its icon and a menu of its parent folders
-        chosen_folder = path_combo(current(), size=15, context_menu=path_menu)
+        # the name of the folder, or of the file in the viewer; under the mouse its icon and a menu of its
+        # parent folders
+        chosen_folder = path_combo(
+            Path(reading.value) if reading.value else current(),
+            size=15,
+            context_menu=path_menu,
+            max_width=available_width() - (48 if reading.value else 0),
+        )
+        if reading.value and image_button_clicked(svg("open"), size=16, tint=tint, tooltip="Ouvrir avec le système"):
+            open_file(reading.value)
         if chosen_folder:
             go(chosen_folder)
 
     def middle():
-        if CUSTOM_TITLEBAR:
-            window_drag_area()  # the free space of the bar moves the window
+        window_drag_area(fill_height=True)  # the free space of the bar moves the window, a double click maximizes it
 
     def right():
         if show_view:
@@ -2464,11 +2495,6 @@ def reader():
     tint = icon_tint()
 
     def bar():
-        if image_button_clicked(svg("chevron-left"), "Fermer", size=16, tint=tint):
-            leave_reader()
-            return
-        add_space(6)
-        strong(Path(reading.value).name)
         if is_image(reading.value):  # the zoom of the image: − / + and fit in one segmented control
             add_space(10)
             label(f"{round(image_state.zoom * 100)} %")
@@ -2484,14 +2510,10 @@ def reader():
                     image_state.zoom = image_state.zoom * 1.25
                 else:
                     image_state.reset()
-        add_space(max(available_width() - 150, 4))
-        if small_button_clicked("Ouvrir avec l'app"):
-            context[0].open_url(Path(reading.value).as_uri())
 
-    horizontal(bar)  # a row at the top: horizontal_centered would take the whole height
-    if not reading.value:
-        return  # closed by the bar
-    separator()
+    if is_image(reading.value):  # the bar only holds the zoom of an image: the rest is in the toolbar
+        horizontal(bar)  # a row at the top: horizontal_centered would take the whole height
+        separator()
     if is_pdf(reading.value):
         pdf_reader_view()
         return
@@ -2544,8 +2566,13 @@ def pdf_tools(doc, view):
         horizontal(ask)
         return
 
+    tint = icon_tint()
+
+    def tool(icon, tip, on=False):
+        return image_button_clicked(svg(icon), size=15, tint=toggle_tint(on), selected=on, tooltip=tip)
+
     def pages():
-        if small_button_clicked("▣ Page" if pdf_grid.value else "▦ Miniatures"):
+        if tool("grid", "Pages" if pdf_grid.value else "Miniatures", pdf_grid.value):
             pdf_grid.value = not pdf_grid.value
         if pdf_grid.value:  # the size of the thumbnails is all there is to set
             add_space(10)
@@ -2554,34 +2581,43 @@ def pdf_tools(doc, view):
             slider_int(pdf_thumb_size, 80, 320, "Taille")
             return
         add_space(10)
-        if small_button_clicked("◀"):
+        if tool("chevron-left", "Page précédente"):
             view.previous_page()
         label(f"{view.page} / {view.pages}")
-        if small_button_clicked("▶"):
+        if tool("chevron-right", "Page suivante"):
             view.next_page()
         add_space(10)
-        if small_button_clicked("−"):
+        if tool("zoom-out", "Réduire"):
             view.zoom = view.zoom / 1.25
         label(f"{round(view.zoom * 100)} %")
-        if small_button_clicked("+"):
+        if tool("zoom-in", "Agrandir"):
             view.zoom = view.zoom * 1.25
-        if small_button_clicked("Largeur"):
+        if tool("fit-width", "Ajuster à la largeur"):
             view.fit = "width"
-        if small_button_clicked("Page"):
+        if tool("zoom-fit", "Ajuster à la page"):
             view.fit = "page"
-        if small_button_clicked("⟳"):
+        if tool("rotate", "Pivoter de 90°"):
             view.rotate(90)
-        segmented_control(pdf_tool, [(None, "Texte"), (None, "Pan")], tint=icon_tint())
+        segmented_control(
+            pdf_tool,
+            [(svg("text-select"), None), (svg("hand"), None)],
+            size=15,
+            tint=tint,
+            tooltips=["Sélectionner du texte", "Déplacer la page"],
+        )
         view.tool = "hand" if pdf_tool.value else "select"
-        checkbox(pdf_continuous, "Continu")
+        if tool("continuous", "Défilement continu", pdf_continuous.value):
+            pdf_continuous.value = not pdf_continuous.value
         view.continuous = pdf_continuous.value
-        checkbox(pdf_dark, "Sombre")
+        if tool("moon", "Pages sombres", pdf_dark.value):
+            pdf_dark.value = not pdf_dark.value
         view.dark = pdf_dark.value
         if view.busy:
             weak("…")
 
     def finding():
-        label("🔍")
+        add_space(4)
+        image(svg("search"), max_width=15, max_height=15, tint=icon_tint())
         text_edit_singleline(pdf_query, hint_text="Rechercher dans le PDF")
         if pdf_query.value != pdf_searched[0]:  # a new text: a new search
             pdf_searched[0] = pdf_query.value
@@ -2590,11 +2626,11 @@ def pdf_tools(doc, view):
             label(f"{view.match_index} / {view.matches}" + ("+" if view.searching else ""))
         elif pdf_query.value:
             weak("recherche…" if view.searching else "aucun résultat")
-        if small_button_clicked("▲"):
+        if tool("chevron-up", "Résultat précédent"):
             view.previous_match()
-        if small_button_clicked("▼"):
+        if tool("chevron-down", "Résultat suivant"):
             view.next_match()
-        if view.selected_text and small_button_clicked("Copier"):
+        if view.selected_text and tool("copy", "Copier la sélection"):
             view.copy_selection()
 
     horizontal(pages)
@@ -2872,6 +2908,14 @@ def duplicate():
 
 def start_rename(path):
     renaming.value, new_name.value = str(path), path.name
+
+
+def new_window():
+    """another window of the Finder in the same process (the system groups them under one icon of the Dock),
+    on the folder shown"""
+    window = FinderWindow(current())
+    window.viewport.open()
+    finder_windows.append(window)
 
 
 def new_folder():
@@ -3348,6 +3392,7 @@ def reload_app():
 
 # category, label, icon, shortcut, enabled, run. "Cmd" is the command key on macOS and ctrl elsewhere
 ACTIONS = [
+    ("Ouvrir", "Nouvelle fenêtre", "dock", "Cmd+N", lambda: True, new_window),
     ("Ouvrir", "Ouvrir", "open", "Cmd+ArrowDown", has_selection, action_open),
     (
         "Ouvrir",
@@ -3945,42 +3990,149 @@ BOTTOM_PANES = {
 }
 ALL_PANES = {**PANES, **BOTTOM_PANES}
 central_ui = zone_pane("content", content, margin=8)
-dock = Dock(
-    DockContainer(
-        "horizontal",
-        [
-            DockContainer(
-                "vertical",
-                [
-                    DockPane(CENTRAL, central_ui, hide_tab=True, central=True),  # no tab while the files are alone
-                    DockContainer(
-                        "tabs",
-                        [DockPane(title, ui, closable=True) for title, ui in BOTTOM_PANES.items()],
-                    ),
-                ],
-            ),
-            DockContainer(
-                "vertical",
-                [DockPane(title, ui, closable=True) for title, ui in PANES.items() if title not in WATCH_PANES + JOB_PANES],
-            ),
-        ],
-    ),
-    id="inspector",
-    tab_bar_height=26,
-    pane_margin=8,
-    gap_width=GAP,  # a gap between the panes, as wide as between the other boxes
-    pane_stroke=EDGE,
-    active_tab_stroke=EDGE,
-    inactive_tab_stroke=EDGE,
-    resize_stroke=(
-        1,
-        (0, 0, 0, 0),
-    ),  # the gap stays empty: no grey band, the panes still resize
-)
+
+def make_dock():
+    """the dock of a window: its panes, in the first layout"""
+    new = Dock(
+        DockContainer(
+            "horizontal",
+            [
+                DockContainer(
+                    "vertical",
+                    [
+                        DockPane(CENTRAL, central_ui, hide_tab=True, central=True),  # no tab while the files are alone
+                        DockContainer(
+                            "tabs",
+                            [DockPane(title, ui, closable=True) for title, ui in BOTTOM_PANES.items()],
+                        ),
+                    ],
+                ),
+                DockContainer(
+                    "vertical",
+                    [DockPane(title, ui, closable=True) for title, ui in PANES.items() if title not in WATCH_PANES + JOB_PANES],
+                ),
+            ],
+        ),
+        id="inspector",
+        tab_menu=tab_menu,
+        tab_bar_height=26,
+        pane_margin=8,
+        gap_width=GAP,  # a gap between the panes, as wide as between the other boxes
+        pane_stroke=EDGE,
+        active_tab_stroke=EDGE,
+        inactive_tab_stroke=EDGE,
+        resize_stroke=(
+            1,
+            (0, 0, 0, 0),
+        ),  # the gap stays empty: no grey band, the panes still resize
+    )
+    if default_layout:
+        new.load(default_layout)
+    return new
+
+
+default_layout = None
+dock = make_dock()
 default_layout = dock.save()
 default_layout["shares"] = [4.0, 1.0]  # the files take most of the width
 default_layout["children"][0]["shares"] = [3.0, 1.0]  # and most of the height, over the terminals
 dock.load(default_layout)
+
+
+# several windows. The state of a window is a set of variables of this module (PER_WINDOW): the window
+# being drawn has its own in the module, the others wait in a dict. The windows of pyegui (Viewport) are
+# drawn one after the other, so a secondary window puts its variables in the module for the time of its
+# frame and gives the ones of the main window back. What the windows share: the tags, the theme, the look,
+# the clipboard, the watcher of the disk and its activity.
+PER_WINDOW = [
+    "tag_filter", "tag_manager_open", "tag_picker_open", "tag_edit", "tag_name", "tag_color", "tag_parent",
+    "tags_query", "tag_query", "tag_index", "tag_picker_state",
+    "find_name", "find_ext", "find_scope", "find_folders", "find_pages_min", "find_pages_max", "find_protect",
+    "find_pdf_text", "find_auto", "find_state", "note_text", "note_of",
+    "history", "position", "selected", "picked", "anchor", "scroll_target", "view", "search", "show_sidebar",
+    "bg_open", "path_editing", "path_text", "path_edit", "focus_zone", "show_dock", "folded", "renaming",
+    "new_name", "palette_open", "palette_query", "palette_index", "palette_pointer", "focus_outline",
+    "reading", "reading_cache", "zoom_pick", "image_state", "pdf_reader", "pdf_query", "pdf_searched",
+    "pdf_password", "pdf_dark", "pdf_continuous", "pdf_grid", "pdf_tool", "pdf_thumb_size", "pdf_preview",
+    "tree", "files_list", "files_icons", "tree_menu", "shell", "python", "follow_folder", "shell_folder",
+    "tag_tree", "item_tags", "item_tags_of", "pane_requests", "layout_requests", "transfer", "dock",
+]
+
+
+def make_window(folder):
+    """the state of a new window, on a folder: the same definitions as the first one, above"""
+    state = {
+        "tag_filter": Int(0), "tag_manager_open": Bool(False), "tag_picker_open": Bool(False),
+        "tag_edit": {"id": 0, "loaded": 0}, "tag_name": Str(""), "tag_color": RGB(0.0, 0.0, 0.0),
+        "tag_parent": Int(0), "tags_query": Str(""), "tag_query": Str(""), "tag_index": Int(0),
+        "tag_picker_state": {"query": "", "pointer": None, "just_opened": False},
+        "find_name": Str(""), "find_ext": Str(""), "find_scope": Int(0), "find_folders": Bool(True),
+        "find_pages_min": Str(""), "find_pages_max": Str(""), "find_protect": Int(0), "find_pdf_text": Str(""),
+        "find_auto": Bool(True),
+        "find_state": {
+            "applied": None, "typed": None, "changed_at": 0.0, "rows": [], "more": False,
+            "index": None, "pin": None, "job": 0, "running": False,
+        },
+        "note_text": Str(""), "note_of": {"path": ""},
+        "history": [folder], "position": Int(0), "selected": Str(""), "picked": set(), "anchor": Str(""),
+        "scroll_target": Str(""), "view": Int(view.value), "search": Str(""),
+        "show_sidebar": Bool(show_sidebar.value), "bg_open": Bool(False),
+        "path_editing": Bool(False), "path_text": Str(""), "path_edit": {"focus": False, "error": False},
+        "focus_zone": Str("content"), "show_dock": Bool(show_dock.value),
+        "folded": {"Outils", "Ouvrir", "Système", "Édition"}, "renaming": Str(""), "new_name": Str(""),
+        "palette_open": Bool(False), "palette_query": Str(""), "palette_index": Int(0),
+        "palette_pointer": {"pos": None}, "focus_outline": {"zone": None, "since": 0.0},
+        "reading": Str(""), "reading_cache": {"path": None, "text": ""}, "zoom_pick": Int(-1),
+        "image_state": ImageView(), "pdf_reader": {"path": None, "doc": None, "view": None},
+        "pdf_query": Str(""), "pdf_searched": [""], "pdf_password": Str(""), "pdf_dark": Bool(False),
+        "pdf_continuous": Bool(True), "pdf_grid": Bool(False), "pdf_tool": Int(0), "pdf_thumb_size": Int(150),
+        "pdf_preview": {"key": None, "doc": None},
+        "tree": FileTreeView("tree", folder, watcher=watcher, activatable_dirs=True),
+        "files_list": FileListView("list", folder, watcher=watcher, navigate=False),
+        "files_icons": FileIconView("icons", folder, watcher=watcher, navigate=False),
+        "tree_menu": {"paths": None},
+        "shell": Terminal(cwd=str(folder), font=nerd_font(), light=TERMINAL_LIGHT, dark=TERMINAL_DARK),
+        "python": Terminal(
+            cwd=str(folder), shell=newest_python(), args=["-q"], font=nerd_font(),
+            light=TERMINAL_LIGHT, dark=TERMINAL_DARK,
+        ),
+        "follow_folder": Bool(True), "shell_folder": {"path": folder},
+        "tag_tree": TagTreeView(), "item_tags": Tags(), "item_tags_of": {"path": None, "version": -1},
+        "pane_requests": [], "layout_requests": [], "transfer": FileTransfer(), "dock": make_dock(),
+    }
+    state["files_icons"].icon_size = files_icons.icon_size
+    return state
+
+
+def window_variables():
+    return {name: globals()[name] for name in PER_WINDOW}
+
+
+class FinderWindow:
+    """a secondary window of the Finder: a Viewport of pyegui with the state of its own"""
+
+    def __init__(self, folder):
+        self.state = make_window(folder)
+        self.viewport = Viewport(
+            "Finder",
+            self.draw,
+            inner_width=1180,
+            inner_height=720,
+            fullsize_content=MACOS or CUSTOM_TITLEBAR,
+            decorations=not CUSTOM_TITLEBAR,
+        )
+
+    def draw(self, ctx):
+        main = window_variables()
+        globals().update(self.state)
+        try:
+            window_frame(ctx)
+        finally:
+            self.state = window_variables()
+            globals().update(main)
+
+
+finder_windows = []
 
 
 def update_func(ctx):
@@ -3991,15 +4143,21 @@ def update_func(ctx):
             bg_edit.value = theme.value
         apply_style()
         started.value = True
+    finder_windows[:] = [w for w in finder_windows if w.viewport.is_open]  # the ones the user closed
+    collect_activity()
+    apply_background()
+    window_frame(ctx)
+    ctx.save_state(snapshot())  # written to disk by pyegui, see persist_id below
 
+
+def window_frame(ctx):
+    """one frame of a window, the main one or another: the keys, the layout and the windows over it"""
     keyboard()
     action_keys()
     receive_drops()
     open_requested_panes()  # before the dock is drawn
-    collect_activity()
     follow_in_shell()
     layout()
-    apply_background()
     window("Apparence", background_window, open=bg_open, default_width=300, resizable=False)
     if renaming.value:
         rename_dialog()
@@ -4009,7 +4167,6 @@ def update_func(ctx):
         tag_picker()
     if tag_manager_open.value:
         tag_manager()
-    ctx.save_state(snapshot())  # written to disk by pyegui, see persist_id below
 
 
 def layout():

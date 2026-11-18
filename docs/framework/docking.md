@@ -62,6 +62,9 @@ tab bar of the dock:
 
     tab_bar_right (Callable[[DockTabBar], None]): widgets on the right of the tab bar, added right to left
 
+    tab_menu (Callable[[DockTabBar, str], None]): the content of the menu opened by a right click on a
+    tab, given the tab bar and the title of the tab, e.g. `lambda bar, title: dock_menu(bar, panes)`
+
 **Usage:**
 
 ```python
@@ -108,6 +111,18 @@ dock = Dock(root, glass=True, inactive_tab_fill="#ec489933", tab_bar_height=30)
   saved = ctx.load_state() or {}
   if "dock" in saved:
       dock.load(saved["dock"], panes=all_panes)
+  ```
+
+- `Dock.remove_pane(title)` (method): Closes the first pane with this title, whether or not it is `closable` (that only decides
+
+  whether its tab has a close button). Returns False if there is no such pane. The pane object
+  is yours: add_pane() brings it back.
+
+  **Usage:**
+
+  ```python
+  if button_clicked("Close the console"):
+      dock.remove_pane("Console")
   ```
 
 - `Dock.reset_style()` (method): Goes back to the default look of the dock
@@ -239,6 +254,11 @@ The changes are applied once the dock is drawn, so they show up on the next fram
 - `DockTabBar.active_title` (attribute): Title of the active tab, or None
 - `DockTabBar.add_pane(pane)` (method): Adds a pane to these tabs and makes it the active tab
 - `DockTabBar.close(title)` (method): Closes the first tab with this title. Only the panes created with closable=True are closed
+- `DockTabBar.dock_titles` (attribute): Titles of the panes of the whole dock, not only of these tabs, in display order
+- `DockTabBar.remove_pane(title)` (method): Closes the first pane of the dock with this title, in these tabs or in others, whether or not
+
+  it is `closable`
+
 - `DockTabBar.set_active(title)` (method): Makes the first tab with this title the active tab
 - `DockTabBar.titles` (attribute): Titles of the tabs, in display order
 
@@ -252,5 +272,44 @@ Shows a Dock, filling the available space.
 dock = Dock(DockContainer("tabs", [DockPane("A", lambda: label("a")), DockPane("B", lambda: label("b"))]))
 
 def update_func(ctx):
+    dock_area(dock)
+```
+
+
+## `dock_menu(dock, panes, **kwargs)`
+
+The content of a menu that manages the panes of a dock: a check box for each pane that tells
+whether it is open, to show it or close it, and a button that gives back the layout the app
+started with. Call it in a menu (`menu_button`, `menu_image_button`), a context menu or a popup,
+not in a pane of the same dock. In the `tab_menu` of the dock (the menu of a right click on a
+tab) give it the tab bar the function receives instead of the dock.
+
+**Args**
+
+- `dock` (Dock | DockTabBar): the dock to manage, or the tab bar given to a `tab_menu` function
+- `panes` (list[DockPane]): the panes the menu manages: the ones that can be shown or closed, open or not. Another pane of the dock, the central one for example, is not in the menu
+
+**Keyword args**
+
+- `layout` (dict): a layout given by `dock.save()`, for the button that goes back to it. Without
+- it there is no button. Not for a tab bar: the dock cannot be rebuilt while it is drawn, add
+- your own button to the menu and call `dock.load()` for it
+- `reset_text` (str): the text of that button. Default is "Reset layout"
+- `show` (Callable[[str], None]): called with the title of a pane the user wants to show, instead
+- of adding it to the first tabs of the dock (to the tabs of the tab bar for a tab bar): for an
+- app that puts each pane in its own place. The dock is changed by the next frame at the latest,
+- as for add_pane
+
+Returns True during the frame a pane was shown or closed or the layout was restored.
+
+**Example:**
+
+```python
+panes = [DockPane("Files", files_ui, closable=True), DockPane("Console", console_ui, closable=True)]
+dock = Dock(DockContainer("horizontal", panes), tab_menu=lambda bar, title: dock_menu(bar, panes))
+default_layout = dock.save()
+
+def update_func(ctx):
+    menu_button("Panes", lambda: dock_menu(dock, panes, layout=default_layout))
     dock_area(dock)
 ```

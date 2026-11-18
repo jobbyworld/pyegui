@@ -22,7 +22,7 @@ image("file://icons/gear.svg", max_width=16, max_height=16, tint=(120, 120, 128)
 ```
 
 
-## `image_button_clicked(source, text=None, size=16.0, tint=None, selected=False, frame=True)`
+## `image_button_clicked(source, text=None, size=16.0, tint=None, selected=False, frame=True, tooltip=None)`
 
 A button showing an image, and a text if given. Returns True when it is clicked.
 
@@ -34,11 +34,12 @@ A button showing an image, and a text if given. Returns True when it is clicked.
 - `tint` (color): multiplies the colors of the image. With a white icon, the icon takes the color
 - `selected` (bool): show the button as selected, like a toggle. Default is False
 - `frame` (bool): draw the background of the button. False shows it only when the button is hovered or selected, like the items of a sidebar. Default is True
+- `tooltip` (str): a text shown when the button is hovered, to keep the button small. Default is none
 
 **Example:**
 
 ```python
-if image_button_clicked("file://icons/list.svg", "List", selected=view == LIST):
+if image_button_clicked("file://icons/list.svg", tooltip="List", selected=view == LIST):
     view = LIST
 ```
 

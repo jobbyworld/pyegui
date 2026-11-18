@@ -63,7 +63,7 @@ THEMES = [
      "is placed inside the current ui. `sidebar_panel`, `topbar_panel` and `bottombar_panel` are the "
      "panels of the layout rules: boxes with the same gap, rounding, outline and sheet, laid out for "
      "you (see `Context.set_layout`).",
-     ["sidebar_panel", "topbar_panel", "bottombar_panel", "window_controls", "window_drag_area", "left_panel", "right_panel", "top_panel",
+     ["sidebar_panel", "topbar_panel", "bottombar_panel", "window_controls", "Viewport", "window_drag_area", "left_panel", "right_panel", "top_panel",
       "bottom_panel", "window", "modal", "tooltip",
       "tooltip_ui", "context_menu", "menu_bar", "menu_button", "menu_image_button",
       "menu_image_text_button", "close_menu"]),
@@ -76,7 +76,7 @@ THEMES = [
     ("docking", "Docking tabs",
      "A `Dock` holds panes shown as tabs that the user can resize, rearrange by dragging and "
      "close. Create it once, add the panes, then show it with `dock_area` every frame.",
-     ["Dock", "DockPane", "DockContainer", "DockTabBar", "dock_area"]),
+     ["Dock", "DockPane", "DockContainer", "DockTabBar", "dock_area", "dock_menu"]),
     ("terminal", "Terminal",
      "A `Terminal` is a shell running in a pseudo terminal, drawn by `terminal`: a real terminal "
      "(colors, cursor, full screen programs, history, selection, copy and paste) to put in a "
