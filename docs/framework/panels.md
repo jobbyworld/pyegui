@@ -81,6 +81,56 @@ def update(ctx):
 ```
 
 
+## `Viewport`
+
+
+A window of the app besides the main one, with its own update function.
+
+The windows share the process: the values (`Str`, `Int`...) and the state objects are those of the
+app, so two windows can show the same data, or each its own. A window closed by the user (its
+close button) is hidden, `open()` shows it again. Closing the main window ends the app.
+
+**Args**
+
+- `title` (str): the title of the window
+- `update_func` (Callable[[Context], None]): draws the window, like the one of run_native
+
+**Keyword args**
+
+- inner_width (float), inner_height (float): the size of the window. Default is 640 x 480
+- min_inner_width (float), min_inner_height (float): the smallest size of the window
+- `resizable` (bool): Default is True
+- `fullsize_content` (bool): the content goes under the title bar of macOS. Default is False
+
+**Methods**
+
+- `open` (): shows the window (it is created at the next frame)
+- `close` (): hides it
+- `toggle` (): open or close
+- `is_open` (bool): True while the window is shown
+
+**Example:**
+
+```python
+def inspector(ctx):
+    heading("Inspector")
+
+window = Viewport("Inspector", inspector, inner_width=360, inner_height=480)
+
+def update(ctx):
+    if button_clicked("Inspector"):
+        window.toggle()
+
+run_native("App", update)
+```
+
+
+- `Viewport.close()` (method): Hides the window.
+- `Viewport.is_open` (attribute)
+- `Viewport.open()` (method): Shows the window.
+- `Viewport.title` (attribute)
+- `Viewport.toggle()` (method): Shows the window if it is hidden, hides it otherwise.
+
 ## `window_drag_area(**kwargs)`
 
 The part of the bar that moves the window: dragging it moves the window, a double click maximizes

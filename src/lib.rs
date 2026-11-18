@@ -42,6 +42,7 @@ mod table_view;
 mod tags;
 mod terminal;
 mod titlebar;
+mod viewport;
 mod transfer;
 mod tree;
 mod watcher;
@@ -1192,56 +1193,61 @@ impl eframe::App for PyeguiApp<'_> {
         }
 
         unsafe {
-            debug!("Getting ui stack pointer");
-            let ui_stack = UI.as_mut().expect(UI_PTR_NULL_ERR);
-
-            debug!("Push root UI");
-            ui_stack.push(&raw mut *ui);
-
-            layout::begin_frame();
-            // set_backdrop_image: the picture under everything
-            backdrop_image::paint(ui.ctx(), ui.max_rect());
-            // set_glass_style(background=...): glass under everything, seen between the boxes
-            if let Some(fill) = style::background_fill(ui.visuals()) {
-                ui.painter().rect_filled(ui.max_rect(), 0.0, fill);
-            }
-            debug!("Execute update_func");
-
-            Python::attach(|py| {
-                if let Err(err) = self.update_func.call1((ctx_r,)) {
-                    err.display(py);
-                }
-            });
-
-            debug!("Executed update_func");
+            Python::attach(|py| draw_frame(py, ui, &self.update_func, ctx_r));
             cursor::end_frame();
-            titlebar::edge_resize(ui.ctx());
-            sync_fonts(ui.ctx());
-
-            // the central panel background must be painted even if no widget was added
-            if CENTRAL.is_none() {
-                open_central_panel(ui_stack).expect(UI_STACK_ERR);
-            }
-
-            ui_stack.clear();
-
-            debug!("Clear UI stack");
-
-            if let Some(central) = CENTRAL.take() {
-                let CentralPanelState {
-                    mut panel_ui,
-                    mut prepared,
-                } = *central;
-                if dock::take_drawn() && style::dock_filled() {
-                    // the panes of the dock are filled on their own: the area under them stays clear
-                    prepared.frame.fill = egui::Color32::TRANSPARENT;
-                }
-                let content_ui = &mut prepared.content_ui;
-                content_ui.expand_to_include_rect(content_ui.max_rect());
-                let response = prepared.end(&mut panel_ui);
-                ui.advance_cursor_after_rect(response.rect);
-            }
+            viewport::show_all(ui.ctx());
         }
+    }
+}
+
+/// One frame of a window: the ui stack, the layout rules, the update function and the central panel.
+/// Used for the main window and for the windows of `Viewport`, one after the other.
+pub(crate) unsafe fn draw_frame(py: Python<'_>, ui: &mut egui::Ui, update_func: &Bound<'_, PyAny>, ctx_r: Context) {
+    debug!("Getting ui stack pointer");
+    let ui_stack = UI.as_mut().expect(UI_PTR_NULL_ERR);
+
+    debug!("Push root UI");
+    ui_stack.push(&raw mut *ui);
+
+    layout::begin_frame();
+    // set_backdrop_image: the picture under everything
+    backdrop_image::paint(ui.ctx(), ui.max_rect());
+    // set_glass_style(background=...): glass under everything, seen between the boxes
+    if let Some(fill) = style::background_fill(ui.visuals()) {
+        ui.painter().rect_filled(ui.max_rect(), 0.0, fill);
+    }
+    debug!("Execute update_func");
+
+    if let Err(err) = update_func.call1((ctx_r,)) {
+        err.display(py);
+    }
+
+    debug!("Executed update_func");
+    titlebar::edge_resize(ui.ctx());
+    sync_fonts(ui.ctx());
+
+    // the central panel background must be painted even if no widget was added
+    if CENTRAL.is_none() {
+        open_central_panel(ui_stack).expect(UI_STACK_ERR);
+    }
+
+    ui_stack.clear();
+
+    debug!("Clear UI stack");
+
+    if let Some(central) = CENTRAL.take() {
+        let CentralPanelState {
+            mut panel_ui,
+            mut prepared,
+        } = *central;
+        if dock::take_drawn() && style::dock_filled() {
+            // the panes of the dock are filled on their own: the area under them stays clear
+            prepared.frame.fill = egui::Color32::TRANSPARENT;
+        }
+        let content_ui = &mut prepared.content_ui;
+        content_ui.expand_to_include_rect(content_ui.max_rect());
+        let response = prepared.end(&mut panel_ui);
+        ui.advance_cursor_after_rect(response.rect);
     }
 }
 
@@ -3035,6 +3041,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     native_dnd::register(m)?;
     cursor::register(m)?;
     titlebar::register(m)?;
+    viewport::register(m)?;
     transfer::register(m)?;
     dock::register(m)?;
     plot::register(m)?;
