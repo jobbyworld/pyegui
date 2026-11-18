@@ -839,7 +839,9 @@ def background_window():
     elif context[0].backdrop_image_error():
         weak("⚠ " + context[0].backdrop_image_error())
     separator()
-    segmented_control(bg_edit, [(svg("sun"), "Clair"), (svg("moon"), "Sombre")], size=14, tint=icon_tint())
+    # the theme of the whole app: the sliders below are those of the theme chosen
+    if segmented_control(bg_edit, [(svg("sun"), "Clair"), (svg("moon"), "Sombre")], size=14, tint=icon_tint()):
+        set_theme(bg_edit.value)
     name = "dark" if bg_edit.value else "light"
     toggle_value(bg_auto, "Luminance automatique")
     add_enabled(not bg_auto.value, lambda: slider_float(bg_luminance[name], 0.0, 2.0, "Luminance"))
@@ -1006,6 +1008,8 @@ def apply_path():
 
 def set_theme(value):
     theme.value = value
+    if value in (LIGHT, DARK):
+        bg_edit.value = value  # the sliders of the picture are those of the theme
     apply_style()
 
 
@@ -3979,6 +3983,8 @@ def update_func(ctx):
     if not started.value:
         context.append(ctx)
         restore(ctx.load_state())
+        if theme.value in (LIGHT, DARK):
+            bg_edit.value = theme.value
         apply_style()
         started.value = True
 
