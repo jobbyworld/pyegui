@@ -98,11 +98,24 @@ THEMES = [
      "Images are given as uri: `file://` followed by a path, or an `http(s)` url. SVG icons stay "
      "sharp at any size and can be tinted.",
      ["image", "image_button_clicked", "image_and_text_clicked", "file_icon", "set_blue_folders"]),
+    ("pdf", "PDF",
+     "What a PDF says about itself, read by the Rust code of pyegui (the `craft-pdf` reader): `pdf_info` "
+     "gives the pages, the version, the metadata, the dates and what the file forbids, with the GIL "
+     "released so it can be called from a thread. Nothing to install: it replaces pypdf. `PdfDocument` opens a "
+     "file (in a thread with `wait=False`), reads the text of a page (`text`), its bookmarks (`outline`) and "
+     "draws a page as a PNG (`render_png`). `PdfView` and `pdf_view` show its pages: scroll, zoom, fit to the "
+     "width or the page, one page or all of them, rotation, dark colors, a search that marks its matches, a "
+     "selection of text with the mouse that Ctrl+C copies, links that work and a hand to drag the pages. "
+     "`pdf_thumbnail` shows one small page that can be clicked. The pages are drawn by threads and kept as "
+     "textures, the window never waits for them. Only in a build with the `pdf` Cargo feature, which is on by "
+     "default.",
+     ["pdf_info", "PdfDocument", "PdfView", "pdf_view", "pdf_thumbnail"]),
     ("interaction", "Keyboard, mouse and drag and drop",
      "Shortcuts are read with `key_pressed`; what the user did to a widget is read from its "
      "`Response` or from the value the function returns.",
      ["key_pressed", "typed_text", "modifiers", "pointer_pos", "pointer_pressed", "ui_contains_pointer", "interactive", "draw_rect",
-      "dnd_drag_source", "dnd_drop_zone", "dropped_files", "dragged_files", "system_modifiers", "hovered_files", "start_file_drag"]),
+      "dnd_drag_source", "dnd_drop_zone", "dropped_files", "dragged_files", "system_modifiers", "hovered_files", "start_file_drag",
+      "set_cursor"]),
     ("styling", "Themes, colors, fonts and glass",
      "Everything that changes the look is a method of the `Context`, given to the update "
      "function of the top level. Call them from the first frame; `reset_style` goes back to the "

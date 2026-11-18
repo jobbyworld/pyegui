@@ -307,6 +307,10 @@ def update_func(ctx):
   next frame
 
 - `FileTreeView.is_open(path)` (method): True if the folder is open in the tree
+- `FileTreeView.items` (attribute): Paths of the rows shown at the last frame, in their order: the items of the open folders
+
+  follow their folder, and sort and filters are applied
+
 - `FileTreeView.keep_focus` (attribute): If True, the tree takes back the keyboard focus at every frame when another widget holds
 
   it, except a text field being edited

@@ -1892,6 +1892,8 @@ pub(crate) struct FileTreeView {
     /// what Python asked for, given to the state at the next frame
     pending_selected: Option<Vec<String>>,
     pending_open: Vec<(String, bool)>,
+    /// the rows shown at the last frame, in their order (the items of the open folders included)
+    shown: Vec<String>,
     known_dirs: HashSet<String>,
     activated: Vec<String>,
     /// the folder under the pointer while files are dragged over the tree or dropped on it
@@ -1935,6 +1937,7 @@ impl FileTreeView {
             open: HashSet::new(),
             pending_selected: None,
             pending_open: vec![],
+            shown: vec![],
             known_dirs: HashSet::new(),
             activated: vec![],
             drop_target: None,
@@ -1961,6 +1964,13 @@ impl FileTreeView {
     #[getter]
     fn get_selected(&self) -> Vec<String> {
         self.selected.clone()
+    }
+
+    /// Paths of the rows shown at the last frame, in their order: the items of the open folders
+    /// follow their folder, and sort and filters are applied
+    #[getter]
+    fn items(&self) -> Vec<String> {
+        self.shown.clone()
     }
 
     #[setter]
@@ -2525,6 +2535,16 @@ fn tree_node_at<'a>(nodes: &'a [Node], index: usize, row: &mut usize) -> Option<
     None
 }
 
+/// The ids of the rows shown, in order
+fn tree_rows(nodes: &[Node], rows: &mut Vec<String>) {
+    for node in nodes {
+        rows.push(node.id.clone());
+        if let Some(children) = &node.children {
+            tree_rows(children, rows);
+        }
+    }
+}
+
 /// The row of a node among the rows shown
 fn tree_row(nodes: &[Node], id: &str, row: &mut usize) -> Option<usize> {
     for node in nodes {
@@ -2742,7 +2762,12 @@ unsafe fn file_tree_view(py: Python<'_>, view: &Bound<'_, FileTreeView>, kwargs:
             }
         }
     }
-    view.borrow_mut().drop_target = drop_target;
+    {
+        let mut v = view.borrow_mut();
+        v.drop_target = drop_target;
+        v.shown.clear();
+        tree_rows(&nodes, &mut v.shown);
+    }
 
     if let (Some(slot), Some(layout)) = (slot, &layout) {
         tree_header(ui, id, view, &columns, &headers, &hooks, opts, slot, layout);

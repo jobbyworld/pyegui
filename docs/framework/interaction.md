@@ -250,8 +250,8 @@ Call it on the frame a drag starts on an item (``response.drag_started`` of an
 ``interactive`` area, or a drag of the file views with ``drag_out=True``): the mouse button has
 to be down. The drag goes on by itself, with the icons of the files under the pointer, and the
 drop is done by the receiver (a copy in the Finder, a move with Cmd held). The window gets no
-pointer event until the mouse button is released. Works on macOS, returns False elsewhere or if
-there is nothing to drag.
+pointer event until the mouse button is released. Works on macOS and on Windows (on Windows the
+call returns once the drag is over), returns False elsewhere or if there is nothing to drag.
 
 **Args**
 
@@ -267,4 +267,36 @@ there is nothing to drag.
 r = interactive("row", lambda: label(name))
 if r.drag_started:
     start_file_drag([path])
+```
+
+
+## `set_cursor(source, hotspot=(0, 0), size=None)`
+
+Shows a custom cursor, made from a picture, for this frame, while the pointer is over the window.
+Call it at every frame that wants the cursor (like the cursor of a widget): a frame that does not
+call it shows the usual cursor again.
+
+The file is `.cur` or `.ani` (a Windows cursor, with its own hotspot), `.ico` or `.png` (a picture
+that may be transparent), or `.svg` (drawn at the size of the cursors of the system, sharp at any
+scale). The cursor is made once for each file and size and kept.
+
+Only on Windows for now: elsewhere nothing is shown and False is returned, so the app can fall back
+on the usual cursor, which the widgets pick by themselves.
+
+**Args**
+
+- `source` (str | None): path of the file, or None for the usual cursor
+- `hotspot` (tuple[int, int]): the point of the picture that is the pointer, in its pixels (the units of an SVG); ignored for `.cur` and `.ani`, which have their own. Default is the top left
+- `size` (int): the size in pixels of the longest side, the size of the cursors of the system by default for an SVG (32 at 100% of scaling) and the size of the picture otherwise
+
+Returns True when the cursor is shown, False when it could not be made (the file is not found or not
+readable, or the platform has no custom cursors).
+
+**Example:**
+
+```python
+def update_func(ctx):
+    button_clicked("Draw")
+    if pointer_over_the_canvas():
+        set_cursor("pen.svg", hotspot=(2, 30))
 ```

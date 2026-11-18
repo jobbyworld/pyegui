@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::{fs, ptr};
 
 mod columns;
+mod cursor;
 mod containers;
 mod icons;
 mod layout;
@@ -24,6 +25,14 @@ mod files;
 mod markdown;
 mod native_dnd;
 mod path;
+#[cfg(feature = "pdf")]
+mod pdf;
+#[cfg(feature = "pdf")]
+mod pdf_nav;
+#[cfg(feature = "pdf")]
+mod pdf_text;
+#[cfg(feature = "pdf")]
+mod pdf_view;
 mod plot;
 mod style;
 mod table;
@@ -1082,8 +1091,14 @@ impl eframe::App for PyeguiApp<'_> {
         }
     }
 
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        native_dnd::pump_drop_input(ctx, raw_input);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx_r = Context(ui.ctx().clone());
+        native_dnd::set_window(&*frame);
+        cursor::begin_frame(&*frame);
 
         #[cfg(target_os = "macos")]
         if ui.ctx().cumulative_pass_nr() < 3 {
@@ -1125,6 +1140,7 @@ impl eframe::App for PyeguiApp<'_> {
             });
 
             debug!("Executed update_func");
+            cursor::end_frame();
             sync_fonts(ui.ctx());
 
             // the central panel background must be painted even if no widget was added
@@ -2930,6 +2946,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     widgets::register(m)?;
     icons::register(m)?;
     native_dnd::register(m)?;
+    cursor::register(m)?;
     transfer::register(m)?;
     dock::register(m)?;
     plot::register(m)?;
@@ -2939,6 +2956,10 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     watcher::register(m)?;
     files::register(m)?;
     path::register(m)?;
+    #[cfg(feature = "pdf")]
+    pdf::register(m)?;
+    #[cfg(feature = "pdf")]
+    pdf_view::register(m)?;
     tags::register(m)?;
     Ok(())
 }

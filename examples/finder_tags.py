@@ -19,7 +19,7 @@ a free text: set_note(), note() and noted().
 
 A whole folder can be indexed: index_folder() records it and everything it contains (name, parent,
 kind, size, date) in the same table, search() finds the indexed items by name.
-index_pdfs() then reads the PDF it found with pypdf (pages, protections, metadata) into pdf_info,
+index_pdfs() then reads the PDF it found with pyegui.pdf_info (pages, protections, metadata) into pdf_info,
 only those that are new or changed.
 """
 
@@ -529,7 +529,7 @@ class TagStore:
         by spaces or commas, with or without the dot (a filter on the extension leaves out the
         folders); under: only what is inside this folder, at any depth (None: everywhere);
         folders: False leaves out the folders.
-        pdf: criteria on what pypdf read, which keep only the PDF that were read: a dict with any
+        pdf: criteria on what pdf_info read, which keep only the PDF that were read: a dict with any
         of pages_min, pages_max, protected (True: encrypted, False: not) and text (in the title,
         author, subject or keywords). Sorted by name, at most `limit` rows."""
 
@@ -577,12 +577,12 @@ class TagStore:
                 db.close()
 
     def index_pdfs(self, root=None, progress=None, cancel=None, on_file=None):
-        """reads, with pypdf, the PDF indexed under a folder (None: the whole index) that are new or
+        """reads, with pdf_info, the PDF indexed under a folder (None: the whole index) that are new or
         changed since they were last read (their size or date is not the one of pdf_info), into the
         table pdf_info. Without a new walk: it also reads the PDF indexed before pdf_info existed.
         Returns (read, with an error, up to date), or None if cancelled. Run index_folder first.
         Safe to call from a thread, like index_folder. `progress(done, total)` after each file, `on_file(path)` before reading one."""
-        from finder_pdf import COLUMNS, read_pdf_info  # pypdf is only needed from here
+        from finder_pdf import COLUMNS, read_pdf_info
 
         db = self.db if self.path == ":memory:" else sqlite3.connect(str(self.path), timeout=30)
         inside = "%" if root is None else like_inside(key(root))
@@ -631,7 +631,7 @@ class TagStore:
                 db.close()
 
     def pdf_info(self, path):
-        """what pypdf read of a PDF at the last indexation, as a dict, or None if it was not read"""
+        """what pdf_info read of a PDF at the last indexation, as a dict, or None if it was not read"""
         cursor = self.db.execute("SELECT * FROM pdf_info WHERE path = ?", (key(path),))
         row = cursor.fetchone()
         return dict(zip((c[0] for c in cursor.description), row)) if row else None
