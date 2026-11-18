@@ -295,6 +295,9 @@ blue_folders = Bool(not MACOS)  # Windows: the folders in the blue of the Finder
 # a picture as the backdrop of the window (ctx.set_backdrop_image), with a filter for each theme
 BACKGROUND_FITS = ["cover", "contain", "stretch", "center"]
 BACKGROUND_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+bg_on = Bool(False)  # the mode "Image": the picture is shown (with the full glass, or it would be hidden)
+bg_mode = Int(0)  # the segment of the mode control: flat, partial glass, full glass, image
+bg_edit = Int(1)  # the theme whose sliders are shown in the window: 0 light, 1 dark
 bg_image = Str("")
 bg_luminance = {"light": Float(1.0), "dark": Float(0.6)}
 bg_saturation = {"light": Float(1.0), "dark": Float(0.9)}
@@ -789,7 +792,7 @@ def background_path():
 def apply_background():
     """gives the picture and its filters to pyegui when one of them changed"""
     wanted = (
-        background_path(),
+        background_path() if bg_on.value else None,
         "auto" if bg_auto.value else (bg_luminance["light"].value, bg_luminance["dark"].value),
         (bg_saturation["light"].value, bg_saturation["dark"].value),
         bg_blur.value,
@@ -804,9 +807,28 @@ def apply_background():
         context[0].set_backdrop_image(path, luminance=lum, saturation=sat, blur=blur, contrast=contrast, scrim=scrim, opacity=opacity, fit=fit)
 
 
+def set_mode(index):
+    """flat (no glass), partial glass, full glass, or image (the full glass with the picture behind)"""
+    set_glass(FULL if index == 3 else index)
+    bg_on.value = index == 3
+
+
 def background_window():
-    """the floating window of the picture: its file, a luminance and a saturation for each theme, a
-    blur, the opacity and the fit. The changes show at once behind the app"""
+    """the floating window of the look of the app: the mode (flat, partial glass, full glass, image)
+    and, in the mode image, the picture with its filters. The sliders are those of one theme, chosen
+    with the sun and the moon. The changes show at once behind the app"""
+    bg_mode.value = 3 if bg_on.value else glass.value
+    if segmented_control(
+        bg_mode,
+        [(None, "Plat"), (None, "Partielle"), (None, "Complète"), (svg("image"), "Image")],
+        size=14,
+        tint=icon_tint(),
+    ):
+        set_mode(bg_mode.value)
+    if not bg_on.value:
+        weak("Le mode Image montre une image de fond derrière la vitre")
+        return
+    separator()
     text_edit_singleline(bg_image, hint_text="Chemin de l'image")
     chosen = Path(selected.value) if selected.value else None
     if chosen and chosen.suffix.lower() in BACKGROUND_TYPES:
@@ -816,25 +838,18 @@ def background_window():
         weak("Fichier introuvable")
     elif context[0].backdrop_image_error():
         weak("⚠ " + context[0].backdrop_image_error())
-    if glass.value == NO_GLASS:
-        weak("L'image est cachée sans vitre: choisir Partielle ou Complète dans les réglages")
     separator()
+    segmented_control(bg_edit, [(svg("sun"), "Clair"), (svg("moon"), "Sombre")], size=14, tint=icon_tint())
+    name = "dark" if bg_edit.value else "light"
     toggle_value(bg_auto, "Luminance automatique")
-
-    def theme_sliders(name):
-        add_enabled(not bg_auto.value, lambda: slider_float(bg_luminance[name], 0.0, 2.0, "Luminance"))
-        slider_float(bg_saturation[name], 0.0, 2.0, "Saturation")
-        slider_float(bg_contrast[name], 0.0, 1.5, "Contraste")
-        slider_float(bg_scrim[name], 0.0, 0.9, "Voile")
-
-    small("Thème clair")
-    theme_sliders("light")
-    small("Thème sombre")
-    theme_sliders("dark")
+    add_enabled(not bg_auto.value, lambda: slider_float(bg_luminance[name], 0.0, 2.0, "Luminance"))
+    slider_float(bg_saturation[name], 0.0, 2.0, "Saturation")
+    slider_float(bg_contrast[name], 0.0, 1.5, "Contraste")
+    slider_float(bg_scrim[name], 0.0, 0.9, "Voile")
     separator()
     slider_float(bg_blur, 0.0, 60.0, "Flou")
     slider_float(bg_opacity, 0.0, 1.0, "Transparence")
-    segmented_control(bg_fit, [(None, name) for name in BACKGROUND_FITS])
+    segmented_control(bg_fit, [(None, text) for text in BACKGROUND_FITS])
     separator()
 
     def buttons():
@@ -875,6 +890,7 @@ def snapshot():
         "show_hidden": show_hidden.value,
         "blue_folders": blue_folders.value,
         "background": {
+            "on": bg_on.value,
             "image": bg_image.value,
             "luminance": {k: v.value for k, v in bg_luminance.items()},
             "saturation": {k: v.value for k, v in bg_saturation.items()},
@@ -922,6 +938,7 @@ def restore(saved):
     set_blue(bool(saved.get("blue_folders", blue_folders.value)))
     background = saved.get("background")
     if isinstance(background, dict):
+        bg_on.value = bool(background.get("on", False)) and glass.value == FULL
         bg_image.value = str(background.get("image", ""))
         bg_auto.value = bool(background.get("auto", bg_auto.value))
         for holders, key in ((bg_luminance, "luminance"), (bg_saturation, "saturation"), (bg_scrim, "scrim"), (bg_contrast, "contrast")):
@@ -994,6 +1011,8 @@ def set_theme(value):
 
 def set_glass(value):
     glass.value = value
+    if value != FULL:
+        bg_on.value = False  # the picture is behind the full glass only
     apply_style()
 
 
@@ -1991,10 +2010,6 @@ def settings_menu():
         if blue_folders.value != before_blue:
             set_blue(blue_folders.value)
     separator()
-    if selectable_label_clicked(bg_open.value, "Image de fond…"):
-        bg_open.value = True
-        close_menu()
-    separator()
     before_layout = unified.value
     toggle_value(unified, "Disposition unifiée")
     if unified.value != before_layout:
@@ -2027,13 +2042,20 @@ def sidebar_bottom():
 
 def theme_control():
     """light, dark, system: a segmented control of icons"""
+    before = theme.value
     if segmented_control(
         theme,
-        [(svg("sun"), None), (svg("moon"), None), (svg("theme-system"), None)],
+        [(svg("sun"), None), (svg("moon"), None), (svg("theme-system"), None), (svg("gear"), None)],
         size=14,
         tint=icon_tint(),
     ):
-        apply_style()
+        if theme.value == 3:  # the settings of the look: a button, not a theme
+            theme.value = before
+            bg_open.value = not bg_open.value
+        else:
+            if theme.value in (LIGHT, DARK):
+                bg_edit.value = theme.value  # the sliders of the picture are those of the theme chosen
+            apply_style()
 
 def sidebar_content():
     accent = ACCENTS[accent_name.value]
