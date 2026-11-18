@@ -42,6 +42,7 @@ mod table;
 mod table_view;
 mod tags;
 mod terminal;
+mod titlebar;
 mod transfer;
 mod tree;
 mod watcher;
@@ -1215,6 +1216,7 @@ impl eframe::App for PyeguiApp<'_> {
 
             debug!("Executed update_func");
             cursor::end_frame();
+            titlebar::edge_resize(ui.ctx());
             sync_fonts(ui.ctx());
 
             // the central panel background must be painted even if no widget was added
@@ -1290,6 +1292,12 @@ impl eframe::App for PyeguiApp<'_> {
 ///     keeping the window buttons at the top left. Leave about 28 points free at the top of the
 ///     first panel. Ignored on other platforms
 ///
+///     custom_titlebar (bool): the app draws its own title bar: the one of the system is removed and
+///     the app puts window_controls() (the three buttons at the left, like macOS) and
+///     window_drag_area() (moves the window) in its top bar. The edges of the window resize it. A
+///     transparent window (transparent=True or a backdrop) gets no frame from the system. On macOS
+///     it is fullsize_content: the buttons of the system stay. Default is False
+///
 ///     layout (dict): the layout rules of the window: spacing (gap), corners (rounding), outline,
 ///     background between the boxes, sheet inside the boxes, opacity and inner_margin, given once and
 ///     overridden by region ("sidebar", "topbar", "bottombar", "central", "dock"). They are used by
@@ -1337,6 +1345,7 @@ unsafe fn run_native(
         viewport = viewport.with_transparent(true);
     }
 
+    titlebar::set_custom(false);
     if let Some(kwargs) = kwargs {
         if let (Some(height), Some(width)) = (
             kwargs.get_item("inner_height")?,
@@ -1383,7 +1392,12 @@ unsafe fn run_native(
         if let Some(rules) = kwargs.get_item("layout")? {
             layout::set_rules(rules.cast::<PyDict>()?)?;
         }
-        if kwarg::<bool>(Some(kwargs), "fullsize_content")?.unwrap_or(false) {
+        let custom_titlebar = kwarg::<bool>(Some(kwargs), "custom_titlebar")?.unwrap_or(false);
+        titlebar::set_custom(custom_titlebar);
+        if custom_titlebar && !cfg!(target_os = "macos") {
+            viewport = viewport.with_decorations(false);
+        }
+        if custom_titlebar || kwarg::<bool>(Some(kwargs), "fullsize_content")?.unwrap_or(false) {
             layout::set_fullsize_content(true);
             // macOS: the content goes under a transparent title bar, with the window buttons on it
             viewport = viewport
@@ -3021,6 +3035,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     icons::register(m)?;
     native_dnd::register(m)?;
     cursor::register(m)?;
+    titlebar::register(m)?;
     transfer::register(m)?;
     dock::register(m)?;
     plot::register(m)?;

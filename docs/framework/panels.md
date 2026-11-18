@@ -50,6 +50,56 @@ def update_func(ctx):
 ```
 
 
+## `window_controls(**kwargs)`
+
+The three buttons of the window at the left of the bar, like macOS: close (red), minimize
+(yellow) and maximize or restore (green). Their symbols appear when the pointer is over them.
+
+Put it first in a horizontal row of the top bar, then `window_drag_area()` for the rest of the
+row. Use it with `run_native(..., custom_titlebar=True)`. On macOS the window keeps the buttons of
+the system (`fullsize_content`): nothing is drawn and False is returned.
+
+**Keyword args**
+
+- `size` (float): diameter of a button. Default is 12
+- `gap` (float): space between the buttons. Default is 8
+
+**Returns**
+
+- `bool`: True when the buttons were drawn
+
+**Example:**
+
+```python
+pyegui.run_native("App", update, custom_titlebar=True, transparent=True)
+
+def update(ctx):
+    def bar():
+        pyegui.window_controls()
+        pyegui.window_drag_area(title="My app")
+    pyegui.topbar_panel(lambda: pyegui.horizontal(bar))
+```
+
+
+## `window_drag_area(**kwargs)`
+
+The part of the bar that moves the window: dragging it moves the window, a double click maximizes
+or restores it. It takes the rest of the width of the row it is in (or `width`), and can show the title of the
+window in its middle.
+
+**Keyword args**
+
+- `title` (str): a text drawn in the middle of the area. Default is none
+- `width` (float): width of the area. Default is the rest of the row
+- `height` (float): height of the area. Default is the height of a row of the ui
+
+**Example:**
+
+```python
+pyegui.horizontal(lambda: (pyegui.window_controls(), pyegui.window_drag_area(title="My app")))
+```
+
+
 ## `left_panel(id, update_fun, **kwargs)`
 
 A panel on the left side of the window. The rest of the window is the central panel.
