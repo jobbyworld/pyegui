@@ -67,6 +67,7 @@ from pyegui import (
     color_edit_button_rgb,
     combo_box,
     dock_area,
+    dock_menu,
     draw_rect,
     end_row,
     file_icon,
@@ -2139,13 +2140,10 @@ SEARCH_WIDTH, SEARCH_MIN = (
 
 
 def panes_menu():
-    """the panes of the dock that were closed with their tab, to bring them back"""
-    closed = [title for title in ALL_PANES if title not in dock.titles]
-    if not closed:
-        weak("Tous les panneaux sont affichés")
-    for title in closed:
-        if button_clicked(f"Afficher {title}"):
-            show_pane(title)
+    """the panes of the dock: a check box for each, to show it (on the right of the files, or under
+    them for the terminals) or close it, and the button that goes back to the first layout"""
+    panes = [DockPane(title, ui, closable=True) for title, ui in ALL_PANES.items()]
+    dock_menu(dock, panes, layout=default_layout, reset_text="Réinitialiser la disposition", show=show_pane)
     separator()
     toggle_value(show_dock, "Dock")
 

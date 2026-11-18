@@ -1666,6 +1666,10 @@ unsafe fn dock_area(py: Python<'_>, dock: Py<Dock>) -> PyResult<()> {
 ///
 ///     reset_text (str): the text of that button. Default is "Reset layout"
 ///
+///     show (Callable[[str], None]): called with the title of a pane the user wants to show, instead
+///     of adding it to the first tabs of the dock: for an app that puts each pane in its own place.
+///     The dock is changed by the next frame at the latest, as for add_pane
+///
 /// Returns True during the frame a pane was shown or closed or the layout was restored.
 ///
 /// Example::
@@ -1691,20 +1695,25 @@ unsafe fn dock_menu(
     }
     let layout = kwargs.and_then(|k| k.get_item("layout").ok().flatten()).filter(|l| !l.is_none());
     let reset_text = kwarg::<String>(kwargs, "reset_text")?.unwrap_or_else(|| "Reset layout".to_string());
+    let show = kwargs.and_then(|k| k.get_item("show").ok().flatten()).filter(|f| !f.is_none());
     let open = dock.borrow().titles();
     let mut changed = false;
     for pane in &panes {
         let mut on = open.contains(&pane.title);
         if ui.checkbox(&mut on, pane.title.as_str()).changed() {
-            let mut dock = dock.borrow_mut();
             if on {
-                let new = Pane::from_py(pane, py);
-                match &mut dock.tree {
-                    Some(tree) => add_pane_to_tree(tree, new),
-                    None => dock.pending.push(new),
+                if let Some(show) = &show {
+                    show.call1((pane.title.clone(),))?;
+                } else {
+                    let new = Pane::from_py(pane, py);
+                    let mut dock = dock.borrow_mut();
+                    match &mut dock.tree {
+                        Some(tree) => add_pane_to_tree(tree, new),
+                        None => dock.pending.push(new),
+                    }
                 }
             } else {
-                dock.remove_pane(&pane.title)?;
+                dock.borrow_mut().remove_pane(&pane.title)?;
             }
             changed = true;
         }

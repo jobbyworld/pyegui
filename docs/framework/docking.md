@@ -285,6 +285,9 @@ not in a pane of the same dock.
 - `layout` (dict): a layout given by `dock.save()`, for the button that goes back to it. Without
 - it there is no button
 - `reset_text` (str): the text of that button. Default is "Reset layout"
+- `show` (Callable[[str], None]): called with the title of a pane the user wants to show, instead
+- of adding it to the first tabs of the dock: for an app that puts each pane in its own place.
+- The dock is changed by the next frame at the latest, as for add_pane
 
 Returns True during the frame a pane was shown or closed or the layout was restored.
 
