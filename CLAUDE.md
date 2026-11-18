@@ -118,6 +118,7 @@ Index of all files: [docs/framework/README.md](docs/framework/README.md).
 | `markdown.py` | markdown editor with live preview and mermaid diagrams |
 | `dock_colors.py` | layout rules in a glass style: a blue dock and a green dock, semi transparent (`DockPane(sheet=...)`) |
 | `markdown_viewer_bars.py`, `markdown_viewer_glass.py`, `markdown_viewer_bars_glass.py` | the same app with a top and a bottom bar, with a glass backdrop, with both: the layout rules (`layout=dict(...)`, `sidebar_panel`, `topbar_panel`, `bottombar_panel`) |
+| `custom_titlebar.py` | `custom_titlebar=True`: no title bar of the system, `window_controls()` (close, minimize, maximize at the left like macOS) and `window_drag_area()` in a `topbar_panel` |
 | `terminal.py` | a terminal in a dock: a sidebar of files, a viewer and a bottom dock with a shell and a Python prompt; buttons write commands to the shell (`term.run`); a Réglages pane changes the layout rules (`ctx.set_layout`) and the blur of the backdrop live |
 | `files.py` | the three file views (tree, list, icons) sharing one `FileWatcher`, a preview reloaded when the file changes on the disk, a Log dock of the notify events, a `path_combo` title, a `path_breadcrumb` path bar and a slider for the size of the icons |
 | `markdown_finder.py` | a markdown viewer in the unified layout of `finder.py`: a `FileTreeView` of the `.md` files of a folder in the sidebar (filtered by the search field), the document in the middle, reloaded when saved, its outline and source in a dock, the path in the bottom band |
@@ -149,6 +150,7 @@ predicate, run) read by both the panel and the keyboard, so an action is declare
 | `tags.rs` | `Tags`, `tags_edit`, `TagTreeView` and `tag_tree_view` |
 | `pdf_view.rs` | `PdfDocument`, `PdfView`, `pdf_view`, `pdf_thumbnail`: pages drawn by threads (`craft-pdf` raster), textures kept in a cache with a memory budget, the search thread, selection, rotation |
 | `pdf_text.rs` | the text of a page with the box of every character (an interpreter `Device`), search folding, hit tests, selection rectangles |
+| `titlebar.rs` | `custom_titlebar`: `window_controls`, `window_drag_area` and the resize by the edges of a window without a title bar of the system (`edge_resize`, called at each frame) |
 | `cursor.rs` | `set_cursor`: custom mouse cursors from a file (`.cur`, `.ani`, `.ico`, `.png`, `.svg`), on Windows only (the window is subclassed to answer `WM_SETCURSOR`); the open and closed hands of the PDF pan are the SVG of `src/cursors/` |
 | `pdf_nav.rs` | the links of a page and the bookmarks of a document, read from the objects of the file |
 | `pdf.rs` | `pdf_info`, with `craft-pdf` (git dependency of `storytold/craft-libs` pinned by its rev, with the `[patch.crates-io]` of `Cargo.toml` at the same rev; feature `pdf`) |

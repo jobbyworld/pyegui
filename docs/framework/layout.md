@@ -2,6 +2,45 @@
 
 Update functions can be nested: a function given to `horizontal`, `group`, `frame`... draws in a child ui with its own layout and style. Panels must be added before any other widget, see [panels.md](panels.md).
 
+## `bar(left=None, center=None, right=None, **kwargs)`
+
+A row with a left part, a central part and a right part, laid out in one pass: the right part sticks
+to the right edge, the left part to the left edge, and the central part takes the room that is left
+between them. Nothing is measured at a previous frame, so the parts do not move when the window is
+resized or when a part changes.
+
+The width of a part that is placed by its right side (right, and center unless it is "left") is found
+by drawing it once without showing it, so those functions run twice per frame (the first time
+their widgets do nothing). They are called in this order: right, left, center. `available_width()`
+in a left central part is the room left between the two sides, which is what a path or a search
+field should take (`path_breadcrumb(max_width=available_width())`). A part may be None.
+
+**Args**
+
+- `left` (callable): drawn from the left edge, left to right
+- `center` (callable): drawn in the room between the left and the right parts
+- `right` (callable): drawn left to right like the others, and placed against the right edge
+
+**Keyword args**
+
+- `height` (float): height of the row, the parts are centered in it. Default is the height of a button; `available_height()` fills a panel
+- `gap` (float): space kept between the parts. Default is the spacing between items
+- `center_align` (str): "left" (right after the left part), "center" (in the middle of the room) or "right" (against the right part). Default is "center"
+
+**Example:**
+
+```python
+def left():
+    button_clicked("Back")
+
+def right():
+    label("3 items")        # then the button, against the right edge
+    button_clicked("Settings")
+
+bar(left=left, center=lambda: label("title"), right=right)
+```
+
+
 ## `horizontal(update_fun)`
 
 Start a ui with horizontal layout. After you have called this, the function registers the contents as any other widget.
