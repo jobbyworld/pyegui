@@ -407,7 +407,7 @@ fn highlight_language(language: &str) -> &str {
 /// selected and copied.
 ///
 /// Highlighted languages: Python, JavaScript and TypeScript, Rust, shell (bash, zsh, and
-/// PowerShell as shell), C and C++, JSON, SQL, TOML and YAML, and reStructuredText ("rst": titles, directives, comments, lists, fields and inline markup). Another language is shown plain.
+/// PowerShell as shell), C and C++, JSON, SQL, TOML and YAML, reStructuredText ("rst": titles, directives, comments, lists, fields and inline markup) and Gherkin ("feature": the keywords of the blocks and of the steps in English and French, tags, comments, tables, doc strings and the parameters of an outline). Another language is shown plain.
 ///
 /// Args:
 ///     text (str): the code
@@ -433,9 +433,11 @@ unsafe fn code_view(text: &str, language: &str, kwargs: Option<&Bound<'_, PyDict
     let style = ui.style().clone();
     let theme = egui_extras::syntax_highlighting::CodeTheme::from_style(&style);
     // memoized by egui_extras: cheap to call at every frame
-    let rst = matches!(language.trim_start_matches('.').to_lowercase().as_str(), "rst" | "rest");
-    let mut job = if rst {
+    let lang = language.trim_start_matches('.').to_lowercase();
+    let mut job = if matches!(lang.as_str(), "rst" | "rest") {
         rst_job(ui, text)
+    } else if matches!(lang.as_str(), "feature" | "gherkin") {
+        crate::gherkin::job(ui, text)
     } else {
         egui_extras::syntax_highlighting::highlight(ui.ctx(), &style, &theme, text, highlight_language(language))
     };

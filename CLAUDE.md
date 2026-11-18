@@ -142,6 +142,7 @@ predicate, run) read by both the panel and the keyboard, so an action is declare
 | `layout.rs` | layout rules: tokens, regions, `sidebar_panel`, `topbar_panel`, `bottombar_panel`, the central frame |
 | `dock.rs` | docking (`egui_dock`) |
 | `terminal.rs` | `Terminal` and `terminal`: the pseudo terminal and its grid (`alacritty_terminal`), drawn cell by cell, keys and mouse sent to the shell |
+| `gherkin.rs` | Gherkin (`.feature`) colors for `code_view`: blocks, steps, tags, comments, tables, doc strings, in English and French |
 | `markdown.rs` | markdown and mermaid |
 | `style.rs` | themes, accent, glass, `set_style` |
 | `watcher.rs` | `FileWatcher`: listings of folders cached and watched with `notify`, a change asks for a repaint |

@@ -170,6 +170,7 @@ TEXT_SUFFIXES = {
     ".txt",
     ".toml",
     ".rst",
+    ".feature",
     ".json",
     ".yml",
     ".yaml",
@@ -187,6 +188,7 @@ EMOJIS = {
     ".md": "📝",
     ".txt": "📝",
     ".rst": "📝",
+    ".feature": "🥒",
     ".pdf": "📕",
     ".png": "🖼",
     ".jpg": "🖼",
@@ -208,6 +210,7 @@ KINDS = {
     ".md": "Markdown",
     ".txt": "Plain text",
     ".rst": "reStructuredText",
+    ".feature": "Gherkin feature",
     ".pdf": "PDF document",
     ".png": "PNG image",
     ".jpg": "JPEG image",
@@ -2380,7 +2383,7 @@ def is_pdf(path):
 CODE_EXTENSIONS = {".py", ".pyw", ".js", ".mjs", ".cjs", ".ts", ".rs", ".ps1", ".psm1", ".sh", ".bash", ".zsh",
                    ".sql", ".json", ".jsonc", ".toml", ".yaml", ".yml", ".ini", ".cfg", ".xml", ".html", ".htm",
                    ".css", ".scss", ".c", ".h", ".cpp", ".hpp", ".cc", ".cs", ".java", ".kt", ".go", ".rb", ".php",
-                   ".swift", ".lua", ".r", ".bat", ".cmd", ".tsx", ".jsx", ".vue", ".rst", ".txt", ".log", ".csv", ".env"}
+                   ".swift", ".lua", ".r", ".bat", ".cmd", ".tsx", ".jsx", ".vue", ".rst", ".feature", ".txt", ".log", ".csv", ".env"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".ico", ".tif", ".tiff"}
 READER_MAX = 2_000_000  # a larger file opens with its app
 
