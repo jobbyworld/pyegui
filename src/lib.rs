@@ -33,6 +33,7 @@ mod pdf_nav;
 mod pdf_text;
 #[cfg(feature = "pdf")]
 mod pdf_view;
+mod backdrop_image;
 mod plot;
 mod style;
 mod table;
@@ -510,6 +511,60 @@ impl Context {
             .map_err(|_| PyRuntimeError::new_err("margin lock is poisoned"))? = Some(margin);
         self.0.request_repaint();
         Ok(())
+    }
+
+    /// Draws a picture under the whole window, as its backdrop, with a luminance, a saturation, a
+    /// blur and an opacity. It is seen where nothing is drawn over it: with a transparent window and
+    /// layout rules or a glass style that leave the background and the sheets clear or translucent,
+    /// for example `set_layout(sheet=(0, 0, 0, 120))` or `set_glass_style(mode="full")`.
+    ///
+    /// The file is read by a thread and scaled down to 1920 pixels on its longest side, the window
+    /// does not wait for it. Call it again with other settings to change the filters: the picture
+    /// is read once, the filters are applied again to the copy (call it at every frame from a
+    /// slider if you like). `None` removes the picture.
+    ///
+    /// Args:
+    ///     source (str | None): a path or a `file://` uri (PNG, JPEG, GIF, WebP, BMP...), None to remove it
+    ///
+    /// Keyword args:
+    ///     luminance (float | tuple): the brightness, 1.0 as it is, 0 black, up to 4. A pair
+    ///     `(light, dark)` gives one value for the light theme and one for the dark theme, which is
+    ///     followed when the theme changes. Default is 1.0
+    ///
+    ///     saturation (float | tuple): the strength of the colors, 1.0 as they are, 0 gray, up to 4.
+    ///     A number or a pair `(light, dark)` like the luminance. Default is 1.0
+    ///
+    ///     blur (float): the radius of a gaussian blur in pixels, 0 is sharp. Default is 0
+    ///
+    ///     opacity (float): from 0 (not seen, the backdrop effect shows) to 1. Default is 1.0
+    ///
+    ///     fit (str): "cover" fills the window and crops, "contain" shows all of it, "stretch" deforms it,
+    ///     "center" keeps its size. Default is "cover"
+    ///
+    /// Example::
+    ///
+    ///     ctx.set_backdrop_image("wallpaper.jpg", luminance=(1.0, 0.5), saturation=0.8, blur=12)
+    ///     ctx.set_backdrop_image(None)  # removed
+    #[pyo3(signature = (source=None, luminance=None, saturation=None, blur=0.0, opacity=1.0, fit="cover"))]
+    fn set_backdrop_image(
+        &self,
+        source: Option<&str>,
+        luminance: Option<&Bound<'_, PyAny>>,
+        saturation: Option<&Bound<'_, PyAny>>,
+        blur: f32,
+        opacity: f32,
+        fit: &str,
+    ) -> PyResult<()> {
+        let luminance = luminance.map_or(Ok((1.0, 1.0)), |v| backdrop_image::pair(v, "luminance"))?;
+        let saturation = saturation.map_or(Ok((1.0, 1.0)), |v| backdrop_image::pair(v, "saturation"))?;
+        backdrop_image::set(source, luminance, saturation, blur, opacity, fit)?;
+        self.0.request_repaint();
+        Ok(())
+    }
+
+    /// Why the picture of `set_backdrop_image` could not be read, or None.
+    fn backdrop_image_error(&self) -> Option<String> {
+        backdrop_image::error()
     }
 
     /// Blurs what is behind the window, by a radius in points: 0 is no blur. macOS only (it does
@@ -1127,6 +1182,8 @@ impl eframe::App for PyeguiApp<'_> {
             ui_stack.push(&raw mut *ui);
 
             layout::begin_frame();
+            // set_backdrop_image: the picture under everything
+            backdrop_image::paint(ui.ctx(), ui.max_rect());
             // set_glass_style(background=...): glass under everything, seen between the boxes
             if let Some(fill) = style::background_fill(ui.visuals()) {
                 ui.painter().rect_filled(ui.max_rect(), 0.0, fill);
