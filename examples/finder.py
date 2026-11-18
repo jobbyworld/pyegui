@@ -2784,15 +2784,20 @@ def trash():
     if sys.platform == "win32":
         trash_windows(paths)
     else:
-        # the Finder's own trash, so the items can be put back
-        for path in paths:
-            script = f'tell application "Finder" to delete POSIX file "{path}"'
-            subprocess.run(["osascript", "-e", script], capture_output=True)
+        # the Finder's own trash, so the items can be put back. The Finder is named by its bundle id: this
+        # app is called "Finder" too, and `tell application "Finder"` would reach it instead of the system
+        # all the items in one call: a process by item is slow, and the window waits for it
+        files = ", ".join(f'POSIX file "{p}"' for p in paths)
+        script = f'tell application id "com.apple.finder" to delete {{{files}}}'
+        done = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+        if done.returncode:
+            print(f"trash: {done.stderr.strip()}", file=sys.stderr)
     refresh(current())
     deselect()
     if following and Path(following).exists():
         select_path(following)  # the focus goes on to the next item
         scroll_target.value = following
+    focus_zone.value = "content"  # the keys go on in the files, even if the action was run from the dock
 
 
 def reveal():
@@ -3274,7 +3279,8 @@ ACTIONS = [
         "Édition",
         "Mettre à la corbeille",
         "trash",
-        "Cmd+Backspace" if MACOS else "Delete",
+        # Delete: the key of the extended keyboards (Fn+Backspace), Clear: the one of the numeric keypad
+        "Cmd+Backspace|Delete|Clear" if MACOS else "Delete",
         lambda: (MACOS or sys.platform == "win32") and has_selection(),
         trash,
     ),
@@ -3461,7 +3467,7 @@ ACTIONS = [
 
 def action_keys():
     for _, _, _, shortcut, enabled, run in ACTIONS:
-        if shortcut and enabled() and key_pressed(shortcut):
+        if shortcut and enabled() and any(key_pressed(k) for k in shortcut.split("|")):  # "A|B": two keys
             run()
             return
 
@@ -3534,7 +3540,7 @@ def palette_ui():
                     label(text, selectable=False)
                     add_space(max(available_width() - (124 if shortcut else 8), 8))
                     if shortcut:
-                        weak(shortcut)
+                        weak(shortcut.split("|")[0])
 
                 horizontal(line)
 
@@ -3594,7 +3600,7 @@ def actions_panel():
             def row(enabled=enabled, button=button):
                 add_enabled(enabled(), button)
 
-            tooltip(f"{text} ({shortcut})" if shortcut else text, row)
+            tooltip(f"{text} ({shortcut.replace('|', ' or ')})" if shortcut else text, row)
         add_space(8)
 
 
