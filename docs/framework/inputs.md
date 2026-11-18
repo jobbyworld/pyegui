@@ -172,7 +172,7 @@ switch(notifications, "Notifications")
 ```
 
 
-## `segmented_control(selected, options, size=15.0, tint=None)`
+## `segmented_control(selected, options, size=15.0, tint=None, tooltips=None)`
 
 A row of buttons in one rounded track, where exactly one is selected: the view switch of a
 file manager (list, icons, tree). The selected one is filled with the accent color.
@@ -183,6 +183,7 @@ file manager (list, icons, tree). The selected one is filled with the accent col
 - `options` (list[tuple[str | None, str | None]]): one (icon, text) per option. The icon is the uri of an image, like for image(), the text may be None for an icon only option
 - `size` (float): size of the icons. Default is 15
 - `tint` (color): color of the icons of the options that are not selected. The selected one is white. Default is the color of the icons as they are
+- `tooltips` (list[str | None]): a text shown when an option is hovered, one per option (None for none). Default is no tooltip
 
 Returns True during the frame the selection changed.
 

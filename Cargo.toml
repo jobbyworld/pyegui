@@ -12,7 +12,7 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.30.1", features = ["chrono", "abi3-py311", "generate-import-lib", "extension-module"] }
 eframe = { version = "0.37.0", features = ["glow", "persistence"] }
 egui_extras = { version = "0.37.0", features = ["datepicker", "all_loaders", "serde"] }
-image = { version = "0.25", features = ["jpeg", "png", "ico"] }
+image = { version = "0.25", features = ["jpeg", "png", "ico", "gif", "webp", "bmp"] }
 chrono = "0.4.45"
 jiff = "0.2.42"
 egui_ltreeview = "0.10.0"

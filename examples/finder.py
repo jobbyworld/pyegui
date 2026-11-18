@@ -44,6 +44,7 @@ from pyegui import (
     FileListView,
     FileTreeView,
     FileWatcher,
+    Float,
     Int,
     PdfDocument,
     PdfView,
@@ -125,6 +126,8 @@ from pyegui import (
     vertical,
     vertical_centered,
     weak,
+    window,
+    slider_float,
 )
 
 BACKDROP = {"win32": Backdrop.ACRYLIC, "darwin": Backdrop.LIQUID_GLASS}.get(
@@ -291,6 +294,23 @@ view = Int(TREE)
 search = Str("")
 show_sidebar = Bool(True)
 blue_folders = Bool(not MACOS)  # Windows: the folders in the blue of the Finder, not the yellow of the Explorer
+# a picture as the backdrop of the window (ctx.set_backdrop_image), with a filter for each theme
+BACKGROUND_FITS = ["cover", "contain", "stretch", "center"]
+BACKGROUND_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+bg_on = Bool(False)  # the mode "Image": the picture is shown (with the full glass, or it would be hidden)
+bg_mode = Int(0)  # the segment of the mode control: flat, partial glass, full glass, image
+bg_edit = Int(1)  # the theme whose sliders are shown in the window: 0 light, 1 dark
+bg_image = Str("")
+bg_luminance = {"light": Float(1.0), "dark": Float(0.6)}
+bg_saturation = {"light": Float(1.0), "dark": Float(0.9)}
+bg_auto = Bool(True)  # the luminance is measured and set for the theme, the sliders of it are off
+bg_scrim = {"light": Float(0.55), "dark": Float(0.3)}  # a veil over the picture, white or black
+bg_contrast = {"light": Float(0.5), "dark": Float(0.6)}  # less than 1 flattens the picture: the text reads better
+bg_blur = Float(12.0)
+bg_opacity = Float(1.0)
+bg_fit = Int(0)  # the index of BACKGROUND_FITS
+bg_open = Bool(False)  # the window of the settings of the picture
+bg_applied = [None]  # what was given to pyegui last, it is given again when it changes
 show_hidden = Bool(False)  # the hidden items (a name with a dot, a hidden flag), faded when shown
 path_editing = Bool(False)  # the path bar is a text field holding the full path
 path_text = Str("")
@@ -312,17 +332,14 @@ glass = Int(FULL)
 GLASS_OPACITY = 1.2  # multiplies the opacity of the glass
 GLASS_LEVELS = {"central": 0.3, "dock": 0.3}  # the files and the docks are clear glass; the rest is the style's
 BACKDROP_BLUR = 32  # the blur of what is behind the window (macOS), in points
-# the unified layout, like the window of the Claude app: the sidebar runs along the whole height of
-# the window, without gap nor corners; it and the body are cut in three bands of the same heights
-# (top, content, bottom) whose lines continue from one to the other. False: rounded boxes with gaps
-unified = Bool(True)
+# the layout, like the window of the Claude app: the sidebar runs along the whole height of the
+# window, without gap nor corners; it and the body are cut in three bands of the same heights (top,
+# content, bottom) whose lines continue from one to the other
 UNIFIED_GAP = 8  # the gap of the unified layout, around the dock and between its panes
 TOP_H, BOTTOM_H = 52, 44  # the heights of the top and bottom bands, in the sidebar and the body
 CLEAR = (0, 0, 0, 0)
 LINE = (1, (127, 127, 127, 70))  # the lines between the bands and between the sidebar and the body
 # the boxes layout: the margins outside the sidebar (left, top, right, bottom) and its corners
-SIDEBAR_MARGIN = (0, 39, 0, 15.5)
-SIDEBAR_ROUNDING = 14.7
 accent_name = Str("Blue")
 pill_tabs = Bool(False)
 started = Bool(False)
@@ -772,12 +789,125 @@ def apply_style():
     ctx.set_backdrop_blur(BACKDROP_BLUR)  # macOS only, added to the blur of the backdrop
 
 
+def background_path():
+    """the picture of the backdrop if it can be read, else None"""
+    path = bg_image.value.strip().strip("'\"")
+    return path if path and Path(path).is_file() else None
+
+
+def apply_background():
+    """gives the picture and its filters to pyegui when one of them changed"""
+    wanted = (
+        background_path() if bg_on.value else None,
+        "auto" if bg_auto.value else (bg_luminance["light"].value, bg_luminance["dark"].value),
+        (bg_saturation["light"].value, bg_saturation["dark"].value),
+        bg_blur.value,
+        (bg_contrast["light"].value, bg_contrast["dark"].value),
+        (bg_scrim["light"].value, bg_scrim["dark"].value),
+        bg_opacity.value,
+        BACKGROUND_FITS[bg_fit.value],
+    )
+    if wanted != bg_applied[0]:
+        bg_applied[0] = wanted
+        path, lum, sat, blur, contrast, scrim, opacity, fit = wanted
+        context[0].set_backdrop_image(path, luminance=lum, saturation=sat, blur=blur, contrast=contrast, scrim=scrim, opacity=opacity, fit=fit)
+
+
+def set_mode(index):
+    """flat (no glass), partial glass, full glass, or image (the full glass with the picture behind)"""
+    set_glass(FULL if index == 3 else index)
+    bg_on.value = index == 3
+
+
+def background_window():
+    """the floating window of the look of the app: the mode (flat, partial glass, full glass, image)
+    and, in the mode image, the picture with its filters. The sliders are those of one theme, chosen
+    with the sun and the moon. The changes show at once behind the app"""
+    bg_mode.value = 3 if bg_on.value else glass.value
+    if segmented_control(
+        bg_mode,
+        [(None, "Plat"), (None, "Partielle"), (None, "Complète"), (svg("image"), "Image")],
+        size=14,
+        tint=icon_tint(),
+        tooltips=[
+            "Sans vitre: des surfaces opaques",
+            "Vitre partielle: la barre latérale et les barres sont en verre, le contenu "
+            "(zone centrale et volets du dock) est une feuille presque opaque, "
+            "et les menus et fenêtres sont opaques à environ 93 %",
+            "Vitre complète: toutes les surfaces sont en verre, contenu compris, "
+            "et les menus et fenêtres sont plus translucides (environ 80 %)",
+            "Vitre complète avec une image de fond derrière",
+        ],
+    ):
+        set_mode(bg_mode.value)
+    separator()
+
+    def choices(title, items, current_value, setter):
+        def row():
+            small(title)
+            for value, text in items:
+                if selectable_label_clicked(current_value == value, text):
+                    setter(value)
+
+        horizontal(row)
+
+    choices("Accent", [("Blue", "Bleu"), ("Violet", "Violet"), ("Green", "Vert"), ("Orange", "Orange")], accent_name.value, set_accent_name)
+    choices("Onglets", [(False, "Classiques"), (True, "En pilule")], pill_tabs.value, set_tab_style)
+    if not MACOS:
+        before_blue = blue_folders.value
+        toggle_value(blue_folders, "Dossiers bleus")
+        if blue_folders.value != before_blue:
+            set_blue(blue_folders.value)
+    if not bg_on.value:
+        weak("Le mode Image montre une image de fond derrière la vitre")
+        return
+    separator()
+    text_edit_singleline(bg_image, hint_text="Chemin de l'image")
+    chosen = Path(selected.value) if selected.value else None
+    if chosen and chosen.suffix.lower() in BACKGROUND_TYPES:
+        if button_clicked(f"Utiliser « {chosen.name} »"):
+            bg_image.value = str(chosen)
+    if bg_image.value and not background_path():
+        weak("Fichier introuvable")
+    elif context[0].backdrop_image_error():
+        weak("⚠ " + context[0].backdrop_image_error())
+    separator()
+    # the theme of the whole app: the sliders below are those of the theme chosen
+    if segmented_control(bg_edit, [(svg("sun"), "Clair"), (svg("moon"), "Sombre")], size=14, tint=icon_tint()):
+        set_theme(bg_edit.value)
+    name = "dark" if bg_edit.value else "light"
+    toggle_value(bg_auto, "Luminance automatique")
+    add_enabled(not bg_auto.value, lambda: slider_float(bg_luminance[name], 0.0, 2.0, "Luminance"))
+    slider_float(bg_saturation[name], 0.0, 2.0, "Saturation")
+    slider_float(bg_contrast[name], 0.0, 1.5, "Contraste")
+    slider_float(bg_scrim[name], 0.0, 0.9, "Voile")
+    separator()
+    slider_float(bg_blur, 0.0, 60.0, "Flou")
+    slider_float(bg_opacity, 0.0, 1.0, "Transparence")
+    segmented_control(bg_fit, [(None, text) for text in BACKGROUND_FITS])
+    separator()
+
+    def buttons():
+        if button_clicked("Réinitialiser"):
+            for holder in (*bg_luminance.values(), *bg_saturation.values(), bg_opacity):
+                holder.value = 1.0
+            bg_luminance["dark"].value = 0.6
+            bg_saturation["dark"].value = 0.9
+            bg_scrim["light"].value, bg_scrim["dark"].value = 0.55, 0.3
+            bg_contrast["light"].value, bg_contrast["dark"].value = 0.5, 0.6
+            bg_auto.value = True
+            bg_blur.value = 12.0
+        if button_clicked("Retirer l'image"):
+            bg_image.value = ""
+
+    horizontal(buttons)
+
+
 def apply_gaps():
-    """the unified layout lays out the gaps itself: no margin in the central panel, and the gap of
-    the dock between its panes; the boxes layout keeps the margin of egui and its own gap"""
-    ctx = context[0]
-    ctx.set_central_margin(0 if unified.value else 8)
-    dock.set_style(gap_width=UNIFIED_GAP if unified.value else GAP)
+    """the layout lays out the gaps itself: no margin in the central panel, and the gap of the dock
+    between its panes"""
+    context[0].set_central_margin(0)
+    dock.set_style(gap_width=UNIFIED_GAP)
 
 
 def snapshot():
@@ -785,7 +915,6 @@ def snapshot():
     return {
         "theme": theme.value,
         "glass": glass.value,
-        "unified": unified.value,
         "accent": accent_name.value,
         "pill_tabs": pill_tabs.value,
         "view": view.value,
@@ -793,6 +922,18 @@ def snapshot():
         "show_dock": show_dock.value,
         "show_hidden": show_hidden.value,
         "blue_folders": blue_folders.value,
+        "background": {
+            "on": bg_on.value,
+            "image": bg_image.value,
+            "luminance": {k: v.value for k, v in bg_luminance.items()},
+            "saturation": {k: v.value for k, v in bg_saturation.items()},
+            "auto": bg_auto.value,
+            "scrim": {k: v.value for k, v in bg_scrim.items()},
+            "contrast": {k: v.value for k, v in bg_contrast.items()},
+            "blur": bg_blur.value,
+            "opacity": bg_opacity.value,
+            "fit": bg_fit.value,
+        },
         "folded": sorted(folded),
         "tag_tree_folded": tag_tree.folded,
         "folder": str(current()),
@@ -819,7 +960,6 @@ def restore(saved):
         return
     theme.value = saved.get("theme", theme.value)
     glass.value = saved.get("glass", glass.value)
-    unified.value = bool(saved.get("unified", unified.value))
     if saved.get("accent") in ACCENTS:
         accent_name.value = saved["accent"]
     pill_tabs.value = saved.get("pill_tabs", pill_tabs.value)
@@ -828,6 +968,21 @@ def restore(saved):
     show_dock.value = saved.get("show_dock", show_dock.value)
     set_hidden(bool(saved.get("show_hidden", show_hidden.value)))
     set_blue(bool(saved.get("blue_folders", blue_folders.value)))
+    background = saved.get("background")
+    if isinstance(background, dict):
+        bg_on.value = bool(background.get("on", False)) and glass.value == FULL
+        bg_image.value = str(background.get("image", ""))
+        bg_auto.value = bool(background.get("auto", bg_auto.value))
+        for holders, key in ((bg_luminance, "luminance"), (bg_saturation, "saturation"), (bg_scrim, "scrim"), (bg_contrast, "contrast")):
+            values = background.get(key)
+            for name, holder in holders.items():
+                if isinstance(values, dict) and isinstance(values.get(name), (int, float)):
+                    holder.value = float(values[name])
+        for holder, key in ((bg_blur, "blur"), (bg_opacity, "opacity")):
+            if isinstance(background.get(key), (int, float)):
+                holder.value = float(background[key])
+        if isinstance(background.get("fit"), int) and 0 <= background["fit"] < len(BACKGROUND_FITS):
+            bg_fit.value = background["fit"]
     folded.update(saved.get("folded", []))
     tag_tree.folded = [p for p in saved.get("tag_tree_folded", []) if isinstance(p, str)]
     tree.open_folders = [p for p in saved.get("tree_open", []) if isinstance(p, str)]
@@ -883,11 +1038,15 @@ def apply_path():
 
 def set_theme(value):
     theme.value = value
+    if value in (LIGHT, DARK):
+        bg_edit.value = value  # the sliders of the picture are those of the theme
     apply_style()
 
 
 def set_glass(value):
     glass.value = value
+    if value != FULL:
+        bg_on.value = False  # the picture is behind the full glass only
     apply_style()
 
 
@@ -1846,59 +2005,15 @@ def locations():
 
 
 def sidebar():
-    if unified.value:
-        # three bands, the top and bottom ones as high as the bars of the body; without lines in the
-        # sidebar, only the body has them
-        top_panel("sidebar_top", sidebar_top, exact_size=TOP_H, resizable=False, fill=CLEAR, inner_margin=(12, 0, 12, 0), show_separator_line=False)
-        bottom_panel("sidebar_bottom", sidebar_bottom, exact_size=BOTTOM_H, resizable=False, fill=CLEAR, inner_margin=(12, 0, 12, 0), show_separator_line=False)
-        frame(lambda: scroll_area_vertical(sidebar_content), inner_margin=12)
-        return
-    if MACOS:
-        add_space(26)  # the window buttons are over the sidebar
-    scroll_area_vertical(
-        sidebar_content
-    )  # many tags: the sidebar scrolls instead of overflowing
-
-
-def settings_menu():
-    """the menu of the settings button: theme, glass, accent, tabs and layout"""
-
-    def choices(title, items, current_value, setter):
-        small(title)
-        for value, text in items:
-            if selectable_label_clicked(current_value == value, text):
-                setter(value)
-                close_menu()
-
-    choices("Thème", [(LIGHT, "Clair"), (DARK, "Sombre"), (SYSTEM, "Système")], theme.value, set_theme)
-    separator()
-    choices("Vitre", [(NO_GLASS, "Sans vitre"), (PARTIAL, "Partielle"), (FULL, "Complète")], glass.value, set_glass)
-    separator()
-    accents = {"Blue": "Bleu", "Violet": "Violet", "Green": "Vert", "Orange": "Orange"}
-    choices("Accent", list(accents.items()), accent_name.value, set_accent_name)
-    separator()
-    choices("Onglets", [(False, "Classiques"), (True, "En pilule")], pill_tabs.value, set_tab_style)
-    if not MACOS:
-        separator()
-        before_blue = blue_folders.value
-        toggle_value(blue_folders, "Dossiers bleus")
-        if blue_folders.value != before_blue:
-            set_blue(blue_folders.value)
-    separator()
-    before_layout = unified.value
-    toggle_value(unified, "Disposition unifiée")
-    if unified.value != before_layout:
-        apply_gaps()
+    # three bands, the top and bottom ones as high as the bars of the body; without lines in the
+    # sidebar, only the body has them
+    top_panel("sidebar_top", sidebar_top, exact_size=TOP_H, resizable=False, fill=CLEAR, inner_margin=(12, 0, 12, 0), show_separator_line=False)
+    bottom_panel("sidebar_bottom", sidebar_bottom, exact_size=BOTTOM_H, resizable=False, fill=CLEAR, inner_margin=(12, 0, 12, 0), show_separator_line=False)
+    frame(lambda: scroll_area_vertical(sidebar_content), inner_margin=12)
 
 
 def sidebar_top():
-    """the top band of the sidebar: the window buttons, then the settings at the right"""
-
-    def row():
-        add_space(max(available_width() - 28, 0))  # at the right of the band
-        menu_image_button(svg("gear"), settings_menu, size=16, tint=icon_tint())
-
-    horizontal_centered(row)
+    """the top band of the sidebar: the window buttons are over it, nothing is drawn"""
 
 
 def sidebar_bottom():
@@ -1917,13 +2032,20 @@ def sidebar_bottom():
 
 def theme_control():
     """light, dark, system: a segmented control of icons"""
+    before = theme.value
     if segmented_control(
         theme,
-        [(svg("sun"), None), (svg("moon"), None), (svg("theme-system"), None)],
+        [(svg("sun"), None), (svg("moon"), None), (svg("theme-system"), None), (svg("gear"), None)],
         size=14,
         tint=icon_tint(),
     ):
-        apply_style()
+        if theme.value == 3:  # the settings of the look: a button, not a theme
+            theme.value = before
+            bg_open.value = not bg_open.value
+        else:
+            if theme.value in (LIGHT, DARK):
+                bg_edit.value = theme.value  # the sliders of the picture are those of the theme chosen
+            apply_style()
 
 def sidebar_content():
     accent = ACCENTS[accent_name.value]
@@ -2097,14 +2219,14 @@ def toolbar():
                 text_edit_singleline(search, hint_text="Search")
 
             # in the unified layout the field is centered in the band like the other buttons
-            (horizontal_centered if unified.value else vertical)(search_field)
+            horizontal_centered(search_field)
         measure(
             "panes",
             lambda: menu_image_button(svg("panes"), panes_menu, size=18, tint=tint),
             last=True,
         )
 
-    (horizontal_centered if unified.value else horizontal)(bar)
+    horizontal_centered(bar)
 
 
 # views
@@ -3733,7 +3855,7 @@ def path_bar():
                 )
                 path_edit["focus"] = False
 
-            (horizontal_centered if unified.value else vertical)(field)  # centered like the search
+            horizontal_centered(field)  # centered like the search
             if key_pressed("Escape", when_typing=True):
                 path_editing.value = False
             elif key_pressed("Enter", when_typing=True):
@@ -3774,7 +3896,7 @@ def path_bar():
 
         measure(key, right, last=True)
 
-    (horizontal_centered if unified.value else horizontal)(crumbs)
+    horizontal_centered(crumbs)
 
 
 def in_zone(zone, ui):
@@ -3886,6 +4008,8 @@ def update_func(ctx):
     if not started.value:
         context.append(ctx)
         restore(ctx.load_state())
+        if theme.value in (LIGHT, DARK):
+            bg_edit.value = theme.value
         apply_style()
         started.value = True
 
@@ -3895,10 +4019,9 @@ def update_func(ctx):
     open_requested_panes()  # before the dock is drawn
     collect_activity()
     follow_in_shell()
-    if unified.value:
-        unified_layout()
-    else:
-        boxes_layout()
+    layout()
+    apply_background()
+    window("Apparence", background_window, open=bg_open, default_width=300, resizable=False)
     if renaming.value:
         rename_dialog()
     if palette_open.value:
@@ -3910,7 +4033,7 @@ def update_func(ctx):
     ctx.save_state(snapshot())  # written to disk by pyegui, see persist_id below
 
 
-def unified_layout():
+def layout():
     """like the Claude app: a sidebar along the whole height, a line between it and the body, and in
     both a top band, a content and a bottom band whose lines continue from one to the other"""
     left_panel(
@@ -3936,26 +4059,6 @@ def unified_layout():
 def dock_or_files(**kwargs):
     """the panes of the dock, or the files alone when the dock is hidden"""
     frame(lambda: dock_area(dock) if show_dock.value else frame(central_ui, stroke=EDGE, rounding=6), **kwargs)
-
-
-def boxes_layout():
-    """the sidebar, the bars and the dock are rounded boxes with gaps"""
-    left_panel(
-        "sidebar",
-        in_zone("sidebar", sidebar),
-        expanded=show_sidebar,
-        default_size=215,
-        min_size=200,
-        inner_margin=12,
-        outer_margin=SIDEBAR_MARGIN,
-        show_separator_line=False,
-        rounding=SIDEBAR_ROUNDING,
-        stroke=zone_stroke("sidebar", EDGE),
-    )
-    bar = dict(inner_margin=8, show_separator_line=False, rounding=12, stroke=EDGE)
-    top_panel("toolbar", toolbar, outer_margin=(0, 0, 0, H), **bar)
-    bottom_panel("path", path_bar, outer_margin=(0, H, 0, 0), **bar)
-    dock_or_files(outer_margin=(0, H, 0, H))  # the same as the bars: the panes line up with them
 
 
 if __name__ == "__main__":

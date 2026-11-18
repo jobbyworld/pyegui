@@ -197,6 +197,56 @@ run_native("Glass", update_func, backdrop=Backdrop.LIQUID_GLASS_CLEAR)
 ```
 
 
+## `Context.set_backdrop_image(source=None, luminance=None, saturation=None, blur=0.0, contrast=None, scrim=None, opacity=1.0, fit='cover')`
+
+Draws a picture under the whole window, as its backdrop, with a luminance, a saturation, a
+blur and an opacity. It is seen where nothing is drawn over it: with a transparent window and
+layout rules or a glass style that leave the background and the sheets clear or translucent,
+for example `set_layout(sheet=(0, 0, 0, 120))` or `set_glass_style(mode="full")`.
+
+The file is read by a thread and scaled down to 1920 pixels on its longest side, the window
+does not wait for it. Call it again with other settings to change the filters: the picture
+is read once, the filters are applied again to the copy (call it at every frame from a
+slider if you like). `None` removes the picture.
+
+**Args**
+
+- `source` (str | None): a path or a `file://` uri (PNG, JPEG, GIF, WebP, BMP...), None to remove it
+
+**Keyword args**
+
+- `luminance` (float | str | tuple): the brightness, 1.0 as it is, 0 black, up to 4. A pair
+- `(light, dark)` gives one value for the light theme and one for the dark theme, which is
+- followed when the theme changes. `"auto"` (alone or in the pair) measures the picture and
+- brings it to a brightness that suits the theme: lifted under the light theme, toned down
+- under the dark one. Default is 1.0
+- `saturation` (float | tuple): the strength of the colors, 1.0 as they are, 0 gray, up to 4.
+- A number or a pair `(light, dark)` like the luminance. Default is 1.0
+- `blur` (float): the radius of a gaussian blur in pixels, 0 is sharp. Default is 0
+- `contrast` (float | tuple): 1.0 as it is; less flattens the picture toward its mean
+- brightness, which keeps the text readable over a picture with bright and dark parts. A
+- number or a pair `(light, dark)`, from 0 to 2. Default is 1.0
+- `scrim` (float | tuple): a veil over the picture, from 0 (none) to 0.95: black under the dark
+- theme, white under the light one, which keeps the text readable without spoiling the
+- picture. A number, or a pair `(light, dark)`. Default is 0
+- `opacity` (float): from 0 (not seen, the backdrop effect shows) to 1. Default is 1.0
+- `fit` (str): "cover" fills the window and crops, "contain" shows all of it, "stretch" deforms it,
+- "center" keeps its size. Default is "cover"
+
+**Example:**
+
+```python
+ctx.set_backdrop_image("wallpaper.jpg", luminance=(1.0, 0.5), saturation=0.8, blur=12)
+ctx.set_backdrop_image("wallpaper.jpg", luminance="auto", scrim=(0.1, 0.3))
+ctx.set_backdrop_image(None)  # removed
+```
+
+
+## `Context.backdrop_image_error()`
+
+Why the picture of `set_backdrop_image` could not be read, or None.
+
+
 ## `Context.set_central_margin(margin)`
 
 Sets the inner margin of the central panel: the space between the panels and what is drawn
