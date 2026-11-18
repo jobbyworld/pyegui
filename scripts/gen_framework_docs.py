@@ -49,7 +49,7 @@ THEMES = [
      "Update functions can be nested: a function given to `horizontal`, `group`, `frame`... "
      "draws in a child ui with its own layout and style. Panels must be added before any other "
      "widget, see [panels.md](panels.md).",
-     ["horizontal", "horizontal_centered", "horizontal_top", "horizontal_wrapped", "vertical",
+     ["bar", "horizontal", "horizontal_centered", "horizontal_top", "horizontal_wrapped", "vertical",
       "vertical_centered", "vertical_centered_justified", "centered_and_justified", "columns",
       "grid", "end_row", "group", "Group", "indent", "scope", "Scope", "Layout", "LayoutType",
       "frame", "collapsing", "add_space", "separator", "set_width", "set_min_width",
@@ -63,7 +63,7 @@ THEMES = [
      "is placed inside the current ui. `sidebar_panel`, `topbar_panel` and `bottombar_panel` are the "
      "panels of the layout rules: boxes with the same gap, rounding, outline and sheet, laid out for "
      "you (see `Context.set_layout`).",
-     ["sidebar_panel", "topbar_panel", "bottombar_panel", "left_panel", "right_panel", "top_panel",
+     ["sidebar_panel", "topbar_panel", "bottombar_panel", "window_controls", "window_drag_area", "left_panel", "right_panel", "top_panel",
       "bottom_panel", "window", "modal", "tooltip",
       "tooltip_ui", "context_menu", "menu_bar", "menu_button", "menu_image_button",
       "menu_image_text_button", "close_menu"]),

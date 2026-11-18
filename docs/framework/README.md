@@ -6,8 +6,8 @@ Generated from the docstrings by `scripts/gen_framework_docs.py`, do not edit by
 - [Values that widgets edit](values.md): 8 names
 - [Text, links and markdown](text.md): 15 names
 - [Buttons and input widgets](inputs.md): 29 names
-- [Layout, sizes and scrolling](layout.md): 41 names
-- [Panels, windows, menus and popups](panels.md): 17 names
+- [Layout, sizes and scrolling](layout.md): 42 names
+- [Panels, windows, menus and popups](panels.md): 19 names
 - [Tables, tree views and plots](data.md): 11 names
 - [Docking tabs](docking.md): 5 names
 - [Terminal](terminal.md): 2 names

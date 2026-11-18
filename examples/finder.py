@@ -56,6 +56,7 @@ from pyegui import (
     add_space,
     available_height,
     available_width,
+    bar,
     bottom_panel,
     button_clicked,
     close_menu,
@@ -97,6 +98,8 @@ from pyegui import (
     pointer_pos,
     pointer_pressed,
     run_native,
+    window_controls,
+    window_drag_area,
     set_blue_folders,
     scroll_area_both,
     scroll_area_vertical,
@@ -134,6 +137,7 @@ BACKDROP = {"win32": Backdrop.ACRYLIC, "darwin": Backdrop.LIQUID_GLASS}.get(
     sys.platform
 )
 MACOS = sys.platform == "darwin"
+CUSTOM_TITLEBAR = sys.platform == "win32"  # no title bar of the system: the window buttons are drawn at the left like on macOS
 # the id the taskbar groups the windows of the app by: scripts/make_shortcut_windows.py gives the
 # same one to the shortcut, so a pinned Finder opens its window under its own icon
 APP_USER_MODEL_ID = "pyegui.Finder"
@@ -2013,7 +2017,10 @@ def sidebar():
 
 
 def sidebar_top():
-    """the top band of the sidebar: the window buttons are over it, nothing is drawn"""
+    """the top band of the sidebar: the window buttons are over it (the ones of macOS, or the ones drawn
+    by window_controls without a title bar of the system), the rest moves the window"""
+    if CUSTOM_TITLEBAR:
+        horizontal_centered(lambda: (window_controls(), window_drag_area()))
 
 
 def sidebar_bottom():
@@ -2117,34 +2124,14 @@ def drives():
     ]
 
 
-# what the right side of the bars takes: measured as drawn
+# what is learned about the bars, as drawn
 widths = {
-    "view": 130,
-    "panes": 60,
-    "count": 230,
-    "dock": 170,
     "edit": 41,  # the "…" that ends the path bar, with its spacing (40.1 measured)
 }
 
 
-def measure(key, draw, last=False):
-    """draws something in a row and remembers the width it took, with its spacing. The room left in a
-    row is never negative, so a width is only learned when there was room: if the thing did not fit,
-    it is given a little more room at the next frame"""
-    before = available_width()
-    draw()
-    if last:
-        add_space(-8)  # takes back the spacing a row adds after its last thing
-    after = available_width()
-    # when it did not fit, the width is only ever made larger: guessing it from the room left
-    # (before + 8) would go under the real one and back at every frame
-    taken = before - after if after > 0.5 else max(before + 8, widths[key])
-    if abs(taken - widths[key]) > 0.5:
-        widths[key] = taken
-        context[0].request_repaint()  # the next frame is laid out with the new width
-
-
-SLACK = 1  # room kept in a row, to see that what is at its right grew
+TOOLBAR_FIXED = 520  # what the toolbar keeps for the navigation, the name, the view and the panes
+COUNT_MIN_ROW = 560  # the width of the bottom band from which the count of items is shown
 SEARCH_WIDTH, SEARCH_MIN = (
     240,
     90,
@@ -2164,13 +2151,22 @@ def panes_menu():
 
 
 def toolbar():
+    """the top band: the navigation and the name of the folder at the left, the view, the search and the
+    hidden panes at the right. `bar` lays the two sides out in one pass, the free space between them
+    moves the window, and nothing depends on what a part took at a previous frame"""
     tint = icon_tint()
+    # the search shrinks with the window and disappears when it would be too small
+    row = available_width()
+    search_width = min(row - TOOLBAR_FIXED, SEARCH_WIDTH)
+    show_search = search_width >= SEARCH_MIN
+    show_view = row >= TOOLBAR_FIXED - 120
 
-    def bar():
+    def left():
         if MACOS and not show_sidebar.value:
-            add_space(
-                64
-            )  # the window buttons are over the toolbar when the sidebar is hidden
+            add_space(64)  # the window buttons are over the toolbar when the sidebar is hidden
+        elif CUSTOM_TITLEBAR and not show_sidebar.value:
+            window_controls()
+            add_space(8)
         if image_button_clicked(svg("chevron-left"), size=16, tint=tint):
             back()
         if image_button_clicked(svg("chevron-right"), size=16, tint=tint):
@@ -2180,37 +2176,24 @@ def toolbar():
             if image_button_clicked(svg("chevron-up"), size=16, tint=tint):
                 go(current().parent)
 
-        add_enabled(
-            current().parent != current(), parent_button
-        )  # greyed out at the root
+        add_enabled(current().parent != current(), parent_button)  # greyed out at the root
         add_space(6)
         # the name of the folder; under the mouse its icon and a menu of its parent folders
         chosen_folder = path_combo(current(), size=15, context_menu=path_menu)
         if chosen_folder:
             go(chosen_folder)
-        # the right side: the view, the search, the hidden panes. The search shrinks with the window and
-        # disappears when it would be too small. What each part takes is what it took the last time it
-        # was drawn, so the right edge does not depend on fonts or on the length of a name
-        left_over = available_width()
-        view_w, panes_w = widths["view"], widths["panes"]
-        search_width = min(left_over - view_w - panes_w - 8 - SLACK, SEARCH_WIDTH)
-        show_search = search_width >= SEARCH_MIN
-        show_view = left_over >= view_w + panes_w
-        used = (
-            panes_w
-            + (view_w if show_view else 0)
-            + (search_width + 8 if show_search else 0)
-        )
-        add_space(max(left_over - used - SLACK, 4))
+
+    def middle():
+        if CUSTOM_TITLEBAR:
+            window_drag_area()  # the free space of the bar moves the window
+
+    def right():
         if show_view:
-            measure(
-                "view",
-                lambda: segmented_control(
-                    view,
-                    [(svg("tree"), None), (svg("list"), None), (svg("grid"), None)],
-                    size=16,
-                    tint=tint,
-                ),
+            segmented_control(
+                view,
+                [(svg("tree"), None), (svg("list"), None), (svg("grid"), None)],
+                size=16,
+                tint=tint,
             )
         if show_search:
 
@@ -2220,13 +2203,9 @@ def toolbar():
 
             # in the unified layout the field is centered in the band like the other buttons
             horizontal_centered(search_field)
-        measure(
-            "panes",
-            lambda: menu_image_button(svg("panes"), panes_menu, size=18, tint=tint),
-            last=True,
-        )
+        menu_image_button(svg("panes"), panes_menu, size=18, tint=tint)
 
-    horizontal_centered(bar)
+    bar(left=left, center=middle, right=right, center_align="left", height=available_height())
 
 
 # views
@@ -3829,26 +3808,28 @@ def path_menu(path):
 
 
 def path_bar():
-    def crumbs():
+    """the bottom band: the sidebar toggle at the left, the path in the middle, and at the right the
+    count, the theme and the dock toggle. `bar` lays the three parts out in one pass: the right part
+    sticks to the edge, the path takes what is left, nothing moves from a frame to the next"""
+    count = len(visible_entries())
+    text = index_status() or f"{count} item{'s' if count != 1 else ''}"
+    if path_editing.value and path_edit["error"]:
+        text = "Chemin introuvable"
+    with_text = available_width() >= COUNT_MIN_ROW  # the count goes first when narrow
+
+    def left():
         if image_button_clicked(
             svg("sidebar"), size=16, tint=toggle_tint(show_sidebar.value), selected=show_sidebar.value
         ):
             show_sidebar.value = not show_sidebar.value
-        add_space(4)
 
-        count = len(visible_entries())
-        text = index_status() or f"{count} item{'s' if count != 1 else ''}"
-        if path_editing.value and path_edit["error"]:
-            text = "Chemin introuvable"
-        with_text = (
-            available_width() >= widths["count"] + SLACK
-        )  # the count goes first when narrow
-        key = "count" if with_text else "dock"
-        # the folders down to the selected item, the parents shortened when the room is missing
+    def center():
+        # the folders down to the selected item, the parents shortened when the room is missing;
+        # available_width() is what is left between the two sides
         here = selected.value if len(picked) == 1 else str(current())
         if path_editing.value:
             def field():
-                set_width(max(available_width() - widths[key] - SLACK - 8, 100))
+                set_width(max(available_width(), 100))
                 # at the first frame: the focus and the whole path selected, to paste over it
                 text_edit_singleline(
                     path_text, request_focus=path_edit["focus"], select_all=path_edit["focus"]
@@ -3864,7 +3845,7 @@ def path_bar():
         else:
             path_breadcrumb(
                 here,
-                max_width=available_width() - widths[key] - SLACK - 8 - widths["edit"],
+                max_width=available_width() - widths["edit"],
                 on_click=go_or_select,
                 context_menu=path_menu,
             )
@@ -3877,26 +3858,21 @@ def path_bar():
             if drawn > 0.5 and abs(drawn - widths["edit"]) > 0.5:
                 widths["edit"] = drawn
                 context[0].request_repaint()
-        # no minimum: when the breadcrumb takes all its max_width, what is left is exactly the width
-        # of the right side; a few more points would push it out, measure() would widen it, the
-        # breadcrumb shrink, and the row would go back and forth at every frame
-        add_space(max(available_width() - widths[key] - SLACK, 0))
 
-        def right():
-            if with_text:
-                weak(text)
-                add_space(4)
-            # light, dark or the theme of the system, between the count and the toggle of the docks
-            theme_control()
+    def right():
+        # in reading order, placed against the right edge: the count, the theme, the dock toggle
+        if with_text:
+            weak(text)
             add_space(4)
-            if image_button_clicked(
-                svg("dock"), size=16, tint=toggle_tint(show_dock.value), selected=show_dock.value
-            ):
-                show_dock.value = not show_dock.value
+        # light, dark or the theme of the system, between the count and the toggle of the docks
+        theme_control()
+        add_space(4)
+        if image_button_clicked(
+            svg("dock"), size=16, tint=toggle_tint(show_dock.value), selected=show_dock.value
+        ):
+            show_dock.value = not show_dock.value
 
-        measure(key, right, last=True)
-
-    horizontal_centered(crumbs)
+    bar(left=left, center=center, right=right, center_align="left", height=available_height())
 
 
 def in_zone(zone, ui):
@@ -4073,7 +4049,8 @@ if __name__ == "__main__":
         inner_width=1180,
         inner_height=720,
         backdrop=BACKDROP,
-        fullsize_content=True,
+        fullsize_content=MACOS,
+        custom_titlebar=CUSTOM_TITLEBAR,
         icon_path=str(APP_ICON),
         persist_id=APP_USER_MODEL_ID,  # the window and the choices come back at the next run
     )

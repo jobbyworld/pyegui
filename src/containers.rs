@@ -509,7 +509,123 @@ unsafe fn tooltip_ui(update_fun: Bound<'_, PyAny>, tooltip_fun: Bound<'_, PyAny>
     result
 }
 
+/// A row with a left part, a central part and a right part, laid out in one pass: the right part sticks
+/// to the right edge, the left part to the left edge, and the central part takes the room that is left
+/// between them. Nothing is measured at a previous frame, so the parts do not move when the window is
+/// resized or when a part changes.
+///
+/// The width of a part that is placed by its right side (right, and center unless it is "left") is found
+/// by drawing it once without showing it, so those functions run twice per frame (the first time
+/// their widgets do nothing). They are called in this order: right, left, center. `available_width()`
+/// in a left central part is the room left between the two sides, which is what a path or a search
+/// field should take (`path_breadcrumb(max_width=available_width())`). A part may be None.
+///
+/// Args:
+///     left (callable): drawn from the left edge, left to right
+///
+///     center (callable): drawn in the room between the left and the right parts
+///
+///     right (callable): drawn left to right like the others, and placed against the right edge
+///
+/// Keyword args:
+///
+///     height (float): height of the row, the parts are centered in it. Default is the height of a
+///         button; `available_height()` fills a panel
+///
+///     gap (float): space kept between the parts. Default is the spacing between items
+///
+///     center_align (str): "left" (right after the left part), "center" (in the middle of the room)
+///         or "right" (against the right part). Default is "center"
+///
+/// Example::
+///
+///     def left():
+///         button_clicked("Back")
+///
+///     def right():
+///         label("3 items")        # then the button, against the right edge
+///         button_clicked("Settings")
+///
+///     bar(left=left, center=lambda: label("title"), right=right)
+#[pyfunction]
+#[pyo3(signature = (left=None, center=None, right=None, **kwargs))]
+unsafe fn bar(
+    left: Option<Bound<'_, PyAny>>,
+    center: Option<Bound<'_, PyAny>>,
+    right: Option<Bound<'_, PyAny>>,
+    kwargs: Option<&Bound<'_, PyDict>>,
+) -> PyResult<()> {
+    let ui = current_ui(&UI)?;
+    let gap = kwarg::<f32>(kwargs, "gap")?.unwrap_or(ui.spacing().item_spacing.x).max(0.0);
+    let height = kwarg::<f32>(kwargs, "height")?.unwrap_or(ui.spacing().interact_size.y).max(1.0);
+    let align = kwarg::<String>(kwargs, "center_align")?.unwrap_or_else(|| "center".to_string());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
+    let centered = egui::Align::Center;
+    let ltr = egui::Layout::left_to_right(centered);
+    let child = |ui: &mut egui::Ui, name: &str, rect: egui::Rect| {
+        ui.new_child(egui::UiBuilder::new().id_salt(("bar", name)).max_rect(rect).layout(ltr))
+    };
+    // the width of a part: it is drawn once without being seen, its widgets do nothing
+    let measured = |ui: &mut egui::Ui, name: &str, rect: egui::Rect, f: &Bound<'_, PyAny>| -> PyResult<f32> {
+        let mut probe = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(("bar_probe", name))
+                .max_rect(rect)
+                .layout(ltr)
+                .sizing_pass()
+                .invisible(),
+        );
+        run_nested_update_func(&mut probe, f.clone())?;
+        Ok(probe.min_rect().width().min(rect.width()))
+    };
+
+    // the right part first: its width tells where the others stop
+    let mut right_edge = rect.max.x;
+    if let Some(right) = right {
+        let width = measured(ui, "right", rect, &right)?;
+        if width > 0.0 {
+            let at = egui::Rect::from_min_max(egui::pos2(rect.max.x - width, rect.min.y), rect.max);
+            let mut part = child(ui, "right", at);
+            run_nested_update_func(&mut part, right)?;
+            right_edge = (at.min.x - gap).max(rect.min.x);
+        }
+    }
+    let mut left_edge = rect.min.x;
+    if let Some(left) = left {
+        let room = egui::Rect::from_min_max(rect.min, egui::pos2(right_edge, rect.max.y));
+        let mut part = child(ui, "left", room);
+        run_nested_update_func(&mut part, left)?;
+        if part.min_rect().width() > 0.0 {
+            left_edge = (part.min_rect().max.x + gap).min(right_edge);
+        }
+    }
+    if let Some(center) = center {
+        let room = egui::Rect::from_min_max(egui::pos2(left_edge, rect.min.y), egui::pos2(right_edge.max(left_edge), rect.max.y));
+        match align.as_str() {
+            "left" => {
+                let mut part = child(ui, "center", room);
+                run_nested_update_func(&mut part, center)?;
+            }
+            _ => {
+                // "right" and "center": the width of the part tells where it starts
+                let width = measured(ui, "center", room, &center)?;
+                let x = if align == "right" {
+                    room.max.x - width
+                } else {
+                    room.center().x - width / 2.0
+                };
+                let x = x.clamp(room.min.x, room.max.x.max(room.min.x));
+                let at = egui::Rect::from_min_max(egui::pos2(x, room.min.y), egui::pos2(room.max.x.max(x), room.max.y));
+                let mut part = child(ui, "center", at);
+                run_nested_update_func(&mut part, center)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(bar, m)?)?;
     m.add_function(wrap_pyfunction!(left_panel, m)?)?;
     m.add_function(wrap_pyfunction!(right_panel, m)?)?;
     m.add_function(wrap_pyfunction!(top_panel, m)?)?;
