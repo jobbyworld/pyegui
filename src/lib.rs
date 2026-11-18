@@ -34,6 +34,7 @@ mod pdf_text;
 #[cfg(feature = "pdf")]
 mod pdf_view;
 mod backdrop_image;
+mod image_view;
 mod plot;
 mod style;
 mod table;
@@ -3030,6 +3031,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     path::register(m)?;
     #[cfg(feature = "pdf")]
     pdf::register(m)?;
+    image_view::register(m)?;
     #[cfg(feature = "pdf")]
     pdf_view::register(m)?;
     tags::register(m)?;

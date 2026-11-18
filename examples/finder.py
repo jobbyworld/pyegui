@@ -77,7 +77,9 @@ from pyegui import (
     horizontal,
     horizontal_centered,
     horizontal_wrapped,
+    ImageView,
     image,
+    image_view,
     image_button_clicked,
     interactive,
     key_pressed,
@@ -350,6 +352,8 @@ watcher = FileWatcher()
 reading = Str("")  # a markdown or source file shown in the central view instead of the files, "" for none
 reading_cache = {"path": None, "text": ""}
 # a PDF shown in the central view like a markdown file: its document and its view, read again when it is saved
+zoom_pick = Int(-1)  # the segment of the zoom controls just clicked
+image_state = ImageView()  # the zoom and the place of the image read
 pdf_reader = {"path": None, "doc": None, "view": None}
 pdf_query = Str("")  # the text searched in it
 pdf_searched = [""]
@@ -628,7 +632,7 @@ def go(folder):
 
 def back():
     if reading.value:  # back from the viewer to the files first
-        close_reader()
+        leave_reader()
         return
     if position.value > 0:
         position.value -= 1
@@ -732,6 +736,9 @@ def keyboard():
         open_palette()
     if key_pressed("Cmd+P"):
         open_palette()
+    if reading.value and key_pressed("Backspace"):
+        leave_reader()  # in the viewer Backspace only leaves it, it does not go up a folder
+        return
     if key_pressed("Cmd+ArrowUp") or key_pressed("Backspace"):
         up()
     if key_pressed("Cmd+OpenBracket"):
@@ -739,7 +746,9 @@ def keyboard():
     if key_pressed("Cmd+CloseBracket"):
         forward()
     if key_pressed("Escape", when_typing=True):
-        close_reader()  # back to the files from the viewer
+        if reading.value:
+            leave_reader()  # back to the file, selected and focused
+            return
         search.value = ""
         deselect()
         focus_zone.value = "content"  # back to the list, even from the search field
@@ -2004,14 +2013,7 @@ def sidebar():
 
 
 def sidebar_top():
-    """the top band of the sidebar: the window buttons, then the settings at the right"""
-
-    def row():
-        add_space(max(available_width() - 28, 0))  # at the right of the band
-        if image_button_clicked(svg("gear"), "Apparence", size=16, tint=icon_tint(), selected=bg_open.value):
-            bg_open.value = not bg_open.value
-
-    horizontal_centered(row)
+    """the top band of the sidebar: the window buttons are over it, nothing is drawn"""
 
 
 def sidebar_bottom():
@@ -2366,7 +2368,7 @@ def after_view(v):
     opened = [p for p in (entry(Path(p)) for p in v.activated) if p]
     if len(opened) == 1 and opened[0]["is_dir"]:
         open_item(opened[0])  # into the folder
-    elif len(opened) == 1 and (is_markdown(opened[0]["path"]) or is_code(opened[0]["path"]) or is_pdf(opened[0]["path"])):
+    elif len(opened) == 1 and (is_markdown(opened[0]["path"]) or is_code(opened[0]["path"]) or is_image(opened[0]["path"]) or is_pdf(opened[0]["path"])):
         open_reader(opened[0]["path"])  # shown here, in the central view
     elif opened:
         action_open()  # the files with their app, like the Open button
@@ -2396,8 +2398,16 @@ def is_pdf(path):
 
 
 # the source files shown by the viewer of the central view, with their colors (code_view)
-CODE_EXTENSIONS = {".py", ".pyw", ".js", ".mjs", ".cjs", ".ts", ".rs", ".ps1", ".psm1", ".sh", ".bash", ".zsh"}
+CODE_EXTENSIONS = {".py", ".pyw", ".js", ".mjs", ".cjs", ".ts", ".rs", ".ps1", ".psm1", ".sh", ".bash", ".zsh",
+                   ".sql", ".json", ".jsonc", ".toml", ".yaml", ".yml", ".ini", ".cfg", ".xml", ".html", ".htm",
+                   ".css", ".scss", ".c", ".h", ".cpp", ".hpp", ".cc", ".cs", ".java", ".kt", ".go", ".rb", ".php",
+                   ".swift", ".lua", ".r", ".bat", ".cmd", ".tsx", ".jsx", ".vue", ".rst", ".txt", ".log", ".csv", ".env"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".ico", ".tif", ".tiff"}
 READER_MAX = 2_000_000  # a larger file opens with its app
+
+
+def is_image(path):
+    return Path(path).suffix.lower() in IMAGE_EXTENSIONS
 
 
 def is_code(path):
@@ -2407,7 +2417,7 @@ def is_code(path):
 def open_reader(path):
     """shows a markdown, source or PDF file in the central view, read again when an editor saves it"""
     try:
-        if not is_pdf(path) and Path(path).stat().st_size > READER_MAX:  # a PDF is read by a thread, whatever its size
+        if not (is_pdf(path) or is_image(path)) and Path(path).stat().st_size > READER_MAX:  # a PDF is read by a thread, whatever its size
             context[0].open_url(Path(path).as_uri())
             return
     except OSError:
@@ -2419,6 +2429,18 @@ def open_reader(path):
     reading_cache["path"] = None
     pdf_reader["path"] = None
     tags.opened(Path(path))  # remembered in the base, like a file opened with its app
+
+
+def leave_reader():
+    """back from the viewer to the files: the file that was read is selected and has the keyboard"""
+    path = reading.value
+    if not path:
+        return
+    close_reader()
+    if Path(path).parent == current():
+        select_path(path)
+        scroll_target.value = path
+    focus_zone.value = "content"
 
 
 def close_reader():
@@ -2461,10 +2483,25 @@ def reader():
 
     def bar():
         if image_button_clicked(svg("chevron-left"), "Fermer", size=16, tint=tint):
-            close_reader()
+            leave_reader()
             return
         add_space(6)
         strong(Path(reading.value).name)
+        if is_image(reading.value):  # the zoom of the image: − / + and fit in one segmented control
+            add_space(10)
+            label(f"{round(image_state.zoom * 100)} %")
+            zoom_pick.value = 2 if image_state.fit else -1
+            if segmented_control(
+                zoom_pick,
+                [(svg("zoom-out"), None), (svg("zoom-in"), None), (svg("zoom-fit"), None)],
+                tint=tint,
+            ):
+                if zoom_pick.value == 0:
+                    image_state.zoom = image_state.zoom / 1.25
+                elif zoom_pick.value == 1:
+                    image_state.zoom = image_state.zoom * 1.25
+                else:
+                    image_state.reset()
         add_space(max(available_width() - 150, 4))
         if small_button_clicked("Ouvrir avec l'app"):
             context[0].open_url(Path(reading.value).as_uri())
@@ -2475,6 +2512,10 @@ def reader():
     separator()
     if is_pdf(reading.value):
         pdf_reader_view()
+        return
+    if is_image(reading.value):
+        # fitted to the room; the wheel zooms, a drag moves it, a double click fits it again
+        image_view(image_state, Path(reading.value).as_uri())
         return
     if is_code(reading.value):
         # the colors of the language, from the extension (.ps1 is shown with those of the shell)

@@ -94,3 +94,56 @@ file views. It has no effect on macOS (already blue) nor on Linux. Default is Fa
 ```python
 set_blue_folders(True)  # once, before the first frame
 ```
+
+
+## `ImageView`
+
+
+The state of an image viewer: the zoom (1.0 is the size of the image), the place of the image
+and whether it is fitted to the room. Create it once, outside the update function; it goes back
+to the fit when `image_view` is given another source.
+
+Properties: `zoom` (float, 1.0 is 100%, writing it turns `fit` off), `fit` (bool, the image is
+scaled down to the room, True by default). `reset()` fits again and centers the image.
+
+**Example:**
+
+```python
+view = ImageView()
+
+def update_func(ctx):
+    if button_clicked("Fit"):
+        view.reset()
+    label(f"{view.zoom:.0%}")
+    image_view(view, "file:///tmp/photo.png")
+```
+
+
+- `ImageView.fit` (attribute): True to scale the image down to the room (never up)
+- `ImageView.reset()` (method): Fits the image to the room and centers it.
+- `ImageView.zoom` (attribute): The zoom, 1.0 is the size of the image. The value used at the last frame when `fit` is on.
+
+## `image_view(view, source, **kwargs)`
+
+Shows an image in a viewer that takes all the space available (or the height given). The wheel
+(or a pinch) zooms around the pointer, a drag moves the image, a double click fits it again,
+Ctrl + and Ctrl - zoom and Ctrl 0 fits, with the pointer over the viewer.
+
+**Args**
+
+- `view` (ImageView): the state of the viewer
+- `source` (str): the uri of the image: `file://` and a path, or an `http(s)` url
+
+**Keyword args**
+
+- `height` (float): the height, the available one by default
+- `background` (tuple | str): the color behind the image, none by default
+
+**Example:**
+
+```python
+view = ImageView()
+
+def update_func(ctx):
+    image_view(view, "file:///tmp/photo.png", background="#202020")
+```

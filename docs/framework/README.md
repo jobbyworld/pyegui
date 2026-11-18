@@ -12,7 +12,7 @@ Generated from the docstrings by `scripts/gen_framework_docs.py`, do not edit by
 - [Docking tabs](docking.md): 5 names
 - [Terminal](terminal.md): 2 names
 - [File views and watcher](files.md): 12 names
-- [Images and icons](images.md): 5 names
+- [Images and icons](images.md): 7 names
 - [PDF](pdf.md): 5 names
 - [Keyboard, mouse and drag and drop](interaction.md): 16 names
 - [Themes, colors, fonts and glass](styling.md): 16 names
