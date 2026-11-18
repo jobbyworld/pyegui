@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::{fs, ptr};
 
 mod columns;
+mod cursor;
 mod containers;
 mod icons;
 mod layout;
@@ -1097,6 +1098,7 @@ impl eframe::App for PyeguiApp<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx_r = Context(ui.ctx().clone());
         native_dnd::set_window(&*frame);
+        cursor::begin_frame(&*frame);
 
         #[cfg(target_os = "macos")]
         if ui.ctx().cumulative_pass_nr() < 3 {
@@ -1138,6 +1140,7 @@ impl eframe::App for PyeguiApp<'_> {
             });
 
             debug!("Executed update_func");
+            cursor::end_frame();
             sync_fonts(ui.ctx());
 
             // the central panel background must be painted even if no widget was added
@@ -2943,6 +2946,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     widgets::register(m)?;
     icons::register(m)?;
     native_dnd::register(m)?;
+    cursor::register(m)?;
     transfer::register(m)?;
     dock::register(m)?;
     plot::register(m)?;

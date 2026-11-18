@@ -175,7 +175,10 @@ def update_func(ctx):
 - `PdfView.busy` (attribute): True while pages of the view are being drawn (their place shows a "…")
 - `PdfView.clear_search()` (method): Ends the search and removes its marks
 - `PdfView.clear_selection()` (method): Removes the selection
-- `PdfView.continuous` (attribute): True to scroll through all the pages, False to show the current page only
+- `PdfView.continuous` (attribute): True to scroll through all the pages, False to show the current page only (the wheel then goes
+
+  to the next page past the end of the page, and to the previous one past its top)
+
 - `PdfView.copy_selection()` (method): Puts the selected text in the clipboard (at the next frame)
 - `PdfView.dark` (attribute): True to draw the pages in dark colors (light text on a dark sheet; the images are kept)
 - `PdfView.doc` (attribute): The document shown (write only): a `PdfDocument`, or None to show nothing. Giving the document
@@ -195,11 +198,17 @@ def update_func(ctx):
 - `PdfView.pages` (attribute): Number of pages of the document shown, 0 without one
 - `PdfView.previous_match()` (method): Goes to the previous match (the last one before the first)
 - `PdfView.previous_page()` (method): Goes to the previous page
+- `PdfView.replace_doc(doc)` (method): Shows another document in place of the one shown, at the same page and zoom: for a file that
+
+  was saved again, read again by a new `PdfDocument` (while it is read the view shows "Opening…").
+  Giving a document with `doc = ...` instead starts at the first page.
+
 - `PdfView.rotate(degrees=90)` (method): Turns the pages by a number of degrees (90 clockwise, -90 the other way)
 - `PdfView.rotation` (attribute): How the pages are turned on the screen, in degrees clockwise: 0, 90, 180 or 270. It changes
 
   the look only, not the file.
 
+- `PdfView.scroll_offset` (attribute): The scroll offset of the last frame, in points from the top left of the content: `(x, y)`
 - `PdfView.search(text, accents=False)` (method): Looks for a text in all the pages, in a thread. The matches are marked in the pages as they are
 
   found and the view goes to the first one; `matches` counts them and `next_match` and

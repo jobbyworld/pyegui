@@ -910,6 +910,12 @@ pub(crate) struct PdfView {
     hit: usize,
     reveal: bool,
     reveal_first: bool,
+    /// the next document replaces the one shown: it opens at the same place
+    keep_place: bool,
+    /// when a wheel turn last changed the page (single page mode), in seconds of the input clock
+    last_flip: f64,
+    /// the hand: where the pointer pressed and the scroll offset at that moment
+    pan: Option<(Pos2, Vec2)>,
 }
 
 fn parse_fit(fit: &str) -> PyResult<Fit> {
@@ -951,6 +957,9 @@ impl PdfView {
             hit: 0,
             reveal: false,
             reveal_first: false,
+            keep_place: false,
+            last_flip: 0.0,
+            pan: None,
         })
     }
 
@@ -959,6 +968,14 @@ impl PdfView {
     #[setter]
     fn set_doc(&mut self, doc: Option<Py<PdfDocument>>) {
         self.source = doc;
+    }
+
+    /// Shows another document in place of the one shown, at the same page and zoom: for a file that
+    /// was saved again, read again by a new `PdfDocument` (while it is read the view shows "Opening…").
+    /// Giving a document with `doc = ...` instead starts at the first page.
+    fn replace_doc(&mut self, doc: Option<Py<PdfDocument>>) {
+        self.source = doc;
+        self.keep_place = true;
     }
 
     /// The page at the top of the window, from 1. Writing it goes to that page.
@@ -1018,7 +1035,8 @@ impl PdfView {
         Ok(())
     }
 
-    /// True to scroll through all the pages, False to show the current page only
+    /// True to scroll through all the pages, False to show the current page only (the wheel then goes
+    /// to the next page past the end of the page, and to the previous one past its top)
     #[getter]
     fn continuous(&self) -> bool {
         self.continuous
@@ -1084,6 +1102,12 @@ impl PdfView {
             other => return Err(PyValueError::new_err(format!("tool is \"select\" or \"hand\", not {other:?}"))),
         };
         Ok(())
+    }
+
+    /// The scroll offset of the last frame, in points from the top left of the content: `(x, y)`
+    #[getter]
+    fn scroll_offset(&self) -> (f32, f32) {
+        (self.offset.x, self.offset.y)
     }
 
     /// True while pages of the view are being drawn (their place shows a "…")
@@ -1249,8 +1273,14 @@ unsafe fn pdf_view(py: Python<'_>, view: &mut PdfView, kwargs: Option<&Bound<'_,
         None => (None, false),
     };
     if resolved.as_ref().map(|d| d.id) != view.doc.as_ref().map(|d| d.id) {
-        // a first document keeps the page asked for, another one starts at the first page
-        if view.doc.is_some() {
+        // a first document keeps the page asked for, another one starts at the first page, unless it
+        // replaces the one shown (`replace_doc`): then it opens where that one was
+        if view.keep_place {
+            if resolved.is_some() {
+                view.goto = Some((view.current, 0.0));
+                view.keep_place = false;
+            }
+        } else if view.doc.is_some() {
             view.current = 0;
             view.goto = Some((0, 0.0));
         }
@@ -1408,7 +1438,8 @@ unsafe fn pdf_view(py: Python<'_>, view: &mut PdfView, kwargs: Option<&Bound<'_,
     };
     if let Some((p, at)) = view.goto.take() {
         let top = tops.get(p.saturating_sub(first_page)).copied().unwrap_or(0.0);
-        let inside = if rot == 0 { at * scale } else { 0.0 };
+        // an infinite height is the end of the page (the scroll area limits the offset)
+        let inside = if at.is_infinite() { 1.0e7 } else if rot == 0 { at * scale } else { 0.0 };
         view.set_offset = Some(Vec2::new(view.offset.x, (top + inside - margin).max(0.0)));
         view.current = p;
     }
@@ -1444,14 +1475,33 @@ unsafe fn pdf_view(py: Python<'_>, view: &mut PdfView, kwargs: Option<&Bound<'_,
     let mut out_link: Option<crate::pdf_nav::Target> = None;
     let mut edge = 0.0f32;
 
+    // the hand: the pages follow the pointer, and the point that was grabbed stays under it from the press
+    // to the release (the offset is set from the press, not added up frame after frame, so nothing drifts)
+    let (down, pressed, pointer_now) = ui.input(|i| (i.pointer.primary_down(), i.pointer.primary_pressed(), i.pointer.latest_pos()));
+    if tool == Tool::Hand && down {
+        if let Some(now) = pointer_now {
+            // not on the scroll bars, at the right and at the bottom of the window
+            let on_pages = view.viewport.contains(now) && now.x < view.viewport.right() - 14.0 && now.y < view.viewport.bottom() - 14.0;
+            if pressed && on_pages {
+                view.pan = Some((now, view.offset));
+            }
+            if let Some((start, offset)) = view.pan {
+                if view.set_offset.is_none() {
+                    view.set_offset = Some((offset + (start - now)).max(Vec2::ZERO));
+                }
+            }
+        }
+    } else {
+        view.pan = None;
+    }
+    let panning = view.pan.is_some();
+
     let mut area = egui::ScrollArea::both().id_salt(("pdf_view", view.id)).auto_shrink([false, false]).max_width(avail.x).max_height(avail.y);
     if let Some(offset) = view.set_offset.take() {
         area = area.scroll_offset(offset);
     }
     let output = area.show(ui, |ui| {
-        // with the hand the scroll area takes the drags itself
-        let sense = if tool == Tool::Select { Sense::click_and_drag() } else { Sense::click() };
-        let (rect, response) = ui.allocate_exact_size(Vec2::new(content_w, total_h), sense);
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(content_w, total_h), Sense::click_and_drag());
         if let Some(color) = background {
             ui.painter().rect_filled(ui.clip_rect(), 0.0, color);
         }
@@ -1550,7 +1600,16 @@ unsafe fn pdf_view(py: Python<'_>, view: &mut PdfView, kwargs: Option<&Bound<'_,
             if over_link {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             } else if tool == Tool::Hand {
-                ui.ctx().set_cursor_icon(if response.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+                // a hand: the open and the closed hand of macOS, the pointing hand elsewhere (on Windows the
+                // "grab" cursors of egui are the four arrows of a move)
+                let hand = if cfg!(target_os = "macos") {
+                    if panning { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab }
+                } else {
+                    egui::CursorIcon::PointingHand
+                };
+                ui.ctx().set_cursor_icon(hand);
+                // on Windows an open and a closed hand drawn by pyegui (cursor.rs) replace the pointing hand
+                crate::cursor::hand(panning);
             } else if let Some((page, geo)) = response.hover_pos().and_then(page_at) {
                 let inside = response.hover_pos().is_some_and(|p| geo.rect.contains(p));
                 let on_text = doc.cached_text(page).zip(response.hover_pos()).and_then(|(t, p)| t.boundary_at(geo.from_screen(p))).is_some_and(|(_, d)| d <= 0.5);
@@ -1595,6 +1654,22 @@ unsafe fn pdf_view(py: Python<'_>, view: &mut PdfView, kwargs: Option<&Bound<'_,
     });
     view.offset = output.state.clamped_offset();
     view.viewport = output.inner_rect;
+    // one page at a time: a wheel turn past the end of the page goes to the next one, past its top to the
+    // previous one (at its end); one turn per third of a second, so a fast spin does not skip pages
+    if single && hover.is_some() && !typing {
+        let dy = ui.input(|i| if i.modifiers.command { 0.0 } else { i.smooth_scroll_delta.y });
+        let now = ui.input(|i| i.time);
+        if dy != 0.0 && now - view.last_flip > 0.35 && view.set_offset.is_none() {
+            let room = (output.content_size.y - output.inner_rect.height()).max(0.0);
+            if dy < 0.0 && view.offset.y >= room - 1.0 && view.current + 1 < n {
+                view.goto = Some((view.current + 1, 0.0));
+                view.last_flip = now;
+            } else if dy > 0.0 && view.offset.y <= 1.0 && view.current > 0 {
+                view.goto = Some((view.current - 1, f32::INFINITY));
+                view.last_flip = now;
+            }
+        }
+    }
     view.sel = out_sel;
     if edge != 0.0 {
         view.set_offset = Some(Vec2::new(view.offset.x, (view.offset.y + edge).max(0.0)));

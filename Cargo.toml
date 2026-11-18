@@ -12,7 +12,7 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.30.1", features = ["chrono", "abi3-py311", "generate-import-lib", "extension-module"] }
 eframe = { version = "0.37.0", features = ["glow", "persistence"] }
 egui_extras = { version = "0.37.0", features = ["datepicker", "all_loaders", "serde"] }
-image = { version = "0.25", features = ["jpeg", "png"] }
+image = { version = "0.25", features = ["jpeg", "png", "ico"] }
 chrono = "0.4.45"
 jiff = "0.2.42"
 egui_ltreeview = "0.10.0"
@@ -25,6 +25,7 @@ log = { version = "0.4.35", features = ["release_max_level_info"] }
 pyo3-log = "0.13.5"
 mermaid-svg = "0.7"
 usvg = { version = "0.45", default-features = false, features = ["text", "system-fonts"] }
+resvg = { version = "0.45", default-features = false }  # draws the SVG cursors (Windows)
 alacritty_terminal = "0.26"
 notify = "8.2"
 # PDF: reader, interpreter and raster of craft-libs (the reader of findcraft). `kurbo` is the geometry of the

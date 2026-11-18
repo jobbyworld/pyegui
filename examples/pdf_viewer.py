@@ -18,7 +18,7 @@ doc = PdfDocument(sys.argv[1], wait=False) if len(sys.argv) > 1 else None  # rea
 view = PdfView(doc)
 continuous = Bool(True)
 dark = Bool(False)
-hand = Bool(False)
+tool = Int(0)  # what a drag does: 0 selects text, 1 moves the pages
 query = Str("")
 searched = [""]
 password = Str("")
@@ -92,8 +92,8 @@ def navigation():
     view.continuous = continuous.value
     checkbox(dark, "Dark")
     view.dark = dark.value
-    checkbox(hand, "Hand")
-    view.tool = "hand" if hand.value else "select"
+    segmented_control(tool, [(None, "Text"), (None, "Pan")])
+    view.tool = "hand" if tool.value else "select"
     if view.busy:
         label("…")
 

@@ -45,6 +45,8 @@ from pyegui import (
     FileTreeView,
     FileWatcher,
     Int,
+    PdfDocument,
+    PdfView,
     Str,
     TagTreeView,
     Tags,
@@ -73,6 +75,7 @@ from pyegui import (
     grid,
     horizontal,
     horizontal_centered,
+    horizontal_wrapped,
     image,
     image_button_clicked,
     interactive,
@@ -86,6 +89,8 @@ from pyegui import (
     modal,
     path_breadcrumb,
     path_combo,
+    pdf_thumbnail,
+    pdf_view,
     pointer_pos,
     pointer_pressed,
     run_native,
@@ -102,6 +107,7 @@ from pyegui import (
     set_min_height,
     set_min_width,
     set_width,
+    slider_int,
     small,
     small_button_clicked,
     strong,
@@ -326,6 +332,17 @@ listing_cache = {}  # folder -> (version of the watcher, entries): read again wh
 watcher = FileWatcher()
 reading = Str("")  # a markdown or source file shown in the central view instead of the files, "" for none
 reading_cache = {"path": None, "text": ""}
+# a PDF shown in the central view like a markdown file: its document and its view, read again when it is saved
+pdf_reader = {"path": None, "doc": None, "view": None}
+pdf_query = Str("")  # the text searched in it
+pdf_searched = [""]
+pdf_password = Str("")
+pdf_dark = Bool(False)
+pdf_continuous = Bool(True)  # all the pages one after the other, or one page at a time
+pdf_grid = Bool(False)  # the thumbnails of all the pages instead of the pages
+pdf_tool = Int(0)  # what a drag does on the pages: 0 selects text, 1 moves the pages (pan)
+pdf_thumb_size = Int(150)  # their size
+pdf_preview = {"key": None, "doc": None}  # the first page shown in the Preview pane
 tree = FileTreeView("tree", start, watcher=watcher, activatable_dirs=True)
 # navigate=False: a double click or Enter comes back in activated, the Finder opens it itself
 files_list = FileListView("list", start, watcher=watcher, navigate=False)
@@ -2220,7 +2237,7 @@ def after_view(v):
     opened = [p for p in (entry(Path(p)) for p in v.activated) if p]
     if len(opened) == 1 and opened[0]["is_dir"]:
         open_item(opened[0])  # into the folder
-    elif len(opened) == 1 and (is_markdown(opened[0]["path"]) or is_code(opened[0]["path"])):
+    elif len(opened) == 1 and (is_markdown(opened[0]["path"]) or is_code(opened[0]["path"]) or is_pdf(opened[0]["path"])):
         open_reader(opened[0]["path"])  # shown here, in the central view
     elif opened:
         action_open()  # the files with their app, like the Open button
@@ -2245,6 +2262,10 @@ def is_markdown(path):
     return Path(path).suffix.lower() in (".md", ".markdown")
 
 
+def is_pdf(path):
+    return Path(path).suffix.lower() == ".pdf"
+
+
 # the source files shown by the viewer of the central view, with their colors (code_view)
 CODE_EXTENSIONS = {".py", ".pyw", ".js", ".mjs", ".cjs", ".ts", ".rs", ".ps1", ".psm1", ".sh", ".bash", ".zsh"}
 READER_MAX = 2_000_000  # a larger file opens with its app
@@ -2255,9 +2276,9 @@ def is_code(path):
 
 
 def open_reader(path):
-    """shows a markdown or source file in the central view, read again when an editor saves it"""
+    """shows a markdown, source or PDF file in the central view, read again when an editor saves it"""
     try:
-        if Path(path).stat().st_size > READER_MAX:
+        if not is_pdf(path) and Path(path).stat().st_size > READER_MAX:  # a PDF is read by a thread, whatever its size
             context[0].open_url(Path(path).as_uri())
             return
     except OSError:
@@ -2267,6 +2288,7 @@ def open_reader(path):
     watcher.watch(reading.value)
     watcher.changed(reading.value)  # starts counting the changes
     reading_cache["path"] = None
+    pdf_reader["path"] = None
     tags.opened(Path(path))  # remembered in the base, like a file opened with its app
 
 
@@ -2274,6 +2296,7 @@ def close_reader():
     if reading.value:
         watcher.unwatch(reading.value)
         reading.value = ""
+        pdf_reader.update(path=None, doc=None, view=None)  # the pages are drawn no more
 
 
 def reader_text():
@@ -2321,6 +2344,9 @@ def reader():
     if not reading.value:
         return  # closed by the bar
     separator()
+    if is_pdf(reading.value):
+        pdf_reader_view()
+        return
     if is_code(reading.value):
         # the colors of the language, from the extension (.ps1 is shown with those of the shell)
         code_view(reader_text(), Path(reading.value).suffix, id=f"reader {reading.value}")
@@ -2328,6 +2354,135 @@ def reader():
     url = markdown(reader_text(), scrollable=True, id=f"reader {reading.value}", open_links=False)
     if url:
         follow_link(url)
+
+
+def pdf_session():
+    """the document and the view of the PDF shown: opened by a thread, and read again, at the same place,
+    when another program saves the file"""
+    path = reading.value
+    if pdf_reader["path"] != path:
+        doc = PdfDocument(path, wait=False)
+        pdf_reader.update(path=path, doc=doc, view=PdfView(doc))
+        pdf_query.value = pdf_searched[0] = pdf_password.value = ""
+        pdf_grid.value = False
+    elif watcher.changed(path):
+        doc = PdfDocument(path, wait=False)
+        pdf_reader["view"].replace_doc(doc)
+        pdf_reader["doc"] = doc
+    return pdf_reader["doc"], pdf_reader["view"]
+
+
+def pdf_tools(doc, view):
+    """the rows of buttons over the pages of a PDF: pages, zoom, search"""
+    if doc.loading:
+        weak("Ouverture…")
+        return
+    if doc.error:
+        label("⚠ " + doc.error)
+        return
+    if doc.needs_password:
+
+        def ask():
+            label("🔒 Mot de passe")
+            text_edit_singleline(pdf_password)
+            if button_clicked("Ouvrir") and not doc.unlock(pdf_password.value):
+                pdf_password.value = ""
+            view.doc = doc
+
+        horizontal(ask)
+        return
+
+    def pages():
+        if small_button_clicked("▣ Page" if pdf_grid.value else "▦ Miniatures"):
+            pdf_grid.value = not pdf_grid.value
+        if pdf_grid.value:  # the size of the thumbnails is all there is to set
+            add_space(10)
+            weak(f"{doc.pages} pages")
+            add_space(10)
+            slider_int(pdf_thumb_size, 80, 320, "Taille")
+            return
+        add_space(10)
+        if small_button_clicked("◀"):
+            view.previous_page()
+        label(f"{view.page} / {view.pages}")
+        if small_button_clicked("▶"):
+            view.next_page()
+        add_space(10)
+        if small_button_clicked("−"):
+            view.zoom = view.zoom / 1.25
+        label(f"{round(view.zoom * 100)} %")
+        if small_button_clicked("+"):
+            view.zoom = view.zoom * 1.25
+        if small_button_clicked("Largeur"):
+            view.fit = "width"
+        if small_button_clicked("Page"):
+            view.fit = "page"
+        if small_button_clicked("⟳"):
+            view.rotate(90)
+        segmented_control(pdf_tool, [(None, "Texte"), (None, "Pan")], tint=icon_tint())
+        view.tool = "hand" if pdf_tool.value else "select"
+        checkbox(pdf_continuous, "Continu")
+        view.continuous = pdf_continuous.value
+        checkbox(pdf_dark, "Sombre")
+        view.dark = pdf_dark.value
+        if view.busy:
+            weak("…")
+
+    def finding():
+        label("🔍")
+        text_edit_singleline(pdf_query, hint_text="Rechercher dans le PDF")
+        if pdf_query.value != pdf_searched[0]:  # a new text: a new search
+            pdf_searched[0] = pdf_query.value
+            view.search(pdf_query.value)
+        if view.matches:
+            label(f"{view.match_index} / {view.matches}" + ("+" if view.searching else ""))
+        elif pdf_query.value:
+            weak("recherche…" if view.searching else "aucun résultat")
+        if small_button_clicked("▲"):
+            view.previous_match()
+        if small_button_clicked("▼"):
+            view.next_match()
+        if view.selected_text and small_button_clicked("Copier"):
+            view.copy_selection()
+
+    horizontal(pages)
+    if not pdf_grid.value:
+        horizontal(finding)
+
+
+def pdf_thumbnails_view(doc, view):
+    """the thumbnails of all the pages: a click goes back to the pages, at that page, one at a time"""
+
+    def thumbnails():
+        for number in range(1, doc.pages + 1):
+            if pdf_thumbnail(doc, number, size=pdf_thumb_size.value, selected=number == view.page, dark=pdf_dark.value):
+                view.page = number
+                pdf_continuous.value = False
+                pdf_grid.value = False
+
+    scroll_area_vertical(lambda: horizontal_wrapped(thumbnails))
+
+
+def pdf_reader_view():
+    """the PDF in the central view: the tools, then its pages (a drag selects text, the links work) or the
+    thumbnails of all of them"""
+    doc, view = pdf_session()
+    pdf_tools(doc, view)
+    if pdf_grid.value and doc.pages and not doc.needs_password:
+        pdf_thumbnails_view(doc, view)
+        return
+    pdf_view(view, background="#4a4b50" if context[0].is_dark_theme else "#d4d5d9")
+
+
+def pdf_first_page(path):
+    """the document of the PDF selected, for its first page in the Preview pane: read by a thread, one at a time"""
+    try:
+        key_ = (str(path), path.stat().st_mtime_ns)
+    except OSError:
+        return None
+    if pdf_preview["key"] != key_:
+        pdf_preview.update(key=key_, doc=PdfDocument(str(path), wait=False))
+    return pdf_preview["doc"]
 
 
 def content():
@@ -2427,6 +2582,11 @@ def preview():
 
     suffix = item["path"].suffix.lower()
     if suffix == ".pdf":
+        first = pdf_first_page(item["path"])
+        if first is not None and not first.error and not first.needs_password:
+            if pdf_thumbnail(first, 1, size=220, label=False):  # a click opens it in the central view
+                open_reader(item["path"])
+            add_space(8)
 
         def pdf_grid():
             for name, value in pdf_rows(item["path"]):
@@ -2961,21 +3121,13 @@ def protected_cell(path):
         label("🔒")
 
 
-pdf_cache = {"key": None, "info": None, "reading": None}
-
-
-def read_pdf_in_thread(path, key_):
-    """reads the PDF of a thread: a big file can take seconds, the window must not wait for it"""
-    from finder_pdf import read_pdf_info
-
-    info = read_pdf_info(path)
-    if pdf_cache["reading"] == key_:  # not the PDF of a selection the user has left since
-        pdf_cache.update(key=key_, info=info, reading=None)
+pdf_cache = {"key": None, "info": None}
 
 
 def pdf_details(path):
-    """what pdf_info read of a PDF: from the index, or (not indexed yet) from the file itself, in a
-    thread. None while it is read. Cached: the preview asks at every frame"""
+    """what pdf_info read of a PDF: from the index, or (not indexed yet) from the document that a thread
+    opens for the first page of the Preview pane (one read of the file for both). None while it opens.
+    Cached: the preview asks at every frame"""
     try:
         stamp = path.stat().st_mtime_ns
     except OSError:
@@ -2983,17 +3135,18 @@ def pdf_details(path):
     key_ = (str(path), stamp, indexing.get("done_at"))
     if pdf_cache["key"] == key_:
         return pdf_cache["info"]
-    if pdf_cache["reading"] == key_:
-        context[0].request_repaint(after=0.1)  # the thread cannot wake the window
-        return None
     info = tags.pdf_info(path)
-    if info is not None:
-        pdf_cache.update(key=key_, info=info, reading=None)
-        return info
-    pdf_cache["reading"] = key_
-    threading.Thread(target=read_pdf_in_thread, args=(path, key_), daemon=True).start()
-    context[0].request_repaint(after=0.1)
-    return None
+    if info is None:
+        doc = pdf_first_page(path)
+        if doc is None:
+            info = {"error": "fichier illisible"}
+        elif doc.loading:
+            context[0].request_repaint(after=0.1)  # the thread cannot wake the window
+            return None
+        else:
+            info = doc.info
+    pdf_cache.update(key=key_, info=info)
+    return info
 
 
 def pdf_rows(path):
