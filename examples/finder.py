@@ -1752,6 +1752,10 @@ def add_pane_right(layout, title):
 
 
 def open_requested_panes():
+    if layout_requests:
+        layout_requests.clear()
+        pane_requests.clear()
+        dock.load(default_layout, panes=menu_panes())
     for title in dict.fromkeys(pane_requests):  # once each, in order
         if title in dock.titles:
             dock.set_active(title)
@@ -2139,13 +2143,29 @@ SEARCH_WIDTH, SEARCH_MIN = (
 )  # the search field: its widest, and the least worth showing
 
 
+def menu_panes():
+    return [DockPane(title, ui, closable=True) for title, ui in ALL_PANES.items()]
+
+
 def panes_menu():
     """the panes of the dock: a check box for each, to show it (on the right of the files, or under
     them for the terminals) or close it, and the button that goes back to the first layout"""
-    panes = [DockPane(title, ui, closable=True) for title, ui in ALL_PANES.items()]
-    dock_menu(dock, panes, layout=default_layout, reset_text="Réinitialiser la disposition", show=show_pane)
+    dock_menu(dock, menu_panes(), layout=default_layout, reset_text="Réinitialiser la disposition", show=show_pane)
     separator()
     toggle_value(show_dock, "Dock")
+
+
+layout_requests = []  # the layout of the dock is rebuilt at the start of the next frame
+
+
+def tab_menu(tab_bar, title):
+    """the menu of a right click on the tab of a pane: the same panes as the menu of the toolbar. The
+    dock cannot be rebuilt while it is drawn, so the button of the first layout asks for it"""
+    dock_menu(tab_bar, menu_panes(), show=show_pane)
+    separator()
+    if button_clicked("Réinitialiser la disposition"):
+        layout_requests.append(True)
+        close_menu()
 
 
 def toolbar():
@@ -3961,6 +3981,7 @@ dock = Dock(
         ],
     ),
     id="inspector",
+    tab_menu=tab_menu,
     tab_bar_height=26,
     pane_margin=8,
     gap_width=GAP,  # a gap between the panes, as wide as between the other boxes
