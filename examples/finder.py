@@ -820,6 +820,15 @@ def background_window():
         [(None, "Plat"), (None, "Partielle"), (None, "Complète"), (svg("image"), "Image")],
         size=14,
         tint=icon_tint(),
+        tooltips=[
+            "Sans vitre: des surfaces opaques",
+            "Vitre partielle: la barre latérale et les barres sont en verre, le contenu "
+            "(zone centrale et volets du dock) est une feuille presque opaque, "
+            "et les menus et fenêtres sont opaques à environ 93 %",
+            "Vitre complète: toutes les surfaces sont en verre, contenu compris, "
+            "et les menus et fenêtres sont plus translucides (environ 80 %)",
+            "Vitre complète avec une image de fond derrière",
+        ],
     ):
         set_mode(bg_mode.value)
     separator()

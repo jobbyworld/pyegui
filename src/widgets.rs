@@ -743,6 +743,9 @@ unsafe fn draw_rect(
 ///     tint (color): color of the icons of the options that are not selected. The selected one
 ///         is white. Default is the color of the icons as they are
 ///
+///     tooltips (list[str | None]): a text shown when an option is hovered, one per option (None
+///         for none). Default is no tooltip
+///
 /// Returns True during the frame the selection changed.
 ///
 /// Example::
@@ -754,12 +757,13 @@ unsafe fn draw_rect(
 ///         if view.value == 0:
 ///             list_view()
 #[pyfunction]
-#[pyo3(signature = (selected, options, size=15.0, tint=None))]
+#[pyo3(signature = (selected, options, size=15.0, tint=None, tooltips=None))]
 unsafe fn segmented_control(
     selected: &mut Int,
     options: Vec<(Option<String>, Option<String>)>,
     size: f32,
     tint: Option<&Bound<'_, PyAny>>,
+    tooltips: Option<Vec<Option<String>>>,
 ) -> PyResult<bool> {
     let ui = current_ui(&UI)?;
     let tint = extract_tint(tint)?;
@@ -783,8 +787,12 @@ unsafe fn segmented_control(
                         (Some(icon), None) => egui::Button::image(menu_image(icon, size, icon_tint)),
                         (None, text) => egui::Button::new(text.as_deref().unwrap_or("")),
                     };
-                    if ui.add(button.selected(on).frame_when_inactive(on)).clicked() && !on {
+                    let response = ui.add(button.selected(on).frame_when_inactive(on));
+                    if response.clicked() && !on {
                         picked = Some(index as i32);
+                    }
+                    if let Some(Some(tip)) = tooltips.as_ref().and_then(|t| t.get(index)) {
+                        response.on_hover_text(tip);
                     }
                 }
             });
