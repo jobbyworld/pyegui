@@ -224,6 +224,174 @@ unsafe fn markdown(text: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<O
     Ok(clicked)
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Rst {
+    Plain,
+    Heading,
+    Directive,
+    Comment,
+    Marker,
+    Literal,
+    Strong,
+    Emph,
+    Role,
+    Link,
+}
+
+/// The spans of the inline markup of a line of reStructuredText: ``literal``, **strong**, *emphasis*,
+/// :role:`text` and `link`_
+fn rst_inline(line: &str) -> Vec<(usize, usize, Rst)> {
+    let b = line.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let rest = &line[i..];
+        let mut found = None;
+        if rest.starts_with("``") {
+            if let Some(e) = rest[2..].find("``") {
+                found = Some((i + e + 4, Rst::Literal));
+            }
+        } else if rest.starts_with("**") {
+            if let Some(e) = rest[2..].find("**") {
+                found = Some((i + e + 4, Rst::Strong));
+            }
+        } else if b[i] == b':' {
+            let name = rest[1..].bytes().take_while(|c| c.is_ascii_alphanumeric() || b"_.+-".contains(c)).count();
+            if name > 0 && rest[1 + name..].starts_with(":`") {
+                if let Some(e) = rest[name + 3..].find('`') {
+                    found = Some((i + name + 3 + e + 1, Rst::Role));
+                }
+            }
+        } else if b[i] == b'`' {
+            if let Some(e) = rest[1..].find('`') {
+                let mut end = i + e + 2;
+                if line[end..].starts_with("__") {
+                    end += 2;
+                } else if line[end..].starts_with('_') {
+                    end += 1;
+                }
+                found = Some((end, Rst::Link));
+            }
+        } else if b[i] == b'*' && b.get(i + 1).is_some_and(|c| !c.is_ascii_whitespace() && *c != b'*') {
+            if let Some(e) = rest[1..].find('*') {
+                if !rest[1..1 + e].ends_with(char::is_whitespace) && e > 0 {
+                    found = Some((i + e + 2, Rst::Emph));
+                }
+            }
+        }
+        match found {
+            Some((end, kind)) => {
+                out.push((i, end, kind));
+                i = end;
+            }
+            None => i += rest.chars().next().map_or(1, char::len_utf8),
+        }
+    }
+    out
+}
+
+/// Colors a reStructuredText source: titles and their adornments, directives, comments and targets,
+/// list markers, field names and the inline markup
+fn rst_job(ui: &egui::Ui, text: &str) -> egui::text::LayoutJob {
+    use egui::{text::LayoutJob, Color32, TextFormat};
+    let dark = ui.visuals().dark_mode;
+    let pick = |d: (u8, u8, u8), l: (u8, u8, u8)| {
+        let c = if dark { d } else { l };
+        Color32::from_rgb(c.0, c.1, c.2)
+    };
+    let color = |k: Rst| match k {
+        Rst::Plain => ui.visuals().text_color(),
+        Rst::Heading => pick((235, 180, 90), (150, 90, 0)),
+        Rst::Directive => pick((200, 130, 225), (130, 40, 160)),
+        Rst::Comment => ui.visuals().weak_text_color(),
+        Rst::Marker => pick((100, 180, 230), (0, 100, 160)),
+        Rst::Literal => pick((150, 200, 120), (40, 120, 40)),
+        Rst::Strong => pick((240, 160, 120), (170, 60, 20)),
+        Rst::Emph => pick((130, 200, 200), (0, 110, 110)),
+        Rst::Role => pick((230, 200, 110), (130, 100, 0)),
+        Rst::Link => pick((110, 160, 240), (20, 70, 190)),
+    };
+    let font = egui::TextStyle::Monospace.resolve(ui.style());
+    let mut job = LayoutJob::default();
+    let put = |job: &mut LayoutJob, s: &str, k: Rst| {
+        if !s.is_empty() {
+            job.append(s, 0.0, TextFormat::simple(font.clone(), color(k)));
+        }
+    };
+    let adornment = |l: &str| {
+        let t = l.trim_end();
+        let first = t.chars().next();
+        t.chars().count() >= 3 && first.is_some_and(|c| c.is_ascii_punctuation()) && t.chars().all(|c| Some(c) == first)
+    };
+    let lines: Vec<&str> = text.split('\n').collect();
+    for (n, full) in lines.iter().enumerate() {
+        let line = full.trim_end_matches('\r');
+        let tail = &full[line.len()..];
+        let indent = line.len() - line.trim_start().len();
+        let body = &line[indent..];
+        put(&mut job, &line[..indent], Rst::Plain);
+        let next = lines.get(n + 1).map(|l| l.trim_end_matches('\r'));
+        if adornment(body) && indent == 0 || (!body.is_empty() && indent == 0 && next.is_some_and(|l| adornment(l) && l.trim_end().chars().count() >= body.trim_end().chars().count().min(3)) && !adornment(body)) {
+            put(&mut job, body, Rst::Heading);
+        } else if let Some(after) = body.strip_prefix(".. ") {
+            let name = after.find("::").filter(|e| after[..*e].bytes().all(|c| c.is_ascii_alphanumeric() || b"_-:+".contains(&c)));
+            if let Some(e) = name {
+                put(&mut job, &body[..3 + e + 2], Rst::Directive);
+                for (a, z, k) in rst_segments(&after[e + 2..]) {
+                    put(&mut job, &after[e + 2..][a..z], k);
+                }
+            } else if after.starts_with('_') || after.starts_with('[') {
+                put(&mut job, body, Rst::Link);
+            } else {
+                put(&mut job, body, Rst::Comment);
+            }
+        } else {
+            // a list marker, or a field name (:name:), then the inline markup
+            let marker = if body.starts_with("- ") || body.starts_with("* ") || body.starts_with("+ ") || body.starts_with("• ") {
+                body.chars().next().map_or(0, char::len_utf8)
+            } else {
+                let digits = body.bytes().take_while(u8::is_ascii_digit).count();
+                if digits > 0 && (body[digits..].starts_with(". ") || body[digits..].starts_with(") ")) { digits + 1 } else { 0 }
+            };
+            let mut rest = body;
+            if marker > 0 {
+                put(&mut job, &body[..marker], Rst::Marker);
+                rest = &body[marker..];
+            } else if body.starts_with(':') && !body.starts_with(":`") {
+                if let Some(e) = body[1..].find(':').filter(|e| body[1 + e + 1..].starts_with(' ') || body[1 + e + 1..].is_empty()) {
+                    put(&mut job, &body[..e + 2], Rst::Marker);
+                    rest = &body[e + 2..];
+                }
+            }
+            for (a, z, k) in rst_segments(rest) {
+                put(&mut job, &rest[a..z], k);
+            }
+        }
+        put(&mut job, tail, Rst::Plain);
+        if n + 1 < lines.len() {
+            put(&mut job, "\n", Rst::Plain);
+        }
+    }
+    job
+}
+
+/// The line cut in (start, end, kind) pieces that cover it, plain where there is no markup
+fn rst_segments(line: &str) -> Vec<(usize, usize, Rst)> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    for (a, z, k) in rst_inline(line) {
+        if a > at {
+            out.push((at, a, Rst::Plain));
+        }
+        out.push((a, z, k));
+        at = z;
+    }
+    if at < line.len() {
+        out.push((at, line.len(), Rst::Plain));
+    }
+    out
+}
+
 /// The language given to the highlighter of egui_extras: a name or the extension of a file
 fn highlight_language(language: &str) -> &str {
     match language.trim_start_matches('.').to_lowercase().as_str() {
@@ -239,7 +407,7 @@ fn highlight_language(language: &str) -> &str {
 /// selected and copied.
 ///
 /// Highlighted languages: Python, JavaScript and TypeScript, Rust, shell (bash, zsh, and
-/// PowerShell as shell), C and C++, JSON, SQL, TOML and YAML. Another language is shown plain.
+/// PowerShell as shell), C and C++, JSON, SQL, TOML and YAML, and reStructuredText ("rst": titles, directives, comments, lists, fields and inline markup). Another language is shown plain.
 ///
 /// Args:
 ///     text (str): the code
@@ -265,7 +433,12 @@ unsafe fn code_view(text: &str, language: &str, kwargs: Option<&Bound<'_, PyDict
     let style = ui.style().clone();
     let theme = egui_extras::syntax_highlighting::CodeTheme::from_style(&style);
     // memoized by egui_extras: cheap to call at every frame
-    let mut job = egui_extras::syntax_highlighting::highlight(ui.ctx(), &style, &theme, text, highlight_language(language));
+    let rst = matches!(language.trim_start_matches('.').to_lowercase().as_str(), "rst" | "rest");
+    let mut job = if rst {
+        rst_job(ui, text)
+    } else {
+        egui_extras::syntax_highlighting::highlight(ui.ctx(), &style, &theme, text, highlight_language(language))
+    };
     job.wrap.max_width = f32::INFINITY; // code is not wrapped: the area scrolls sideways
 
     egui::ScrollArea::both()
@@ -291,4 +464,20 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(markdown, m)?)?;
     m.add_function(wrap_pyfunction!(code_view, m)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod rst_tests {
+    use super::*;
+
+    #[test]
+    fn inline_markup_is_cut_without_panicking() {
+        for line in ["``a`` **b** *c* :ref:`d` `e`_ é `é`__ ``", "* ", "**", ":x:`", "`", "é*é*é", ":é:`x`", "a ``b"] {
+            let segs = rst_segments(line);
+            let joined: String = segs.iter().map(|(a, z, _)| &line[*a..*z]).collect();
+            assert_eq!(joined, line);
+        }
+        let kinds: Vec<_> = rst_segments("a ``b`` **c**").iter().map(|s| s.2 == Rst::Literal || s.2 == Rst::Strong).collect();
+        assert_eq!(kinds, vec![false, true, false, true]);
+    }
 }

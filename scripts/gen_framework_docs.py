@@ -97,7 +97,7 @@ THEMES = [
     ("images", "Images and icons",
      "Images are given as uri: `file://` followed by a path, or an `http(s)` url. SVG icons stay "
      "sharp at any size and can be tinted.",
-     ["image", "image_button_clicked", "image_and_text_clicked", "file_icon", "set_blue_folders"]),
+     ["image", "image_button_clicked", "image_and_text_clicked", "file_icon", "set_blue_folders", "ImageView", "image_view"]),
     ("pdf", "PDF",
      "What a PDF says about itself, read by the Rust code of pyegui (the `craft-pdf` reader): `pdf_info` "
      "gives the pages, the version, the metadata, the dates and what the file forbids, with the GIL "
