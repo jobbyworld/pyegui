@@ -8,7 +8,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use eframe::egui::{self, Color32, CursorIcon, Sense, ViewportCommand};
+use eframe::egui::{self, Color32, Sense, ViewportCommand};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -20,11 +20,13 @@ pub(crate) fn set_custom(custom: bool) {
     CUSTOM.store(custom, Ordering::Relaxed);
 }
 
+#[cfg(windows)]
 fn custom() -> bool {
     CUSTOM.load(Ordering::Relaxed)
 }
 
 /// Width of the zone along the edges of the window that resizes it
+#[cfg(windows)]
 const EDGE: f32 = 5.0;
 
 fn maximized(ctx: &egui::Context) -> bool {
@@ -38,44 +40,44 @@ fn toggle_maximized(ctx: &egui::Context) {
 
 /// Resize of the window by its edges: the cursor and `BeginResize` once per frame, after the update
 /// function, only for a window without a title bar of the system (`custom_titlebar=True`) that is not
-/// maximized.
+/// maximized. Windows only: elsewhere it does nothing.
+#[cfg(windows)]
 pub(crate) fn edge_resize(ctx: &egui::Context) {
-    #[cfg(target_os = "macos")]
-    return;
-    #[cfg(not(target_os = "macos"))]
-    {
-        use egui::viewport::ResizeDirection as D;
-        if !custom() || maximized(ctx) {
-            return;
-        }
-        let rect = ctx.content_rect();
-        let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else {
-            return;
-        };
-        if !rect.contains(pos) {
-            return;
-        }
-        let left = pos.x - rect.min.x < EDGE;
-        let right = rect.max.x - pos.x < EDGE;
-        let top = pos.y - rect.min.y < EDGE;
-        let bottom = rect.max.y - pos.y < EDGE;
-        let (dir, icon) = match (left, right, top, bottom) {
-            (true, _, true, _) => (D::NorthWest, CursorIcon::ResizeNwSe),
-            (_, true, true, _) => (D::NorthEast, CursorIcon::ResizeNeSw),
-            (true, _, _, true) => (D::SouthWest, CursorIcon::ResizeNeSw),
-            (_, true, _, true) => (D::SouthEast, CursorIcon::ResizeNwSe),
-            (true, ..) => (D::West, CursorIcon::ResizeHorizontal),
-            (_, true, ..) => (D::East, CursorIcon::ResizeHorizontal),
-            (_, _, true, _) => (D::North, CursorIcon::ResizeVertical),
-            (_, _, _, true) => (D::South, CursorIcon::ResizeVertical),
-            _ => return,
-        };
-        ctx.set_cursor_icon(icon);
-        if ctx.input(|i| i.pointer.primary_pressed()) {
-            ctx.send_viewport_cmd(ViewportCommand::BeginResize(dir));
-        }
+    use egui::viewport::ResizeDirection as D;
+    use egui::CursorIcon;
+    if !custom() || maximized(ctx) {
+        return;
+    }
+    let rect = ctx.content_rect();
+    let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else {
+        return;
+    };
+    if !rect.contains(pos) {
+        return;
+    }
+    let left = pos.x - rect.min.x < EDGE;
+    let right = rect.max.x - pos.x < EDGE;
+    let top = pos.y - rect.min.y < EDGE;
+    let bottom = rect.max.y - pos.y < EDGE;
+    let (dir, icon) = match (left, right, top, bottom) {
+        (true, _, true, _) => (D::NorthWest, CursorIcon::ResizeNwSe),
+        (_, true, true, _) => (D::NorthEast, CursorIcon::ResizeNeSw),
+        (true, _, _, true) => (D::SouthWest, CursorIcon::ResizeNeSw),
+        (_, true, _, true) => (D::SouthEast, CursorIcon::ResizeNwSe),
+        (true, ..) => (D::West, CursorIcon::ResizeHorizontal),
+        (_, true, ..) => (D::East, CursorIcon::ResizeHorizontal),
+        (_, _, true, _) => (D::North, CursorIcon::ResizeVertical),
+        (_, _, _, true) => (D::South, CursorIcon::ResizeVertical),
+        _ => return,
+    };
+    ctx.set_cursor_icon(icon);
+    if ctx.input(|i| i.pointer.primary_pressed()) {
+        ctx.send_viewport_cmd(ViewportCommand::BeginResize(dir));
     }
 }
+
+#[cfg(not(windows))]
+pub(crate) fn edge_resize(_ctx: &egui::Context) {}
 
 /// The three buttons of the window at the left of the bar, like macOS: close (red), minimize
 /// (yellow) and maximize or restore (green). Their symbols appear when the pointer is over them.
