@@ -330,17 +330,14 @@ glass = Int(FULL)
 GLASS_OPACITY = 1.2  # multiplies the opacity of the glass
 GLASS_LEVELS = {"central": 0.3, "dock": 0.3}  # the files and the docks are clear glass; the rest is the style's
 BACKDROP_BLUR = 32  # the blur of what is behind the window (macOS), in points
-# the unified layout, like the window of the Claude app: the sidebar runs along the whole height of
-# the window, without gap nor corners; it and the body are cut in three bands of the same heights
-# (top, content, bottom) whose lines continue from one to the other. False: rounded boxes with gaps
-unified = Bool(True)
+# the layout, like the window of the Claude app: the sidebar runs along the whole height of the
+# window, without gap nor corners; it and the body are cut in three bands of the same heights (top,
+# content, bottom) whose lines continue from one to the other
 UNIFIED_GAP = 8  # the gap of the unified layout, around the dock and between its panes
 TOP_H, BOTTOM_H = 52, 44  # the heights of the top and bottom bands, in the sidebar and the body
 CLEAR = (0, 0, 0, 0)
 LINE = (1, (127, 127, 127, 70))  # the lines between the bands and between the sidebar and the body
 # the boxes layout: the margins outside the sidebar (left, top, right, bottom) and its corners
-SIDEBAR_MARGIN = (0, 39, 0, 15.5)
-SIDEBAR_ROUNDING = 14.7
 accent_name = Str("Blue")
 pill_tabs = Bool(False)
 started = Bool(False)
@@ -825,6 +822,24 @@ def background_window():
         tint=icon_tint(),
     ):
         set_mode(bg_mode.value)
+    separator()
+
+    def choices(title, items, current_value, setter):
+        def row():
+            small(title)
+            for value, text in items:
+                if selectable_label_clicked(current_value == value, text):
+                    setter(value)
+
+        horizontal(row)
+
+    choices("Accent", [("Blue", "Bleu"), ("Violet", "Violet"), ("Green", "Vert"), ("Orange", "Orange")], accent_name.value, set_accent_name)
+    choices("Onglets", [(False, "Classiques"), (True, "En pilule")], pill_tabs.value, set_tab_style)
+    if not MACOS:
+        before_blue = blue_folders.value
+        toggle_value(blue_folders, "Dossiers bleus")
+        if blue_folders.value != before_blue:
+            set_blue(blue_folders.value)
     if not bg_on.value:
         weak("Le mode Image montre une image de fond derrière la vitre")
         return
@@ -871,11 +886,10 @@ def background_window():
 
 
 def apply_gaps():
-    """the unified layout lays out the gaps itself: no margin in the central panel, and the gap of
-    the dock between its panes; the boxes layout keeps the margin of egui and its own gap"""
-    ctx = context[0]
-    ctx.set_central_margin(0 if unified.value else 8)
-    dock.set_style(gap_width=UNIFIED_GAP if unified.value else GAP)
+    """the layout lays out the gaps itself: no margin in the central panel, and the gap of the dock
+    between its panes"""
+    context[0].set_central_margin(0)
+    dock.set_style(gap_width=UNIFIED_GAP)
 
 
 def snapshot():
@@ -883,7 +897,6 @@ def snapshot():
     return {
         "theme": theme.value,
         "glass": glass.value,
-        "unified": unified.value,
         "accent": accent_name.value,
         "pill_tabs": pill_tabs.value,
         "view": view.value,
@@ -929,7 +942,6 @@ def restore(saved):
         return
     theme.value = saved.get("theme", theme.value)
     glass.value = saved.get("glass", glass.value)
-    unified.value = bool(saved.get("unified", unified.value))
     if saved.get("accent") in ACCENTS:
         accent_name.value = saved["accent"]
     pill_tabs.value = saved.get("pill_tabs", pill_tabs.value)
@@ -1975,49 +1987,11 @@ def locations():
 
 
 def sidebar():
-    if unified.value:
-        # three bands, the top and bottom ones as high as the bars of the body; without lines in the
-        # sidebar, only the body has them
-        top_panel("sidebar_top", sidebar_top, exact_size=TOP_H, resizable=False, fill=CLEAR, inner_margin=(12, 0, 12, 0), show_separator_line=False)
-        bottom_panel("sidebar_bottom", sidebar_bottom, exact_size=BOTTOM_H, resizable=False, fill=CLEAR, inner_margin=(12, 0, 12, 0), show_separator_line=False)
-        frame(lambda: scroll_area_vertical(sidebar_content), inner_margin=12)
-        return
-    if MACOS:
-        add_space(26)  # the window buttons are over the sidebar
-    scroll_area_vertical(
-        sidebar_content
-    )  # many tags: the sidebar scrolls instead of overflowing
-
-
-def settings_menu():
-    """the menu of the settings button: theme, glass, accent, tabs and layout"""
-
-    def choices(title, items, current_value, setter):
-        small(title)
-        for value, text in items:
-            if selectable_label_clicked(current_value == value, text):
-                setter(value)
-                close_menu()
-
-    choices("Thème", [(LIGHT, "Clair"), (DARK, "Sombre"), (SYSTEM, "Système")], theme.value, set_theme)
-    separator()
-    choices("Vitre", [(NO_GLASS, "Sans vitre"), (PARTIAL, "Partielle"), (FULL, "Complète")], glass.value, set_glass)
-    separator()
-    accents = {"Blue": "Bleu", "Violet": "Violet", "Green": "Vert", "Orange": "Orange"}
-    choices("Accent", list(accents.items()), accent_name.value, set_accent_name)
-    separator()
-    choices("Onglets", [(False, "Classiques"), (True, "En pilule")], pill_tabs.value, set_tab_style)
-    if not MACOS:
-        separator()
-        before_blue = blue_folders.value
-        toggle_value(blue_folders, "Dossiers bleus")
-        if blue_folders.value != before_blue:
-            set_blue(blue_folders.value)
-    separator()
-    before_layout = unified.value
-    toggle_value(unified, "Disposition unifiée")
-    if unified.value != before_layout:
-        apply_gaps()
+    # three bands, the top and bottom ones as high as the bars of the body; without lines in the
+    # sidebar, only the body has them
+    top_panel("sidebar_top", sidebar_top, exact_size=TOP_H, resizable=False, fill=CLEAR, inner_margin=(12, 0, 12, 0), show_separator_line=False)
+    bottom_panel("sidebar_bottom", sidebar_bottom, exact_size=BOTTOM_H, resizable=False, fill=CLEAR, inner_margin=(12, 0, 12, 0), show_separator_line=False)
+    frame(lambda: scroll_area_vertical(sidebar_content), inner_margin=12)
 
 
 def sidebar_top():
@@ -2025,7 +1999,8 @@ def sidebar_top():
 
     def row():
         add_space(max(available_width() - 28, 0))  # at the right of the band
-        menu_image_button(svg("gear"), settings_menu, size=16, tint=icon_tint())
+        if image_button_clicked(svg("gear"), "Apparence", size=16, tint=icon_tint(), selected=bg_open.value):
+            bg_open.value = not bg_open.value
 
     horizontal_centered(row)
 
@@ -2233,14 +2208,14 @@ def toolbar():
                 text_edit_singleline(search, hint_text="Search")
 
             # in the unified layout the field is centered in the band like the other buttons
-            (horizontal_centered if unified.value else vertical)(search_field)
+            horizontal_centered(search_field)
         measure(
             "panes",
             lambda: menu_image_button(svg("panes"), panes_menu, size=18, tint=tint),
             last=True,
         )
 
-    (horizontal_centered if unified.value else horizontal)(bar)
+    horizontal_centered(bar)
 
 
 # views
@@ -3830,7 +3805,7 @@ def path_bar():
                 )
                 path_edit["focus"] = False
 
-            (horizontal_centered if unified.value else vertical)(field)  # centered like the search
+            horizontal_centered(field)  # centered like the search
             if key_pressed("Escape", when_typing=True):
                 path_editing.value = False
             elif key_pressed("Enter", when_typing=True):
@@ -3871,7 +3846,7 @@ def path_bar():
 
         measure(key, right, last=True)
 
-    (horizontal_centered if unified.value else horizontal)(crumbs)
+    horizontal_centered(crumbs)
 
 
 def in_zone(zone, ui):
@@ -3994,12 +3969,9 @@ def update_func(ctx):
     open_requested_panes()  # before the dock is drawn
     collect_activity()
     follow_in_shell()
-    if unified.value:
-        unified_layout()
-    else:
-        boxes_layout()
+    layout()
     apply_background()
-    window("Image de fond", background_window, open=bg_open, default_width=300, resizable=False)
+    window("Apparence", background_window, open=bg_open, default_width=300, resizable=False)
     if renaming.value:
         rename_dialog()
     if palette_open.value:
@@ -4011,7 +3983,7 @@ def update_func(ctx):
     ctx.save_state(snapshot())  # written to disk by pyegui, see persist_id below
 
 
-def unified_layout():
+def layout():
     """like the Claude app: a sidebar along the whole height, a line between it and the body, and in
     both a top band, a content and a bottom band whose lines continue from one to the other"""
     left_panel(
@@ -4037,26 +4009,6 @@ def unified_layout():
 def dock_or_files(**kwargs):
     """the panes of the dock, or the files alone when the dock is hidden"""
     frame(lambda: dock_area(dock) if show_dock.value else frame(central_ui, stroke=EDGE, rounding=6), **kwargs)
-
-
-def boxes_layout():
-    """the sidebar, the bars and the dock are rounded boxes with gaps"""
-    left_panel(
-        "sidebar",
-        in_zone("sidebar", sidebar),
-        expanded=show_sidebar,
-        default_size=215,
-        min_size=200,
-        inner_margin=12,
-        outer_margin=SIDEBAR_MARGIN,
-        show_separator_line=False,
-        rounding=SIDEBAR_ROUNDING,
-        stroke=zone_stroke("sidebar", EDGE),
-    )
-    bar = dict(inner_margin=8, show_separator_line=False, rounding=12, stroke=EDGE)
-    top_panel("toolbar", toolbar, outer_margin=(0, 0, 0, H), **bar)
-    bottom_panel("path", path_bar, outer_margin=(0, H, 0, 0), **bar)
-    dock_or_files(outer_margin=(0, H, 0, H))  # the same as the bars: the panes line up with them
 
 
 if __name__ == "__main__":
