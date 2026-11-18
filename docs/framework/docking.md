@@ -110,6 +110,18 @@ dock = Dock(root, glass=True, inactive_tab_fill="#ec489933", tab_bar_height=30)
       dock.load(saved["dock"], panes=all_panes)
   ```
 
+- `Dock.remove_pane(title)` (method): Closes the first pane with this title, whether or not it is `closable` (that only decides
+
+  whether its tab has a close button). Returns False if there is no such pane. The pane object
+  is yours: add_pane() brings it back.
+
+  **Usage:**
+
+  ```python
+  if button_clicked("Close the console"):
+      dock.remove_pane("Console")
+  ```
+
 - `Dock.reset_style()` (method): Goes back to the default look of the dock
 - `Dock.save()` (method): Returns the layout of the dock as plain Python values (dicts, lists, strings, numbers): which
 
@@ -252,5 +264,38 @@ Shows a Dock, filling the available space.
 dock = Dock(DockContainer("tabs", [DockPane("A", lambda: label("a")), DockPane("B", lambda: label("b"))]))
 
 def update_func(ctx):
+    dock_area(dock)
+```
+
+
+## `dock_menu(dock, panes, **kwargs)`
+
+The content of a menu that manages the panes of a dock: a check box for each pane that tells
+whether it is open, to show it or close it, and a button that gives back the layout the app
+started with. Call it in a menu (`menu_button`, `menu_image_button`), a context menu or a popup,
+not in a pane of the same dock.
+
+**Args**
+
+- `dock` (Dock): the dock to manage
+- `panes` (list[DockPane]): the panes the menu manages: the ones that can be shown or closed, open or not. Another pane of the dock, the central one for example, is not in the menu
+
+**Keyword args**
+
+- `layout` (dict): a layout given by `dock.save()`, for the button that goes back to it. Without
+- it there is no button
+- `reset_text` (str): the text of that button. Default is "Reset layout"
+
+Returns True during the frame a pane was shown or closed or the layout was restored.
+
+**Example:**
+
+```python
+panes = [DockPane("Files", files_ui, closable=True), DockPane("Console", console_ui, closable=True)]
+dock = Dock(DockContainer("horizontal", panes))
+default_layout = dock.save()
+
+def update_func(ctx):
+    menu_button("Panes", lambda: dock_menu(dock, panes, layout=default_layout))
     dock_area(dock)
 ```

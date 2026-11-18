@@ -943,6 +943,37 @@ impl Dock {
         }
     }
 
+    /// Closes the first pane with this title, whether or not it is `closable` (that only decides
+    /// whether its tab has a close button). Returns False if there is no such pane. The pane object
+    /// is yours: add_pane() brings it back.
+    ///
+    /// Usage::
+    ///
+    ///     if button_clicked("Close the console"):
+    ///         dock.remove_pane("Console")
+    fn remove_pane(&mut self, title: &str) -> PyResult<bool> {
+        if let Some(index) = self.pending.iter().position(|pane| pane.title == title) {
+            self.pending.remove(index);
+            return Ok(true);
+        }
+        let tree = self
+            .tree
+            .as_mut()
+            .ok_or(PyRuntimeError::new_err("remove_pane cannot be called inside a pane of the same dock"))?;
+        let id = tree
+            .tiles
+            .iter()
+            .find_map(|(id, tile)| matches!(tile, Tile::Pane(pane) if pane.title == title).then_some(*id));
+        match id {
+            Some(id) => {
+                // like the close button of a tab: the tree drops the tile at the next frame
+                tree.tiles.remove(id);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
     /// Makes the first pane with this title the active tab. Returns False if there is no such pane
     ///
     /// Usage::
@@ -1618,7 +1649,77 @@ unsafe fn dock_area(py: Python<'_>, dock: Py<Dock>) -> PyResult<()> {
     behavior.result
 }
 
+/// The content of a menu that manages the panes of a dock: a check box for each pane that tells
+/// whether it is open, to show it or close it, and a button that gives back the layout the app
+/// started with. Call it in a menu (`menu_button`, `menu_image_button`), a context menu or a popup,
+/// not in a pane of the same dock.
+///
+/// Args:
+///     dock (Dock): the dock to manage
+///
+///     panes (list[DockPane]): the panes the menu manages: the ones that can be shown or closed,
+///         open or not. Another pane of the dock, the central one for example, is not in the menu
+///
+/// Keyword args:
+///     layout (dict): a layout given by `dock.save()`, for the button that goes back to it. Without
+///     it there is no button
+///
+///     reset_text (str): the text of that button. Default is "Reset layout"
+///
+/// Returns True during the frame a pane was shown or closed or the layout was restored.
+///
+/// Example::
+///
+///     panes = [DockPane("Files", files_ui, closable=True), DockPane("Console", console_ui, closable=True)]
+///     dock = Dock(DockContainer("horizontal", panes))
+///     default_layout = dock.save()
+///
+///     def update_func(ctx):
+///         menu_button("Panes", lambda: dock_menu(dock, panes, layout=default_layout))
+///         dock_area(dock)
+#[pyfunction]
+#[pyo3(signature = (dock, panes, **kwargs))]
+unsafe fn dock_menu(
+    py: Python<'_>,
+    dock: &Bound<'_, Dock>,
+    panes: Vec<PyRef<'_, DockPane>>,
+    kwargs: Option<&Bound<'_, PyDict>>,
+) -> PyResult<bool> {
+    let ui = current_ui(&UI)?;
+    if dock.borrow().tree.is_none() {
+        return Err(PyRuntimeError::new_err("dock_menu cannot be called inside a pane of the same dock"));
+    }
+    let layout = kwargs.and_then(|k| k.get_item("layout").ok().flatten()).filter(|l| !l.is_none());
+    let reset_text = kwarg::<String>(kwargs, "reset_text")?.unwrap_or_else(|| "Reset layout".to_string());
+    let open = dock.borrow().titles();
+    let mut changed = false;
+    for pane in &panes {
+        let mut on = open.contains(&pane.title);
+        if ui.checkbox(&mut on, pane.title.as_str()).changed() {
+            let mut dock = dock.borrow_mut();
+            if on {
+                let new = Pane::from_py(pane, py);
+                match &mut dock.tree {
+                    Some(tree) => add_pane_to_tree(tree, new),
+                    None => dock.pending.push(new),
+                }
+            } else {
+                dock.remove_pane(&pane.title)?;
+            }
+            changed = true;
+        }
+    }
+    if let Some(layout) = layout {
+        ui.separator();
+        if ui.button(reset_text).clicked() {
+            changed |= dock.borrow_mut().load(py, &layout, Some(panes))?;
+        }
+    }
+    Ok(changed)
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(dock_menu, m)?)?;
     m.add_class::<DockPane>()?;
     m.add_class::<DockContainer>()?;
     m.add_class::<DockTabBar>()?;
