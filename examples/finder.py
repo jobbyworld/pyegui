@@ -2022,10 +2022,10 @@ def sidebar():
 
 
 def sidebar_top():
-    """the top band of the sidebar: the window buttons are over it (the ones of macOS, or the ones drawn
-    by window_controls without a title bar of the system), the rest moves the window"""
-    if CUSTOM_TITLEBAR:
-        horizontal_centered(lambda: (window_controls(), window_drag_area()))
+    """the top band of the sidebar, as high as the toolbar: the window buttons are over it (the ones of
+    macOS, or the ones drawn by window_controls without a title bar of the system), the whole band moves
+    the window and a double click maximizes it or restores its size and position"""
+    horizontal_centered(lambda: (window_controls(), window_drag_area(fill_height=True)))
 
 
 def sidebar_bottom():
@@ -2194,16 +2194,28 @@ def toolbar():
             if image_button_clicked(svg("chevron-up"), size=16, tint=tint):
                 go(current().parent)
 
-        add_enabled(current().parent != current(), parent_button)  # greyed out at the root
+        if reading.value:
+            # in the viewer the button that goes up a folder becomes the one that closes the file
+            if image_button_clicked(svg("close"), size=16, tint=tint, tooltip="Fermer"):
+                leave_reader()
+        else:
+            add_enabled(current().parent != current(), parent_button)  # greyed out at the root
         add_space(6)
-        # the name of the folder; under the mouse its icon and a menu of its parent folders
-        chosen_folder = path_combo(current(), size=15, context_menu=path_menu)
+        # the name of the folder, or of the file in the viewer; under the mouse its icon and a menu of its
+        # parent folders
+        chosen_folder = path_combo(
+            Path(reading.value) if reading.value else current(),
+            size=15,
+            context_menu=path_menu,
+            max_width=available_width() - (48 if reading.value else 0),
+        )
+        if reading.value and image_button_clicked(svg("open"), size=16, tint=tint, tooltip="Ouvrir avec le système"):
+            open_file(reading.value)
         if chosen_folder:
             go(chosen_folder)
 
     def middle():
-        if CUSTOM_TITLEBAR:
-            window_drag_area()  # the free space of the bar moves the window
+        window_drag_area(fill_height=True)  # the free space of the bar moves the window, a double click maximizes it
 
     def right():
         if show_view:
@@ -2479,11 +2491,6 @@ def reader():
     tint = icon_tint()
 
     def bar():
-        if image_button_clicked(svg("chevron-left"), "Fermer", size=16, tint=tint):
-            leave_reader()
-            return
-        add_space(6)
-        strong(Path(reading.value).name)
         if is_image(reading.value):  # the zoom of the image: − / + and fit in one segmented control
             add_space(10)
             label(f"{round(image_state.zoom * 100)} %")
@@ -2499,14 +2506,10 @@ def reader():
                     image_state.zoom = image_state.zoom * 1.25
                 else:
                     image_state.reset()
-        add_space(max(available_width() - 150, 4))
-        if small_button_clicked("Ouvrir avec l'app"):
-            context[0].open_url(Path(reading.value).as_uri())
 
-    horizontal(bar)  # a row at the top: horizontal_centered would take the whole height
-    if not reading.value:
-        return  # closed by the bar
-    separator()
+    if is_image(reading.value):  # the bar only holds the zoom of an image: the rest is in the toolbar
+        horizontal(bar)  # a row at the top: horizontal_centered would take the whole height
+        separator()
     if is_pdf(reading.value):
         pdf_reader_view()
         return
@@ -2559,8 +2562,13 @@ def pdf_tools(doc, view):
         horizontal(ask)
         return
 
+    tint = icon_tint()
+
+    def tool(icon, tip, on=False):
+        return image_button_clicked(svg(icon), size=15, tint=toggle_tint(on), selected=on, tooltip=tip)
+
     def pages():
-        if small_button_clicked("▣ Page" if pdf_grid.value else "▦ Miniatures"):
+        if tool("grid", "Pages" if pdf_grid.value else "Miniatures", pdf_grid.value):
             pdf_grid.value = not pdf_grid.value
         if pdf_grid.value:  # the size of the thumbnails is all there is to set
             add_space(10)
@@ -2569,34 +2577,43 @@ def pdf_tools(doc, view):
             slider_int(pdf_thumb_size, 80, 320, "Taille")
             return
         add_space(10)
-        if small_button_clicked("◀"):
+        if tool("chevron-left", "Page précédente"):
             view.previous_page()
         label(f"{view.page} / {view.pages}")
-        if small_button_clicked("▶"):
+        if tool("chevron-right", "Page suivante"):
             view.next_page()
         add_space(10)
-        if small_button_clicked("−"):
+        if tool("zoom-out", "Réduire"):
             view.zoom = view.zoom / 1.25
         label(f"{round(view.zoom * 100)} %")
-        if small_button_clicked("+"):
+        if tool("zoom-in", "Agrandir"):
             view.zoom = view.zoom * 1.25
-        if small_button_clicked("Largeur"):
+        if tool("fit-width", "Ajuster à la largeur"):
             view.fit = "width"
-        if small_button_clicked("Page"):
+        if tool("zoom-fit", "Ajuster à la page"):
             view.fit = "page"
-        if small_button_clicked("⟳"):
+        if tool("rotate", "Pivoter de 90°"):
             view.rotate(90)
-        segmented_control(pdf_tool, [(None, "Texte"), (None, "Pan")], tint=icon_tint())
+        segmented_control(
+            pdf_tool,
+            [(svg("text-select"), None), (svg("hand"), None)],
+            size=15,
+            tint=tint,
+            tooltips=["Sélectionner du texte", "Déplacer la page"],
+        )
         view.tool = "hand" if pdf_tool.value else "select"
-        checkbox(pdf_continuous, "Continu")
+        if tool("continuous", "Défilement continu", pdf_continuous.value):
+            pdf_continuous.value = not pdf_continuous.value
         view.continuous = pdf_continuous.value
-        checkbox(pdf_dark, "Sombre")
+        if tool("moon", "Pages sombres", pdf_dark.value):
+            pdf_dark.value = not pdf_dark.value
         view.dark = pdf_dark.value
         if view.busy:
             weak("…")
 
     def finding():
-        label("🔍")
+        add_space(4)
+        image(svg("search"), max_width=15, max_height=15, tint=icon_tint())
         text_edit_singleline(pdf_query, hint_text="Rechercher dans le PDF")
         if pdf_query.value != pdf_searched[0]:  # a new text: a new search
             pdf_searched[0] = pdf_query.value
@@ -2605,11 +2622,11 @@ def pdf_tools(doc, view):
             label(f"{view.match_index} / {view.matches}" + ("+" if view.searching else ""))
         elif pdf_query.value:
             weak("recherche…" if view.searching else "aucun résultat")
-        if small_button_clicked("▲"):
+        if tool("chevron-up", "Résultat précédent"):
             view.previous_match()
-        if small_button_clicked("▼"):
+        if tool("chevron-down", "Résultat suivant"):
             view.next_match()
-        if view.selected_text and small_button_clicked("Copier"):
+        if view.selected_text and tool("copy", "Copier la sélection"):
             view.copy_selection()
 
     horizontal(pages)
@@ -2887,6 +2904,12 @@ def duplicate():
 
 def start_rename(path):
     renaming.value, new_name.value = str(path), path.name
+
+
+def new_window():
+    """another window of the Finder, on the folder shown: a new process of this script (a folder given on
+    the command line wins over the one kept from the last run)"""
+    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), str(current())], start_new_session=True)
 
 
 def new_folder():
@@ -3363,6 +3386,7 @@ def reload_app():
 
 # category, label, icon, shortcut, enabled, run. "Cmd" is the command key on macOS and ctrl elsewhere
 ACTIONS = [
+    ("Ouvrir", "Nouvelle fenêtre", "dock", "Cmd+N", lambda: True, new_window),
     ("Ouvrir", "Ouvrir", "open", "Cmd+ArrowDown", has_selection, action_open),
     (
         "Ouvrir",

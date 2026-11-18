@@ -373,12 +373,14 @@ fn extract_tint(tint: Option<&Bound<'_, PyAny>>) -> PyResult<Option<egui::Color3
 ///     frame (bool): draw the background of the button. False shows it only when the button is
 ///         hovered or selected, like the items of a sidebar. Default is True
 ///
+///     tooltip (str): a text shown when the button is hovered, to keep the button small. Default is none
+///
 /// Example::
 ///
-///     if image_button_clicked("file://icons/list.svg", "List", selected=view == LIST):
+///     if image_button_clicked("file://icons/list.svg", tooltip="List", selected=view == LIST):
 ///         view = LIST
 #[pyfunction]
-#[pyo3(signature = (source, text=None, size=16.0, tint=None, selected=false, frame=true))]
+#[pyo3(signature = (source, text=None, size=16.0, tint=None, selected=false, frame=true, tooltip=None))]
 unsafe fn image_button_clicked(
     source: &str,
     text: Option<&str>,
@@ -386,6 +388,7 @@ unsafe fn image_button_clicked(
     tint: Option<&Bound<'_, PyAny>>,
     selected: bool,
     frame: bool,
+    tooltip: Option<&str>,
 ) -> PyResult<bool> {
     let ui = current_ui(&UI)?;
     let image = menu_image(source, size, extract_tint(tint)?);
@@ -395,7 +398,12 @@ unsafe fn image_button_clicked(
     };
     let button = button.selected(selected);
     let button = if frame { button } else { button.frame_when_inactive(selected) };
-    Ok(ui.add(button).clicked())
+    let response = ui.add(button);
+    let response = match tooltip {
+        Some(tip) => response.on_hover_text(tip),
+        None => response,
+    };
+    Ok(response.clicked())
 }
 
 /// A button with an image, showing a menu when clicked. See menu_button.

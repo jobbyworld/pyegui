@@ -92,6 +92,10 @@ window in its middle.
 - `title` (str): a text drawn in the middle of the area. Default is none
 - `width` (float): width of the area. Default is the rest of the row
 - `height` (float): height of the area. Default is the height of a row of the ui
+- `fill_height` (bool): take all the height left in the ui, to make a whole band (the top band of a sidebar, a toolbar) move the window. Default is False
+
+The double click maximizes the window, and restores the size and the position it had before when
+it is maximized (the system remembers them).
 
 **Example:**
 

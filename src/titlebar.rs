@@ -169,6 +169,12 @@ fn window_controls(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<bool> {
 ///
 ///     height (float): height of the area. Default is the height of a row of the ui
 ///
+///     fill_height (bool): take all the height left in the ui, to make a whole band (the top band
+///         of a sidebar, a toolbar) move the window. Default is False
+///
+/// The double click maximizes the window, and restores the size and the position it had before when
+/// it is maximized (the system remembers them).
+///
 /// Example::
 ///
 ///     pyegui.horizontal(lambda: (pyegui.window_controls(), pyegui.window_drag_area(title="My app")))
@@ -177,7 +183,14 @@ fn window_controls(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<bool> {
 fn window_drag_area(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
     let title = kwarg::<String>(kwargs, "title")?;
     let ui = unsafe { current_ui(&UI)? };
-    let height = kwarg::<f32>(kwargs, "height")?.unwrap_or_else(|| ui.spacing().interact_size.y);
+    let fill = kwarg::<bool>(kwargs, "fill_height")?.unwrap_or(false);
+    let height = kwarg::<f32>(kwargs, "height")?.unwrap_or_else(|| {
+        if fill {
+            ui.available_height()
+        } else {
+            ui.spacing().interact_size.y
+        }
+    });
     let width = kwarg::<f32>(kwargs, "width")?.unwrap_or_else(|| ui.available_width());
     let size = egui::vec2(width.max(8.0), height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
