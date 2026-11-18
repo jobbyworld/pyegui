@@ -38,6 +38,7 @@ from pyegui import (
     Backdrop,
     Bool,
     Dock,
+    Viewport,
     DockContainer,
     DockPane,
     FileIconView,
@@ -2907,9 +2908,11 @@ def start_rename(path):
 
 
 def new_window():
-    """another window of the Finder, on the folder shown: a new process of this script (a folder given on
-    the command line wins over the one kept from the last run)"""
-    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), str(current())], start_new_session=True)
+    """another window of the Finder in the same process (the system groups them under one icon of the Dock),
+    on the folder shown"""
+    window = FinderWindow(current())
+    window.viewport.open()
+    finder_windows.append(window)
 
 
 def new_folder():
@@ -3984,43 +3987,149 @@ BOTTOM_PANES = {
 }
 ALL_PANES = {**PANES, **BOTTOM_PANES}
 central_ui = zone_pane("content", content, margin=8)
-dock = Dock(
-    DockContainer(
-        "horizontal",
-        [
-            DockContainer(
-                "vertical",
-                [
-                    DockPane(CENTRAL, central_ui, hide_tab=True, central=True),  # no tab while the files are alone
-                    DockContainer(
-                        "tabs",
-                        [DockPane(title, ui, closable=True) for title, ui in BOTTOM_PANES.items()],
-                    ),
-                ],
-            ),
-            DockContainer(
-                "vertical",
-                [DockPane(title, ui, closable=True) for title, ui in PANES.items() if title not in WATCH_PANES + JOB_PANES],
-            ),
-        ],
-    ),
-    id="inspector",
-    tab_menu=tab_menu,
-    tab_bar_height=26,
-    pane_margin=8,
-    gap_width=GAP,  # a gap between the panes, as wide as between the other boxes
-    pane_stroke=EDGE,
-    active_tab_stroke=EDGE,
-    inactive_tab_stroke=EDGE,
-    resize_stroke=(
-        1,
-        (0, 0, 0, 0),
-    ),  # the gap stays empty: no grey band, the panes still resize
-)
+
+def make_dock():
+    """the dock of a window: its panes, in the first layout"""
+    new = Dock(
+        DockContainer(
+            "horizontal",
+            [
+                DockContainer(
+                    "vertical",
+                    [
+                        DockPane(CENTRAL, central_ui, hide_tab=True, central=True),  # no tab while the files are alone
+                        DockContainer(
+                            "tabs",
+                            [DockPane(title, ui, closable=True) for title, ui in BOTTOM_PANES.items()],
+                        ),
+                    ],
+                ),
+                DockContainer(
+                    "vertical",
+                    [DockPane(title, ui, closable=True) for title, ui in PANES.items() if title not in WATCH_PANES + JOB_PANES],
+                ),
+            ],
+        ),
+        id="inspector",
+        tab_menu=tab_menu,
+        tab_bar_height=26,
+        pane_margin=8,
+        gap_width=GAP,  # a gap between the panes, as wide as between the other boxes
+        pane_stroke=EDGE,
+        active_tab_stroke=EDGE,
+        inactive_tab_stroke=EDGE,
+        resize_stroke=(
+            1,
+            (0, 0, 0, 0),
+        ),  # the gap stays empty: no grey band, the panes still resize
+    )
+    if default_layout:
+        new.load(default_layout)
+    return new
+
+
+default_layout = None
+dock = make_dock()
 default_layout = dock.save()
 default_layout["shares"] = [4.0, 1.0]  # the files take most of the width
 default_layout["children"][0]["shares"] = [3.0, 1.0]  # and most of the height, over the terminals
 dock.load(default_layout)
+
+
+# several windows. The state of a window is a set of variables of this module (PER_WINDOW): the window
+# being drawn has its own in the module, the others wait in a dict. The windows of pyegui (Viewport) are
+# drawn one after the other, so a secondary window puts its variables in the module for the time of its
+# frame and gives the ones of the main window back. What the windows share: the tags, the theme, the look,
+# the clipboard, the watcher of the disk and its activity.
+PER_WINDOW = [
+    "tag_filter", "tag_manager_open", "tag_picker_open", "tag_edit", "tag_name", "tag_color", "tag_parent",
+    "tags_query", "tag_query", "tag_index", "tag_picker_state",
+    "find_name", "find_ext", "find_scope", "find_folders", "find_pages_min", "find_pages_max", "find_protect",
+    "find_pdf_text", "find_auto", "find_state", "note_text", "note_of",
+    "history", "position", "selected", "picked", "anchor", "scroll_target", "view", "search", "show_sidebar",
+    "bg_open", "path_editing", "path_text", "path_edit", "focus_zone", "show_dock", "folded", "renaming",
+    "new_name", "palette_open", "palette_query", "palette_index", "palette_pointer", "focus_outline",
+    "reading", "reading_cache", "zoom_pick", "image_state", "pdf_reader", "pdf_query", "pdf_searched",
+    "pdf_password", "pdf_dark", "pdf_continuous", "pdf_grid", "pdf_tool", "pdf_thumb_size", "pdf_preview",
+    "tree", "files_list", "files_icons", "tree_menu", "shell", "python", "follow_folder", "shell_folder",
+    "tag_tree", "item_tags", "item_tags_of", "pane_requests", "layout_requests", "transfer", "dock",
+]
+
+
+def make_window(folder):
+    """the state of a new window, on a folder: the same definitions as the first one, above"""
+    state = {
+        "tag_filter": Int(0), "tag_manager_open": Bool(False), "tag_picker_open": Bool(False),
+        "tag_edit": {"id": 0, "loaded": 0}, "tag_name": Str(""), "tag_color": RGB(0.0, 0.0, 0.0),
+        "tag_parent": Int(0), "tags_query": Str(""), "tag_query": Str(""), "tag_index": Int(0),
+        "tag_picker_state": {"query": "", "pointer": None, "just_opened": False},
+        "find_name": Str(""), "find_ext": Str(""), "find_scope": Int(0), "find_folders": Bool(True),
+        "find_pages_min": Str(""), "find_pages_max": Str(""), "find_protect": Int(0), "find_pdf_text": Str(""),
+        "find_auto": Bool(True),
+        "find_state": {
+            "applied": None, "typed": None, "changed_at": 0.0, "rows": [], "more": False,
+            "index": None, "pin": None, "job": 0, "running": False,
+        },
+        "note_text": Str(""), "note_of": {"path": ""},
+        "history": [folder], "position": Int(0), "selected": Str(""), "picked": set(), "anchor": Str(""),
+        "scroll_target": Str(""), "view": Int(view.value), "search": Str(""),
+        "show_sidebar": Bool(show_sidebar.value), "bg_open": Bool(False),
+        "path_editing": Bool(False), "path_text": Str(""), "path_edit": {"focus": False, "error": False},
+        "focus_zone": Str("content"), "show_dock": Bool(show_dock.value),
+        "folded": {"Outils", "Ouvrir", "Système", "Édition"}, "renaming": Str(""), "new_name": Str(""),
+        "palette_open": Bool(False), "palette_query": Str(""), "palette_index": Int(0),
+        "palette_pointer": {"pos": None}, "focus_outline": {"zone": None, "since": 0.0},
+        "reading": Str(""), "reading_cache": {"path": None, "text": ""}, "zoom_pick": Int(-1),
+        "image_state": ImageView(), "pdf_reader": {"path": None, "doc": None, "view": None},
+        "pdf_query": Str(""), "pdf_searched": [""], "pdf_password": Str(""), "pdf_dark": Bool(False),
+        "pdf_continuous": Bool(True), "pdf_grid": Bool(False), "pdf_tool": Int(0), "pdf_thumb_size": Int(150),
+        "pdf_preview": {"key": None, "doc": None},
+        "tree": FileTreeView("tree", folder, watcher=watcher, activatable_dirs=True),
+        "files_list": FileListView("list", folder, watcher=watcher, navigate=False),
+        "files_icons": FileIconView("icons", folder, watcher=watcher, navigate=False),
+        "tree_menu": {"paths": None},
+        "shell": Terminal(cwd=str(folder), font=nerd_font(), light=TERMINAL_LIGHT, dark=TERMINAL_DARK),
+        "python": Terminal(
+            cwd=str(folder), shell=newest_python(), args=["-q"], font=nerd_font(),
+            light=TERMINAL_LIGHT, dark=TERMINAL_DARK,
+        ),
+        "follow_folder": Bool(True), "shell_folder": {"path": folder},
+        "tag_tree": TagTreeView(), "item_tags": Tags(), "item_tags_of": {"path": None, "version": -1},
+        "pane_requests": [], "layout_requests": [], "transfer": FileTransfer(), "dock": make_dock(),
+    }
+    state["files_icons"].icon_size = files_icons.icon_size
+    return state
+
+
+def window_variables():
+    return {name: globals()[name] for name in PER_WINDOW}
+
+
+class FinderWindow:
+    """a secondary window of the Finder: a Viewport of pyegui with the state of its own"""
+
+    def __init__(self, folder):
+        self.state = make_window(folder)
+        self.viewport = Viewport(
+            "Finder",
+            self.draw,
+            inner_width=1180,
+            inner_height=720,
+            fullsize_content=MACOS or CUSTOM_TITLEBAR,
+            decorations=not CUSTOM_TITLEBAR,
+        )
+
+    def draw(self, ctx):
+        main = window_variables()
+        globals().update(self.state)
+        try:
+            window_frame(ctx)
+        finally:
+            self.state = window_variables()
+            globals().update(main)
+
+
+finder_windows = []
 
 
 def update_func(ctx):
@@ -4031,15 +4140,21 @@ def update_func(ctx):
             bg_edit.value = theme.value
         apply_style()
         started.value = True
+    finder_windows[:] = [w for w in finder_windows if w.viewport.is_open]  # the ones the user closed
+    collect_activity()
+    apply_background()
+    window_frame(ctx)
+    ctx.save_state(snapshot())  # written to disk by pyegui, see persist_id below
 
+
+def window_frame(ctx):
+    """one frame of a window, the main one or another: the keys, the layout and the windows over it"""
     keyboard()
     action_keys()
     receive_drops()
     open_requested_panes()  # before the dock is drawn
-    collect_activity()
     follow_in_shell()
     layout()
-    apply_background()
     window("Apparence", background_window, open=bg_open, default_width=300, resizable=False)
     if renaming.value:
         rename_dialog()
@@ -4049,7 +4164,6 @@ def update_func(ctx):
         tag_picker()
     if tag_manager_open.value:
         tag_manager()
-    ctx.save_state(snapshot())  # written to disk by pyegui, see persist_id below
 
 
 def layout():

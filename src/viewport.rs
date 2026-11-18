@@ -36,6 +36,9 @@ static SERIAL: Mutex<u64> = Mutex::new(0);
 ///
 ///     fullsize_content (bool): the content goes under the title bar of macOS. Default is False
 ///
+///     decorations (bool): False removes the title bar and the borders of the system (draw them with
+///         window_controls and window_drag_area). Default is True
+///
 /// Methods:
 ///     open(): shows the window (it is created at the next frame)
 ///
@@ -66,6 +69,7 @@ pub(crate) struct Viewport {
     min_size: Option<[f32; 2]>,
     resizable: bool,
     fullsize: bool,
+    decorations: bool,
     open: bool,
 }
 
@@ -91,6 +95,7 @@ impl Viewport {
             },
             resizable: kwarg::<bool>(kwargs, "resizable")?.unwrap_or(true),
             fullsize: kwarg::<bool>(kwargs, "fullsize_content")?.unwrap_or(false),
+            decorations: kwarg::<bool>(kwargs, "decorations")?.unwrap_or(true),
             open: false,
         })
     }
@@ -144,7 +149,7 @@ pub(crate) unsafe fn show_all(ctx: &egui::Context) {
     Python::attach(|py| {
         let list: Vec<Py<Viewport>> = OPEN.lock().unwrap().iter().map(|w| w.clone_ref(py)).collect();
         for window in &list {
-            let (title, func, serial, size, min_size, resizable, fullsize) = {
+            let (title, func, serial, size, min_size, resizable, fullsize, decorations) = {
                 let this = window.bind(py).borrow();
                 if !this.open {
                     continue;
@@ -157,12 +162,14 @@ pub(crate) unsafe fn show_all(ctx: &egui::Context) {
                     this.min_size,
                     this.resizable,
                     this.fullsize,
+                    this.decorations,
                 )
             };
             let mut builder = ViewportBuilder::default()
                 .with_title(title)
                 .with_inner_size(size)
-                .with_resizable(resizable);
+                .with_resizable(resizable)
+                .with_decorations(decorations);
             if let Some(min) = min_size {
                 builder = builder.with_min_inner_size(min);
             }
@@ -174,6 +181,8 @@ pub(crate) unsafe fn show_all(ctx: &egui::Context) {
             }
             let id = ViewportId::from_hash_of(("pyegui_window", serial));
             let close = ctx.show_viewport_immediate(id, builder, |ui, _class| {
+                // no backdrop effect behind these windows: a plain background, the boxes lie over it
+                ui.painter().rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
                 draw_frame(py, ui, func.bind(py), Context(ui.ctx().clone()));
                 ui.ctx().input(|i| i.viewport().close_requested())
             });

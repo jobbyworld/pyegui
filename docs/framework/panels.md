@@ -101,6 +101,7 @@ close button) is hidden, `open()` shows it again. Closing the main window ends t
 - min_inner_width (float), min_inner_height (float): the smallest size of the window
 - `resizable` (bool): Default is True
 - `fullsize_content` (bool): the content goes under the title bar of macOS. Default is False
+- `decorations` (bool): False removes the title bar and the borders of the system (draw them with window_controls and window_drag_area). Default is True
 
 **Methods**
 
