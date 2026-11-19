@@ -2411,20 +2411,55 @@ unsafe fn group(update_fun: Bound<'_, PyAny>, kwargs: Option<&Bound<'_, PyDict>>
 ///       # a lot of elements
 ///     
 ///     scroll_area_vertical(update_func)
+///
+/// Args:
+///     update_func (Callable[[], None]): draws the contents
+///
+///     persist_id (str): a name under which the scroll offset is kept, whatever the ui the area is
+///         drawn in (the same view in a pane of a dock or alone keeps one position). Default is none:
+///         the offset belongs to the place of the area in the ui
 #[pyfunction]
-unsafe fn scroll_area_vertical(update_fun: Bound<'_, PyAny>) -> PyResult<()> {
+#[pyo3(signature = (update_fun, persist_id=None))]
+unsafe fn scroll_area_vertical(update_fun: Bound<'_, PyAny>, persist_id: Option<&str>) -> PyResult<()> {
     let ui = current_ui(&UI)?;
     // content wider than the area (long names, wide rows) must not paint over its neighbours
     let clip = ui.available_rect_before_wrap();
     ui.scope(|ui| {
         ui.shrink_clip_rect(clip);
         // fills the width, so the scroll bar is at the edge of the area and not of its contents
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, true])
-            .show(ui, |ui| run_nested_update_func(ui, update_fun))
-            .inner
+        let area = egui::ScrollArea::vertical().auto_shrink([false, true]);
+        show_scroll_area(ui, area, persist_id, update_fun)
     })
     .inner
+}
+
+/// Shows a scroll area. With a persist_id its offset is kept under that name, whatever the ui the
+/// area is in: the ids of egui depend on the parents of an area, so the same area drawn in another
+/// parent (a pane of a dock, a frame) would not find its offset.
+unsafe fn show_scroll_area(
+    ui: &mut egui::Ui,
+    mut area: egui::ScrollArea,
+    persist_id: Option<&str>,
+    update_fun: Bound<'_, PyAny>,
+) -> PyResult<()> {
+    let key = persist_id.map(|name| egui::Id::new(("pyegui-scroll-offset", name)));
+    // the offset is imposed only when the area is drawn in another parent than at the last frame,
+    // otherwise egui keeps it (and the wheel and the bar move it)
+    let parent = ui.id();
+    if let Some((was_in, offset)) = key.and_then(|key| ui.ctx().data(|d| d.get_temp::<(egui::Id, egui::Vec2)>(key))) {
+        if was_in != parent {
+            area = area.scroll_offset(offset);
+        }
+    }
+    let mut offset = egui::Vec2::ZERO;
+    let output = area.show_viewport(ui, |ui, viewport| {
+        offset = viewport.min.to_vec2(); // the part of the contents that is seen starts at the offset
+        run_nested_update_func(ui, update_fun)
+    });
+    if let Some(key) = key {
+        ui.ctx().data_mut(|d| d.insert_temp(key, (parent, offset)));
+    }
+    output.inner
 }
 
 
@@ -2433,13 +2468,21 @@ unsafe fn scroll_area_vertical(update_fun: Bound<'_, PyAny>) -> PyResult<()> {
 /// Example::
 ///
 ///     scroll_area_both(wide_and_tall_ui)
+///
+/// Args:
+///     update_func (Callable[[], None]): draws the contents
+///
+///     persist_id (str): a name under which the scroll offset is kept, see scroll_area_vertical.
+///         Default is none
 #[pyfunction]
-unsafe fn scroll_area_both(update_fun: Bound<'_, PyAny>) -> PyResult<()> {
+#[pyo3(signature = (update_fun, persist_id=None))]
+unsafe fn scroll_area_both(update_fun: Bound<'_, PyAny>, persist_id: Option<&str>) -> PyResult<()> {
     let ui = current_ui(&UI)?;
     let clip = ui.available_rect_before_wrap();
     ui.scope(|ui| {
         ui.shrink_clip_rect(clip);
-        egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| run_nested_update_func(ui, update_fun)).inner
+        let area = egui::ScrollArea::both().auto_shrink([false, false]);
+        show_scroll_area(ui, area, persist_id, update_fun)
     })
     .inner
 }

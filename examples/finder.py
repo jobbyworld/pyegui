@@ -2029,7 +2029,15 @@ def sidebar_top():
     """the top band of the sidebar, as high as the toolbar: the window buttons are over it (the ones of
     macOS, or the ones drawn by window_controls without a title bar of the system), the whole band moves
     the window and a double click maximizes it or restores its size and position"""
-    horizontal_centered(lambda: (window_controls(), window_drag_area(fill_height=True)))
+    def row():
+        if MACOS:
+            add_space(64)  # the window buttons of the system
+        window_controls()
+        add_space(8)
+        sidebar_button()
+        window_drag_area(fill_height=True)
+
+    horizontal_centered(row)
 
 
 def sidebar_bottom():
@@ -2154,9 +2162,21 @@ def menu_panes():
 def panes_menu():
     """the panes of the dock: a check box for each, to show it (on the right of the files, or under
     them for the terminals) or close it, and the button that goes back to the first layout"""
-    dock_menu(dock, menu_panes(), layout=default_layout, reset_text="Réinitialiser la disposition", show=show_pane)
+    toggle_value(show_dock, "Afficher / Masquer")
     separator()
-    toggle_value(show_dock, "Dock")
+    dock_menu(dock, menu_panes(), layout=default_layout, reset_text="Réinitialiser la disposition", show=show_pane)
+
+
+def sidebar_button():
+    """the toggle of the sidebar, just on the right of the window buttons"""
+    if image_button_clicked(
+        svg("sidebar"),
+        size=16,
+        tint=toggle_tint(show_sidebar.value),
+        selected=show_sidebar.value,
+        tooltip="Afficher / masquer la sidebar",
+    ):
+        show_sidebar.value = not show_sidebar.value
 
 
 layout_requests = []  # the layout of the dock is rebuilt at the start of the next frame
@@ -2189,6 +2209,9 @@ def toolbar():
         elif CUSTOM_TITLEBAR and not show_sidebar.value:
             window_controls()
             add_space(8)
+        if not show_sidebar.value:  # shown, the toggle is in the top band of the sidebar
+            sidebar_button()
+            add_space(6)
         if image_button_clicked(svg("chevron-left"), size=16, tint=tint):
             back()
         if image_button_clicked(svg("chevron-right"), size=16, tint=tint):
@@ -2237,7 +2260,16 @@ def toolbar():
 
             # in the unified layout the field is centered in the band like the other buttons
             horizontal_centered(search_field)
-        menu_image_button(svg("panes"), panes_menu, size=18, tint=tint)
+        # a click shows or hides the docks, a right click opens the menu of the panes
+        if image_button_clicked(
+            svg("panes"),
+            size=18,
+            tint=toggle_tint(show_dock.value),
+            selected=show_dock.value,
+            tooltip="Afficher / masquer les docks (clic droit : gérer)",
+            menu=panes_menu,
+        ):
+            show_dock.value = not show_dock.value
 
     bar(left=left, center=middle, right=right, center_align="left", height=available_height())
 
@@ -2700,7 +2732,8 @@ def content():
                     ("Last Opened", OPENED_COLUMN, opened_cell, {"type": "date", "value": opened_value}),
                 ],
                 context_menu=view_menu,
-            )
+            ),
+            persist_id="files-tree",  # the same position with the dock or without
         )
     elif view.value == LIST:
         file_list_view(
@@ -3865,12 +3898,6 @@ def path_bar():
         text = "Chemin introuvable"
     with_text = available_width() >= COUNT_MIN_ROW  # the count goes first when narrow
 
-    def left():
-        if image_button_clicked(
-            svg("sidebar"), size=16, tint=toggle_tint(show_sidebar.value), selected=show_sidebar.value
-        ):
-            show_sidebar.value = not show_sidebar.value
-
     def center():
         # the folders down to the selected item, the parents shortened when the room is missing;
         # available_width() is what is left between the two sides
@@ -3912,15 +3939,10 @@ def path_bar():
         if with_text:
             weak(text)
             add_space(4)
-        # light, dark or the theme of the system, between the count and the toggle of the docks
+        # light, dark or the theme of the system
         theme_control()
-        add_space(4)
-        if image_button_clicked(
-            svg("dock"), size=16, tint=toggle_tint(show_dock.value), selected=show_dock.value
-        ):
-            show_dock.value = not show_dock.value
 
-    bar(left=left, center=center, right=right, center_align="left", height=available_height())
+    bar(center=center, right=right, center_align="left", height=available_height())
 
 
 def in_zone(zone, ui):
@@ -3959,6 +3981,8 @@ def zone_stroke(zone, otherwise):
 # the dock fills the middle of the window: the files are one of its panes (that cannot be closed), the
 # others can be closed, moved by their tab and dropped on any side of the files or of each other
 CENTRAL = "Fichiers"
+DOCK_PANE_MARGIN = 8  # space between the outline of a pane and its contents, see pane_margin of the dock
+DOCK_ROUNDING = 9  # the corners of the outline of a pane of the dock, the files alone have the same
 
 
 def zone_pane(zone, ui, margin=0):
@@ -4016,7 +4040,7 @@ def make_dock():
         id="inspector",
         tab_menu=tab_menu,
         tab_bar_height=26,
-        pane_margin=8,
+        pane_margin=DOCK_PANE_MARGIN,
         gap_width=GAP,  # a gap between the panes, as wide as between the other boxes
         pane_stroke=EDGE,
         active_tab_stroke=EDGE,
@@ -4194,7 +4218,7 @@ def layout():
 
 def dock_or_files(**kwargs):
     """the panes of the dock, or the files alone when the dock is hidden"""
-    frame(lambda: dock_area(dock) if show_dock.value else frame(central_ui, stroke=EDGE, rounding=6), **kwargs)
+    frame(lambda: dock_area(dock) if show_dock.value else frame(central_ui, stroke=EDGE, rounding=DOCK_ROUNDING, inner_margin=DOCK_PANE_MARGIN - 1), **kwargs)  # minus the line of the outline
 
 
 if __name__ == "__main__":

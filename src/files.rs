@@ -1125,10 +1125,22 @@ fn draw_folder_in(
 
     let n = entries.len();
     let scroll_to = view.scroll_to.take();
-    let output = egui::ScrollArea::vertical()
-        .id_salt(id.with(view.folder()))
-        .auto_shrink([false, false])
+    // the offset is kept by view and folder, not by the place of the ui: the same view in a pane of a
+    // dock or alone shows the same position
+    let scroll_key = egui::Id::new(("pyegui-scroll-offset", &view.id)).with(view.folder());
+    let mut area = egui::ScrollArea::vertical().id_salt(id.with(view.folder())).auto_shrink([false, false]);
+    // imposed only when the view is drawn in another parent than at the last frame (the dock or
+    // not): otherwise egui keeps the offset, and the wheel and the bar move it
+    let parent = ui.id();
+    if let Some((was_in, offset)) = ctx.data(|d| d.get_temp::<(Id, f32)>(scroll_key)) {
+        if was_in != parent {
+            area = area.vertical_scroll_offset(offset);
+        }
+    }
+    let mut seen_offset = 0.0;
+    let output = area
         .show_viewport(ui, |ui, viewport| {
+            seen_offset = viewport.min.y;
             let origin = ui.max_rect().min;
             let width = ui.max_rect().width();
             let height = shape.content_height(n).max(viewport.height());
@@ -1239,6 +1251,7 @@ fn draw_folder_in(
 
             rubber_band(ui, view, &background, &shape, &entries, origin, width, seen, mods);
         });
+    ctx.data_mut(|d| d.insert_temp(scroll_key, (parent, seen_offset)));
     hscroll_bar(ui, id, &mut view.columns, &zones, output.inner_rect);
     menus
 }
@@ -2740,9 +2753,17 @@ unsafe fn file_tree_view(py: Python<'_>, view: &Bound<'_, FileTreeView>, kwargs:
     }
     let tree_top = ui.cursor().min;
     let selected_before = state.selected().clone(); // the press of a drag selects the row pressed alone
+    // the rows go under the pinned header: they are not drawn (nor hovered) where the header is
+    let full_clip = ui.clip_rect();
+    if let Some(slot) = &slot {
+        let shift = (full_clip.top() - slot.top()).max(0.0);
+        let below = (slot.bottom() + shift).clamp(full_clip.top(), full_clip.bottom());
+        ui.shrink_clip_rect(Rect::from_min_max(pos2(full_clip.left(), below), full_clip.max));
+    }
     let (tree_response, actions) = tree.show_state(ui, &mut state, |builder| {
         add_tree_nodes(builder, &nodes, &ctx, show_root, activatable_dirs, &hooks, &columns, layout.as_ref(), &date_format)
     });
+    ui.set_clip_rect(full_clip);
 
     // files from the Finder or from the window over the tree: the folder under the pointer takes them
     let mut drop_target = None;
