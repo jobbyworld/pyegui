@@ -88,7 +88,7 @@ an example. They are generated from the docstrings, see "Keeping the reference u
 |---|---|---|
 | Application and context | [app.md](docs/framework/app.md) | `run_native`, `Context` (clipboard, open_url), `Backdrop`, `pixels_per_point` |
 | Values | [values.md](docs/framework/values.md) | `Str`, `Int`, `Float`, `Bool`, `Date`, `RGB`, `RGBA`, `Response` |
-| Text | [text.md](docs/framework/text.md) | headings, labels, code, code_view (syntax highlighting), links, badges, markdown with mermaid |
+| Text | [text.md](docs/framework/text.md) | headings, labels, code, code_view (syntax highlighting), links, badges, markdown with mermaid, `markdown_to_pdf` (a markdown text to a PDF with the look of `markdown()`: themes, cover, table of contents, bookmarks, header and footer) |
 | Buttons and inputs | [inputs.md](docs/framework/inputs.md) | buttons, checkbox, radio, switch, sliders, text edits, color and date pickers, progress, `Tags`/`tags_edit` (tags with levels and colors), `TagTreeView`/`tag_tree_view` (their tree) |
 | Layout | [layout.md](docs/framework/layout.md) | horizontal/vertical, grid, columns, group, frame, sizes, scroll areas, enable/disable |
 | Panels and popups | [panels.md](docs/framework/panels.md) | `sidebar_panel`/`topbar_panel`/`bottombar_panel`, side/top/bottom panels, window, modal, menus, tooltips, context menu |
@@ -126,7 +126,7 @@ Index of all files: [docs/framework/README.md](docs/framework/README.md).
 | `table_columns.py`, `file_columns.py` | `table(view=TableView())` and the file views with an interactive header: sort, filter by type, move, resize and pin columns (right click on a title) |
 | `pdf_viewer.py` | a PDF viewer: thumbnails and bookmarks in the sidebar, the pages in the middle (`PdfView`), a toolbar (page, zoom, fit, rotation, dark, hand), a search with its matches marked, text selection, password, drop a file on the window |
 | `windows.py` | `Viewport`: a second and more windows of one process (one icon of the Dock), sharing the values of the app |
-| `markdown_viewer.py` | minimal app: a sidebar listing markdown files, a viewer in the middle and three docks on the right (outline, source, infos) |
+| `markdown_viewer.py` | minimal app: a sidebar listing markdown files, a viewer in the middle and four docks on the right (outline, source, infos, export to PDF with `markdown_to_pdf`) |
 
 `finder.py` is the reference for a real desktop layout. Its Actions pane works like the Actions
 dock of the PyQt app `pyfinder`: one registry (`ACTIONS`: category, label, icon, shortcut, enabled
@@ -145,6 +145,7 @@ predicate, run) read by both the panel and the keyboard, so an action is declare
 | `terminal.rs` | `Terminal` and `terminal`: the pseudo terminal and its grid (`alacritty_terminal`), drawn cell by cell, keys and mouse sent to the shell |
 | `gherkin.rs` | Gherkin (`.feature`) colors for `code_view`: blocks, steps, tags, comments, tables, doc strings, in English and French |
 | `markdown.rs` | markdown and mermaid |
+| `markdown_pdf.rs` | `markdown_to_pdf`: the markdown is drawn by egui with no window (same code as `markdown()`), cut into pages between two rows of text, and the shapes (glyphs shaped by `harfrust` like egui does, rectangles, images) are written with `craft-pdf` `write` (krilla); the cover, the table of contents and the header and footer are drawn by egui too; the headings are read with `pulldown-cmark` and found again in the shapes by their text |
 | `style.rs` | themes, accent, glass, `set_style` |
 | `watcher.rs` | `FileWatcher`: listings of folders cached and watched with `notify`, a change asks for a repaint |
 | `files.rs` | `FileListView`, `FileIconView`, `FileTreeView` and their draw functions |

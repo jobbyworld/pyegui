@@ -35,7 +35,7 @@ THEMES = [
     ("text", "Text, links and markdown",
      "Functions that show text. They are called every frame, in the order the text appears.",
      ["heading", "label", "small", "strong", "weak", "monospace", "code", "code_view", "colored_label",
-      "badge", "hyperlink", "hyperlink_to", "link_clicked", "label_response", "markdown"]),
+      "badge", "hyperlink", "hyperlink_to", "link_clicked", "label_response", "markdown", "markdown_to_pdf"]),
     ("inputs", "Buttons and input widgets",
      "Widgets the user acts on. Buttons and toggles return True during the frame they are "
      "clicked, the other widgets write into the holder they were given.",

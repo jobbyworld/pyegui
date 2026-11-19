@@ -244,3 +244,49 @@ flowchart LR
 ```
 ''')
 ```
+
+
+## `markdown_to_pdf(text, path=None, **kwargs)`
+
+Turns a markdown text into a PDF, drawn like `markdown()` is.
+
+The text is drawn by the same code as the viewer: headings, lists, tables, quotes, code blocks with their
+colors, links, images and mermaid diagrams. The pages are cut between two lines of text, and a heading
+is never alone at the bottom of a page. The text stays text (vector, selectable), the headings become
+the bookmarks of the file and the links become links of the PDF. No window is needed and no ui is
+involved: it can be called from a thread.
+
+**Args**
+
+- `text` (str): the markdown
+- `path` (str | None): the file to write. None: the bytes of the PDF are returned
+
+**Keyword args**
+
+- `theme` (str): "light" (the default), "dark" (dark pages) or "print" (black text, white paper)
+- `title` (str): title of the document, of its cover and of `{title}` in the header and the footer.
+- Default is the first heading of level 1
+- `author` (str): author written in the properties of the PDF
+- `cover` (dict | bool): a cover page: `dict(title=..., subtitle=..., author=..., date=...)`, every key is
+- optional. True is a cover with the title only
+- `toc` (bool | str | dict): a table of contents with the page of every heading, linked to the pages.
+- A str is its title, a dict is `dict(title="Contents", depth=3)`. Default is no table of contents
+- `bookmarks` (bool): the headings as the bookmarks of the PDF. Default is True
+- `header` (str | dict): text at the top of the pages, or `dict(left=..., center=..., right=...)`
+- `footer` (bool | str | dict): same as `header`. `{page}`, `{pages}` and `{title}` are replaced.
+- Default is "{page} / {pages}" in the center, False for none. No header and no footer on the cover
+- `page_size` (str | tuple): "A3", "A4" (the default), "A5", "Letter", "Legal" or (width, height) in mm
+- `margin` (float): margin of the pages in mm. Default is 20
+- `base_dir` (str): the folder that the relative paths of the images are read from
+
+**Returns**
+
+- bytes | None: the PDF when `path` is None
+
+**Example:**
+
+```python
+markdown_to_pdf(Path("README.md").read_text(encoding="utf-8"), "README.pdf",
+                theme="light", cover=dict(subtitle="Version 1.0", author="Joachim"),
+                toc=True, footer="{title}  -  {page} / {pages}", base_dir=".")
+```

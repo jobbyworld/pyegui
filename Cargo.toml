@@ -30,12 +30,15 @@ alacritty_terminal = "0.26"
 notify = "8.2"
 # PDF: reader, interpreter and raster of craft-libs (the reader of findcraft). `kurbo` is the geometry of the
 # `Device` trait of the interpreter, which reads the text of the pages.
-craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "a9949872bd91ecf6bcec4e86339e3f50ad007fb9", default-features = false, features = ["read", "raster"], optional = true }
+craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "a9949872bd91ecf6bcec4e86339e3f50ad007fb9", default-features = false, features = ["read", "raster", "write"], optional = true }
 kurbo = { version = "0.13", optional = true }
+ttf-parser = { version = "0.25", optional = true }
+pulldown-cmark = { version = "0.13", default-features = false, optional = true }
+harfrust = { version = "0.12", optional = true }  # the shaper of egui: the glyphs (ligatures, kerning) of the text written to a PDF
 
 [features]
 default = ["pdf"]
-pdf = ["dep:craft-pdf", "dep:kurbo"]
+pdf = ["dep:craft-pdf", "dep:kurbo", "dep:ttf-parser", "dep:pulldown-cmark", "dep:harfrust"]
 
 # craft-pdf README: consumers patch the hayro trees with the same rev.
 [patch.crates-io]
@@ -43,6 +46,8 @@ hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "a994987
 hayro-interpret = { git = "https://github.com/storytold/craft-libs", rev = "a9949872bd91ecf6bcec4e86339e3f50ad007fb9" }
 hayro = { git = "https://github.com/storytold/craft-libs", rev = "a9949872bd91ecf6bcec4e86339e3f50ad007fb9" }
 hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "a9949872bd91ecf6bcec4e86339e3f50ad007fb9" }
+# the writer of craft-pdf (`write`) draws with krilla, patched in the same repository
+krilla = { git = "https://github.com/storytold/craft-libs", rev = "a9949872bd91ecf6bcec4e86339e3f50ad007fb9" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
