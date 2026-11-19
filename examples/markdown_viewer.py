@@ -3,11 +3,15 @@
     python examples/markdown_viewer.py [folder]
 
 The sidebar lists the markdown files of a folder (docs/framework of this repository by default).
-The viewer shows the selected one; the docks on the right give its outline, its source and a few
-facts. The docks can be moved by their tab and closed; they are laid out again at the next run.
+The viewer shows the selected one; the docks on the right give its outline, its source, a few
+facts and an export to PDF (`markdown_to_pdf`: theme, cover, table of contents, page numbers). The docks
+can be moved by their tab and closed; they are laid out again at the next run.
 """
 
+import os
+import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -87,6 +91,69 @@ def infos():
     label("Modified " + time.strftime("%Y-%m-%d %H:%M", time.localtime(path.stat().st_mtime)))
 
 
+# the export to PDF: its options, and the thread that writes the file (the window never waits)
+
+THEMES = ["light", "dark", "print"]
+theme = Int(0)
+cover = Bool(True)
+subtitle = Str("")
+author = Str("")
+toc = Bool(True)
+numbers = Bool(True)
+export = {"state": "", "path": None}  # state: "", "running", "done" or the text of an error
+
+
+def start_export():
+    path = Path(current.value)
+    out = path.with_suffix(".pdf")
+    options = dict(theme=THEMES[theme.value], toc=toc.value, footer=numbers.value, base_dir=str(path.parent))
+    if author.value:
+        options["author"] = author.value
+    if cover.value:
+        options["cover"] = {k: v for k, v in dict(subtitle=subtitle.value, author=author.value).items() if v}
+    body = text()
+
+    def run():
+        try:
+            markdown_to_pdf(body, str(out), **options)
+            export.update(state="done", path=out)
+        except Exception as error:  # a bad option or a file that cannot be written
+            export.update(state=f"error: {error}")
+
+    export.update(state="running", path=None)
+    threading.Thread(target=run, daemon=True).start()
+
+
+def open_file(path):
+    if sys.platform == "win32":
+        os.startfile(path)
+    else:
+        subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(path)])
+
+
+def export_pane():
+    weak("The file is written next to the markdown file.")
+    combo_box(theme, [0, 1, 2], ["Light", "Dark", "Print"], "Theme")
+    checkbox(cover, "Cover page")
+    if cover.value:
+        text_edit_singleline(subtitle, hint_text="Subtitle")
+    text_edit_singleline(author, hint_text="Author")
+    checkbox(toc, "Table of contents")
+    checkbox(numbers, "Page numbers")
+    separator()
+    state = export["state"]
+    if state == "running":
+        horizontal(lambda: (spinner(), label("Writing the PDF...")))
+    elif button_clicked("Export to PDF") and current.value:
+        start_export()
+    if state == "done":
+        label(export["path"].name)
+        if button_clicked("Open"):
+            open_file(export["path"])
+    elif state.startswith("error"):
+        label(state)
+
+
 def scrolling(ui):
     return lambda: scroll_area_vertical(ui)
 
@@ -102,6 +169,7 @@ dock = Dock(
                     DockPane("Outline", scrolling(outline), closable=True),
                     DockPane("Source", scrolling(source), closable=True),
                     DockPane("Infos", scrolling(infos), closable=True),
+                    DockPane("Export PDF", scrolling(export_pane), closable=True),
                 ],
             ),
         ],

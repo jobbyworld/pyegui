@@ -91,6 +91,7 @@ from pyegui import (
     progress,
     left_panel,
     markdown,
+    markdown_to_pdf,
     menu_image_button,
     modal,
     path_breadcrumb,
@@ -3433,6 +3434,34 @@ def reload_app():
     os.execv(sys.executable, [sys.executable, *sys.argv])
 
 
+def markdown_target():
+    """the markdown file to export: the one selected, else the one open in the central view"""
+    if one_selected() and is_markdown(selected.value):
+        return Path(selected.value)
+    if reading.value and is_markdown(reading.value):
+        return Path(reading.value)
+    return None
+
+
+def export_markdown_pdf():
+    """writes the PDF of the markdown file next to it (a thread: the window never waits). The watcher of the
+    folder shows the new file; an existing file is never overwritten, the new one is named "... copy.pdf"
+    """
+    source = markdown_target()
+    if source is None:
+        return
+    out = unique(source.with_suffix(".pdf"))
+
+    def run():
+        try:
+            text = source.read_text(encoding="utf-8", errors="replace")
+            markdown_to_pdf(text, str(out), cover=True, toc=True, base_dir=str(source.parent))
+        except Exception as error:
+            print(f"markdown_to_pdf: {source}: {error}", file=sys.stderr)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 # category, label, icon, shortcut, enabled, run. "Cmd" is the command key on macOS and ctrl elsewhere
 ACTIONS = [
     ("Ouvrir", "Nouvelle fenêtre", "dock", "Cmd+N", lambda: True, new_window),
@@ -3524,6 +3553,14 @@ ACTIONS = [
         "Cmd+Backspace|Delete|Clear" if MACOS else "Delete",
         lambda: (MACOS or sys.platform == "win32") and has_selection(),
         trash,
+    ),
+    (
+        "Outils",
+        "Exporter en PDF",
+        "open",
+        None,
+        lambda: markdown_target() is not None,
+        export_markdown_pdf,
     ),
     (
         "Outils",

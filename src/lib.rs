@@ -24,6 +24,8 @@ mod dock;
 mod files;
 mod gherkin;
 mod markdown;
+#[cfg(feature = "pdf")]
+mod markdown_pdf;
 mod native_dnd;
 mod path;
 #[cfg(feature = "pdf")]
@@ -3107,6 +3109,8 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     dock::register(m)?;
     plot::register(m)?;
     markdown::register(m)?;
+    #[cfg(feature = "pdf")]
+    markdown_pdf::register(m)?;
     style::register(m)?;
     terminal::register(m)?;
     watcher::register(m)?;

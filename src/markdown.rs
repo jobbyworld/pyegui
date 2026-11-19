@@ -62,7 +62,7 @@ fn mermaid_image(ctx: &egui::Context, source: &str, theme: &str) -> Result<Strin
 }
 
 /// Replaces the ```mermaid code blocks with images of their diagrams
-fn replace_mermaid<'a>(ctx: &egui::Context, text: &'a str, theme: &str) -> Cow<'a, str> {
+pub(crate) fn replace_mermaid<'a>(ctx: &egui::Context, text: &'a str, theme: &str) -> Cow<'a, str> {
     if !text.contains("mermaid") {
         return Cow::Borrowed(text);
     }
