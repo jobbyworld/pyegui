@@ -375,12 +375,15 @@ fn extract_tint(tint: Option<&Bound<'_, PyAny>>) -> PyResult<Option<egui::Color3
 ///
 ///     tooltip (str): a text shown when the button is hovered, to keep the button small. Default is none
 ///
+///     menu (Callable[[], None]): draws a menu shown when the button is right-clicked. A left click
+///         still returns True. Default is none
+///
 /// Example::
 ///
 ///     if image_button_clicked("file://icons/list.svg", tooltip="List", selected=view == LIST):
 ///         view = LIST
 #[pyfunction]
-#[pyo3(signature = (source, text=None, size=16.0, tint=None, selected=false, frame=true, tooltip=None))]
+#[pyo3(signature = (source, text=None, size=16.0, tint=None, selected=false, frame=true, tooltip=None, menu=None))]
 unsafe fn image_button_clicked(
     source: &str,
     text: Option<&str>,
@@ -389,6 +392,7 @@ unsafe fn image_button_clicked(
     selected: bool,
     frame: bool,
     tooltip: Option<&str>,
+    menu: Option<Bound<'_, PyAny>>,
 ) -> PyResult<bool> {
     let ui = current_ui(&UI)?;
     let image = menu_image(source, size, extract_tint(tint)?);
@@ -403,6 +407,15 @@ unsafe fn image_button_clicked(
         Some(tip) => response.on_hover_text(tip),
         None => response,
     };
+    if let Some(menu_fun) = menu {
+        let mut result = Ok(());
+        egui::Popup::context_menu(&response)
+            .style(crate::style::menu_style())
+            .show(|ui| {
+                result = run_nested_update_func(ui, menu_fun);
+            });
+        result?;
+    }
     Ok(response.clicked())
 }
 

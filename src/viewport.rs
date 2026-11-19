@@ -19,7 +19,8 @@ static SERIAL: Mutex<u64> = Mutex::new(0);
 ///
 /// The windows share the process: the values (`Str`, `Int`...) and the state objects are those of the
 /// app, so two windows can show the same data, or each its own. A window closed by the user (its
-/// close button) is hidden, `open()` shows it again. Closing the main window ends the app.
+/// close button) is hidden, `open()` shows it again. Closing the main window hides it while other
+/// windows are open: the app ends with the last one.
 ///
 /// Args:
 ///     title (str): the title of the window
@@ -192,6 +193,11 @@ pub(crate) unsafe fn show_all(ctx: &egui::Context) {
         }
     });
     Python::attach(|py| OPEN.lock().unwrap().retain(|w| w.bind(py).borrow().open));
+}
+
+/// True while a window besides the main one is open.
+pub(crate) fn any_open() -> bool {
+    Python::attach(|py| OPEN.lock().unwrap().iter().any(|w| w.bind(py).borrow().open))
 }
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

@@ -418,7 +418,7 @@ if available_width() < 400:
 Height left for the next widgets, in points.
 
 
-## `scroll_area_vertical(update_fun)`
+## `scroll_area_vertical(update_fun, persist_id=None)`
 
 Create a vertical scroll area.
 
@@ -432,6 +432,11 @@ def update_func():
 
 scroll_area_vertical(update_func)
 ```
+
+**Args**
+
+- `update_func` (Callable[[], None]): draws the contents
+- `persist_id` (str): a name under which the scroll offset is kept, whatever the ui the area is drawn in (the same view in a pane of a dock or alone keeps one position). Default is none: the offset belongs to the place of the area in the ui
 
 
 ## `scroll_area_horizontal(update_fun)`
@@ -450,7 +455,7 @@ scroll_area_horizontal(update_func)
 ```
 
 
-## `scroll_area_both(update_fun)`
+## `scroll_area_both(update_fun, persist_id=None)`
 
 Create a scroll area that scrolls in both directions, with a bar for each.
 
@@ -459,6 +464,11 @@ Create a scroll area that scrolls in both directions, with a bar for each.
 ```python
 scroll_area_both(wide_and_tall_ui)
 ```
+
+**Args**
+
+- `update_func` (Callable[[], None]): draws the contents
+- `persist_id` (str): a name under which the scroll offset is kept, see scroll_area_vertical. Default is none
 
 
 ## `scroll_to_cursor(align=None)`

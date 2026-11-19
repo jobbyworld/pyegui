@@ -88,7 +88,8 @@ A window of the app besides the main one, with its own update function.
 
 The windows share the process: the values (`Str`, `Int`...) and the state objects are those of the
 app, so two windows can show the same data, or each its own. A window closed by the user (its
-close button) is hidden, `open()` shows it again. Closing the main window ends the app.
+close button) is hidden, `open()` shows it again. Closing the main window hides it while other
+windows are open: the app ends with the last one.
 
 **Args**
 
