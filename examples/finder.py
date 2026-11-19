@@ -2943,12 +2943,22 @@ def start_rename(path):
     renaming.value, new_name.value = str(path), path.name
 
 
-def new_window():
+def new_window(folder=None):
     """another window of the Finder in the same process (the system groups them under one icon of the Dock),
-    on the folder shown"""
-    window = FinderWindow(current())
+    on the folder given, or the folder shown"""
+    window = FinderWindow(folder or current())
     window.viewport.open()
     finder_windows.append(window)
+
+
+def selected_folders():
+    return [p for p in chosen() if p.is_dir()]
+
+
+def open_in_new_window():
+    """a window for each selected folder"""
+    for folder in selected_folders():
+        new_window(folder)
 
 
 def new_folder():
@@ -3427,6 +3437,7 @@ def reload_app():
 ACTIONS = [
     ("Ouvrir", "Nouvelle fenêtre", "dock", "Cmd+N", lambda: True, new_window),
     ("Ouvrir", "Ouvrir", "open", "Cmd+ArrowDown", has_selection, action_open),
+    ("Ouvrir", "Ouvrir dans une nouvelle fenêtre", "dock", "Cmd+Alt+ArrowDown", lambda: bool(selected_folders()), open_in_new_window),
     (
         "Ouvrir",
         "Afficher le dossier parent",

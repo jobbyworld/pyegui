@@ -1143,6 +1143,9 @@ struct PyeguiApp<'py> {
     update_func: Bound<'py, PyAny>,
     transparent: bool,
     persist: bool,
+    /// the main window was closed while other windows (Viewport) were open: it is hidden, and the app
+    /// ends with the last of them
+    main_hidden: bool,
 }
 
 impl eframe::App for PyeguiApp<'_> {
@@ -1193,10 +1196,23 @@ impl eframe::App for PyeguiApp<'_> {
             }
         }
 
+        // the close button of the main window: the other windows stay while there are some
+        if !self.main_hidden && ui.ctx().input(|i| i.viewport().close_requested()) && viewport::any_open() {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.main_hidden = true;
+        }
         unsafe {
             Python::attach(|py| draw_frame(py, ui, &self.update_func, ctx_r));
             cursor::end_frame();
             viewport::show_all(ui.ctx());
+        }
+        if self.main_hidden {
+            if viewport::any_open() {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(50)); // the hidden window gets no event
+            } else {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         }
     }
 }
@@ -1482,6 +1498,7 @@ unsafe fn run_native(
                 update_func: update_func,
                 transparent,
                 persist,
+                main_hidden: false,
             }))
         }),
     );
