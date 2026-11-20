@@ -293,7 +293,26 @@ indexing = {"running": False, "count": 0, "folder": "", "result": None}  # the f
 note_text = Str("")  # the text of the Notes pane, for the item it holds
 note_of = {"path": ""}  # the item the Notes pane holds
 
-start = Path(sys.argv[1]).expanduser().resolve() if len(sys.argv) > 1 else HOME
+def command_line_target():
+    """the path given on the command line (`finder.py <path>`, also what the Explorer menu passes): the folder to
+    show, and the file to select or read when a file was given. A path that does not exist is ignored"""
+    if len(sys.argv) < 2:
+        return HOME, None
+    raw = sys.argv[1].strip().rstrip('"')  # "C:\" in a quoted command line leaves a stray quote after the drive
+    if len(raw) == 2 and raw[1] == ":":
+        raw += "\\"
+    try:
+        path = Path(raw).expanduser().resolve()
+    except OSError:
+        return HOME, None
+    if path.is_dir():
+        return path, None
+    if path.is_file():
+        return path.parent, path
+    return HOME, None
+
+
+start, start_file = command_line_target()
 history = [start]
 position = Int(0)
 selected = Str("")  # the item the single-item commands act on: the last one clicked
@@ -332,6 +351,7 @@ focus_zone = Str(
 show_dock = Bool(True)  # the dock around the files: Actions, Preview, Notes and Tags
 folded = {"Outils", "Ouvrir", "Système", "Édition"}  # categories of the Actions panel folded shut
 renaming = Str("")  # path being renamed, or ""
+integration_note = Str("")  # the result of installing or removing the Explorer menu entries, shown in a dialog
 new_name = Str("")
 palette_open = Bool(False)  # the action palette: a searchable list of the actions below
 palette_query = Str("")
@@ -1013,8 +1033,15 @@ def restore(saved):
         # a pane that no longer exists is left out; a layout that no longer fits is ignored
         dock.load(layout)
     folder = Path(saved.get("folder", ""))
-    if len(sys.argv) < 2 and is_dir_within(folder):  # a folder given on the command line wins
+    if len(sys.argv) < 2 and is_dir_within(folder):  # a path given on the command line wins
         history[:] = [folder]
+    if start_file is not None and not opened_start["done"]:  # `finder.py <file>`: the file of the first window
+        opened_start["done"] = True
+        if is_markdown(start_file) or is_code(start_file) or is_image(start_file) or is_pdf(start_file):
+            open_reader(start_file)
+        else:
+            select_path(start_file)
+            scroll_target.value = str(start_file)
 
 
 def set_hidden(show):
@@ -3125,6 +3152,34 @@ def open_in_zed():
         )  # without selection: the current folder
 
 
+def typora_command():
+    """the command that opens files in Typora, or None when it is not installed"""
+    if app_installed("Typora"):
+        return ["open", "-a", "Typora"]
+    candidates = [shutil.which("typora")]
+    if sys.platform == "win32":
+        for base in ("LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"):
+            if os.environ.get(base):
+                candidates.append(Path(os.environ[base]) / "Programs" / "Typora" / "Typora.exe")
+                candidates.append(Path(os.environ[base]) / "Typora" / "Typora.exe")
+    return next(([str(found)] for found in candidates if found and Path(found).exists()), None)
+
+
+def typora_targets():
+    """what Typora opens: the markdown files and folders selected, else the markdown read in the central view,
+    else the current folder (Typora shows a folder as a tree of its files)"""
+    items = [p for p in chosen() if p.is_dir() or (p.is_file() and is_markdown(p))]
+    if not items and reading.value and is_markdown(reading.value):
+        items = [Path(reading.value)]
+    return items or [current()]
+
+
+def open_in_typora():
+    command = typora_command()
+    if command:
+        subprocess.Popen([*command, *map(str, typora_targets())])
+
+
 def open_in_claude(mode):
     """Claude Desktop opens the folder in Code or Cowork mode, and asks to confirm it"""
     context[0].open_url(
@@ -3429,6 +3484,162 @@ def pdf_rows(path):
     return [(name, str(value)) for name, value in rows if value not in (None, "")]
 
 
+opened_start = {"done": False}
+
+
+# "Open with Finder" in the context menu of the Windows Explorer. Per-user entries (HKCU, no administrator):
+# a file (`*`), a folder, the background of a folder and a drive. The command is the pythonw.exe of this
+# environment (no console) on this script; the script sets the AppUserModelID itself, like the shortcut.
+INTEGRATION_KEY = "FinderOpen"
+INTEGRATION_LABEL = "Ouvrir avec Finder"
+INTEGRATION_ENTRIES = [  # (key under Software\Classes, what the Explorer passes: %1 the item, %V the folder)
+    ("*", "%1"), ("Directory", "%1"), ("Directory\\Background", "%V"), ("Drive", "%1"),
+]
+
+
+def integration_command(argument):
+    python = Path(sys.executable)
+    pythonw = python.with_name("pythonw.exe")
+    return f'"{pythonw if pythonw.exists() else python}" "{Path(__file__).resolve()}" "{argument}"'
+
+
+SHELLEXT_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "shellext_windows.py"
+SHELLEXT_DLL = Path(os.environ.get("LOCALAPPDATA", "")) / "pyegui" / "shellext" / "pyegui_shellext.dll"
+
+
+def run_shellext(action, done):
+    """runs scripts/shellext_windows.py (the entry of the SHORT menu of Windows 11: a sparse package and a DLL) in a
+    thread, it can build the DLL; `done(error)` gets the last line of its output when it failed, else ""
+    """
+
+    def work():
+        command = [sys.executable, "-I", str(SHELLEXT_SCRIPT), action]
+        if action == "install":
+            command += ["--python", str(Path(sys.executable).with_name("pythonw.exe")), "--script", str(Path(__file__).resolve())]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            lines = (result.stdout + result.stderr).strip().splitlines()
+            done("" if result.returncode == 0 else (lines[-1] if lines else "error"))
+        except OSError as error:
+            done(str(error))
+        integration_cache["at"] = 0.0
+
+    threading.Thread(target=work, daemon=True).start()
+
+
+def integration_icon():
+    return str(Path(__file__).resolve().parent / "app_icon" / "finder.ico")
+
+
+integration_cache = {"at": 0.0, "state": "none"}
+
+
+def integration_state():
+    """"none", "current" (all the entries, pointing at this script) or "stale" (some missing or pointing elsewhere);
+    read from the registry at most once a second, the actions ask it at every frame"""
+    if sys.platform != "win32":
+        return "none"
+    if time.monotonic() - integration_cache["at"] < 1.0:
+        return integration_cache["state"]
+    integration_cache.update(at=time.monotonic(), state=read_integration_state())
+    return integration_cache["state"]
+
+
+def read_integration_state():
+    import winreg
+
+    found = good = 0
+    for base, argument in INTEGRATION_ENTRIES:
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"Software\\Classes\\{base}\\shell\\{INTEGRATION_KEY}\\command") as key:
+                found += 1
+                good += winreg.QueryValueEx(key, "")[0] == integration_command(argument)
+        except OSError:
+            pass
+    if not found:
+        return "stale" if SHELLEXT_DLL.exists() else "none"  # only the short menu is left: it can be removed
+    if good == len(INTEGRATION_ENTRIES) and SHELLEXT_SCRIPT.exists() and not SHELLEXT_DLL.exists():
+        return "stale"  # the short menu of Windows 11 is not installed yet
+    return "current" if good == len(INTEGRATION_ENTRIES) else "stale"
+
+
+def install_integrations():
+    """adds (or updates) the entries of the Explorer menu: the same result when run twice"""
+    if sys.platform != "win32":  # macOS: a Quick Action of Automator running `python3 finder.py "$@"` does the same
+        return
+    import winreg
+
+    try:
+        for base, argument in INTEGRATION_ENTRIES:
+            root = f"Software\\Classes\\{base}\\shell\\{INTEGRATION_KEY}"
+            with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, root, 0, winreg.KEY_WRITE) as key:
+                winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, INTEGRATION_LABEL)
+                winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, integration_icon())
+                winreg.SetValueEx(key, "MultiSelectModel", 0, winreg.REG_SZ, "Single")  # one window, not one per item
+            with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, root + "\\command", 0, winreg.KEY_WRITE) as key:
+                winreg.SetValueEx(key, "", 0, winreg.REG_SZ, integration_command(argument))
+    except OSError as error:
+        integration_note.value = f"Installation impossible : {error}"
+        return
+    integration_cache["at"] = 0.0
+    base = (
+        f"« {INTEGRATION_LABEL} » est installé (clic droit sur un fichier, un dossier, le fond d'un dossier ou un disque), "
+        "dans « Afficher plus d'options » (Maj+F10) sous Windows 11."
+    )
+    if not SHELLEXT_SCRIPT.exists():
+        integration_note.value = base
+        return
+    integration_note.value = base + " Installation du menu court en cours…"
+    run_shellext("install", lambda error: setattr(integration_note, "value", base + (
+        f" Menu court impossible : {error}" if error else " Il est aussi dans le menu court (relancer l'Explorateur s'il n'apparaît pas).")))
+
+
+def remove_key(winreg, path):
+    """deletes a key and its sub keys; a missing key is not an error"""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_READ | winreg.KEY_WRITE) as key:
+            while True:
+                try:
+                    child = winreg.EnumKey(key, 0)
+                except OSError:
+                    break
+                remove_key(winreg, f"{path}\\{child}")
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
+    except FileNotFoundError:
+        pass
+
+
+def uninstall_integrations():
+    if sys.platform != "win32":
+        return
+    import winreg
+
+    try:
+        for base, _ in INTEGRATION_ENTRIES:
+            remove_key(winreg, f"Software\\Classes\\{base}\\shell\\{INTEGRATION_KEY}")
+    except OSError as error:
+        integration_note.value = f"Désinstallation impossible : {error}"
+        return
+    integration_cache["at"] = 0.0
+    base = f"« {INTEGRATION_LABEL} » est retiré du menu de l'Explorateur."
+    if not SHELLEXT_SCRIPT.exists():
+        integration_note.value = base
+        return
+    integration_note.value = base + " Retrait du menu court en cours…"
+    run_shellext("uninstall", lambda error: setattr(integration_note, "value", base + (f" Menu court : {error}" if error else "")))
+
+
+def integration_dialog():
+    def form():
+        set_width(360)
+        label(integration_note.value)
+        if button_clicked("OK") or key_pressed("Enter"):
+            integration_note.value = ""
+
+    if modal("integration", form, rounding=12, inner_margin=14, fill=dialog_fill()):
+        integration_note.value = ""
+
+
 def reload_app():
     """restarts the whole process in place, so edits made to this script take effect"""
     os.execv(sys.executable, [sys.executable, *sys.argv])
@@ -3478,6 +3689,11 @@ ACTIONS = [
     *(
         [("Ouvrir", "Ouvrir avec Zed", "zed", "Cmd+Shift+Z", lambda: True, open_in_zed)]
         if zed_command()
+        else []
+    ),
+    *(
+        [("Ouvrir", "Ouvrir avec Typora", "note", None, lambda: True, open_in_typora)]
+        if typora_command()
         else []
     ),
     *(
@@ -3732,6 +3948,20 @@ ACTIONS = [
             "Python",
         )  # ALL_PANES is defined further down
     ],
+    *(
+        [
+            (
+                "Système", "Installer les intégrations", "open", None,
+                lambda: integration_state() != "current", install_integrations,
+            ),
+            (
+                "Système", "Désinstaller les intégrations", "close", None,
+                lambda: integration_state() != "none", uninstall_integrations,
+            ),
+        ]
+        if sys.platform == "win32"
+        else []
+    ),
     (
         "Système",
         "Recharger l'application",
@@ -4123,7 +4353,7 @@ PER_WINDOW = [
     "find_pdf_text", "find_auto", "find_state", "note_text", "note_of",
     "history", "position", "selected", "picked", "anchor", "scroll_target", "view", "search", "show_sidebar",
     "bg_open", "path_editing", "path_text", "path_edit", "focus_zone", "show_dock", "folded", "renaming",
-    "new_name", "palette_open", "palette_query", "palette_index", "palette_pointer", "focus_outline",
+    "integration_note", "new_name", "palette_open", "palette_query", "palette_index", "palette_pointer", "focus_outline",
     "reading", "reading_cache", "zoom_pick", "image_state", "pdf_reader", "pdf_query", "pdf_searched",
     "pdf_password", "pdf_dark", "pdf_continuous", "pdf_grid", "pdf_tool", "pdf_thumb_size", "pdf_preview",
     "tree", "files_list", "files_icons", "tree_menu", "shell", "python", "follow_folder", "shell_folder",
@@ -4151,7 +4381,7 @@ def make_window(folder):
         "show_sidebar": Bool(show_sidebar.value), "bg_open": Bool(False),
         "path_editing": Bool(False), "path_text": Str(""), "path_edit": {"focus": False, "error": False},
         "focus_zone": Str("content"), "show_dock": Bool(show_dock.value),
-        "folded": {"Outils", "Ouvrir", "Système", "Édition"}, "renaming": Str(""), "new_name": Str(""),
+        "folded": {"Outils", "Ouvrir", "Système", "Édition"}, "renaming": Str(""), "integration_note": Str(""), "new_name": Str(""),
         "palette_open": Bool(False), "palette_query": Str(""), "palette_index": Int(0),
         "palette_pointer": {"pos": None}, "focus_outline": {"zone": None, "since": 0.0},
         "reading": Str(""), "reading_cache": {"path": None, "text": ""}, "zoom_pick": Int(-1),
@@ -4233,6 +4463,8 @@ def window_frame(ctx):
     window("Apparence", background_window, open=bg_open, default_width=300, resizable=False)
     if renaming.value:
         rename_dialog()
+    if integration_note.value:
+        integration_dialog()
     if palette_open.value:
         action_palette()
     if tag_picker_open.value:
