@@ -52,7 +52,7 @@ def sidebar():
 
 
 def viewer():
-    markdown(text(), scrollable=True, id="viewer")
+    markdown(text(), scrollable=True, id="viewer", max_width=800, table_width="reformat")
 
 
 def outline():

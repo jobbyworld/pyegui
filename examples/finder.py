@@ -2585,7 +2585,8 @@ def reader():
         # the colors of the language, from the extension (.ps1 is shown with those of the shell)
         code_view(reader_text(), Path(reading.value).suffix, id=f"reader {reading.value}")
         return
-    url = markdown(reader_text(), scrollable=True, id=f"reader {reading.value}", open_links=False)
+    url = markdown(reader_text(), scrollable=True, id=f"reader {reading.value}", open_links=False,
+                   table_width="reformat")
     if url:
         follow_link(url)
 
