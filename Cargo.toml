@@ -43,6 +43,12 @@ ttf-parser = { version = "0.25", optional = true }
 pulldown-cmark = { version = "0.13", default-features = false }
 harfrust = { version = "0.12", optional = true }  # the shaper of egui: the glyphs (ligatures, kerning) of the text written to a PDF
 
+# the profile of the executable of finder-rs (CI: cargo build --profile dist -p finder-rs)
+[profile.dist]
+inherits = "release"
+lto = "thin"
+strip = true
+
 [features]
 default = ["pdf"]
 pdf = ["pyegui-core/pdf", "dep:craft-pdf", "dep:kurbo", "dep:ttf-parser", "dep:harfrust"]

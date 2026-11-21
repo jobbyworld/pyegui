@@ -76,10 +76,88 @@ jobs:
           name: wheels-macos-${{ matrix.target }}
           path: dist
 
+  # The pure Rust Finder (finder-rs): one executable per platform, nothing to install.
+  finder-windows:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: x64
+          - runner: windows-11-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --profile dist -p finder-rs
+      - name: Zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path target/dist/finder.exe -DestinationPath dist/Finder-windows-${{ matrix.arch }}.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: finder-windows-${{ matrix.arch }}
+          path: dist
+
+  finder-macos:
+    runs-on: macos-15
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            arch: x86_64
+          - target: aarch64-apple-darwin
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --profile dist -p finder-rs --target ${{ matrix.target }}
+      - name: App and dmg
+        run: |
+          python3 scripts/bundle_finder_macos.py --binary target/${{ matrix.target }}/dist/finder --out dist
+          mv dist/Finder.dmg dist/Finder-macos-${{ matrix.arch }}.dmg
+          rm -rf dist/Finder.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: finder-macos-${{ matrix.arch }}
+          path: dist
+
+  finder-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --profile dist -p finder-rs
+      - name: Pack
+        run: |
+          mkdir -p dist
+          tar -czf dist/Finder-linux-x86_64.tar.gz -C target/dist finder
+      - uses: actions/upload-artifact@v4
+        with:
+          name: finder-linux-x86_64
+          path: dist
+
   release:
     name: GitHub Release
     if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
-    needs: [windows, macos]
+    needs: [windows, macos, finder-windows, finder-macos, finder-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -92,7 +170,7 @@ jobs:
           ref: ${{ inputs.tag }}
       - uses: actions/download-artifact@v4
         with:
-          pattern: wheels-*
+          pattern: "{wheels-*,finder-*}"
           merge-multiple: true
           path: dist
       - name: Release notes from CHANGELOG.md
@@ -102,7 +180,7 @@ jobs:
       - name: Create or update the release
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.whl --clobber
+            gh release upload "$TAG" dist/*.whl dist/Finder-* --clobber
           else
-            gh release create "$TAG" dist/*.whl --verify-tag --title "pyegui ${TAG#v}" --notes-file notes.md
+            gh release create "$TAG" dist/*.whl dist/Finder-* --verify-tag --title "pyegui ${TAG#v}" --notes-file notes.md
           fi

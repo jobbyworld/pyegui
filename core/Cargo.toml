@@ -6,6 +6,10 @@ version = "0.7.0"
 edition = "2021"
 description = "pyegui without Python: the logic shared by the Python extension and the Rust applications"
 
+# the docstrings keep the Python examples of the API: they are not Rust doctests
+[lib]
+doctest = false
+
 [dependencies]
 egui = "0.37.0"
 notify = "8.2"
