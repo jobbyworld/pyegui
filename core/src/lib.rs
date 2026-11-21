@@ -10,3 +10,5 @@ pub mod pdf_nav;
 pub mod pdf_text;
 pub mod watcher;
 pub mod transfer;
+pub mod style;
+pub mod icons;

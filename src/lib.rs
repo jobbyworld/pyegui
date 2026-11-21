@@ -265,7 +265,7 @@ impl Context {
     ///         ctx.set_style(rounding=12, button_fill="#3b82f6", text_color=(240, 240, 240), body_size=15)
     #[pyo3(signature = (**kwargs))]
     fn set_style(&self, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
-        let options = style::StyleOptions::from_kwargs(kwargs)?;
+        let options = style::style_options_from_kwargs(kwargs)?;
 
         match options.theme {
             Some(theme) => self.0.style_mut_of(theme, |s| options.apply(s)),
