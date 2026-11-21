@@ -1,10 +1,10 @@
 //! Gherkin (`.feature`) colors for `code_view`: the keywords of the blocks, the steps, the tags, the
 //! comments, the doc strings, the tables and the parameters of an outline, in English and French.
 
-use eframe::egui;
+use egui;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub(crate) enum Gherkin {
+pub enum Gherkin {
     Plain,
     Keyword,
     Step,
@@ -99,7 +99,7 @@ fn inline(s: &str) -> Vec<(usize, usize, Gherkin)> {
 
 /// One line of Gherkin cut in (start, end, kind) pieces that cover it. `doc` is the delimiter of the
 /// doc string the line is in (three double quotes or three backticks), kept from a line to the next
-pub(crate) fn line_pieces(line: &str, doc: &mut Option<&'static str>) -> Vec<(usize, usize, Gherkin)> {
+pub fn line_pieces(line: &str, doc: &mut Option<&'static str>) -> Vec<(usize, usize, Gherkin)> {
     let indent = line.len() - line.trim_start().len();
     let body = &line[indent..];
     let mut out = Vec::new();
@@ -162,7 +162,7 @@ pub(crate) fn line_pieces(line: &str, doc: &mut Option<&'static str>) -> Vec<(us
 }
 
 /// Colors a Gherkin source
-pub(crate) fn job(ui: &egui::Ui, text: &str) -> egui::text::LayoutJob {
+pub fn job(ui: &egui::Ui, text: &str) -> egui::text::LayoutJob {
     use egui::{text::LayoutJob, Color32, TextFormat};
     let dark = ui.visuals().dark_mode;
     let pick = |d: (u8, u8, u8), l: (u8, u8, u8)| {

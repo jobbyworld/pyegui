@@ -21,8 +21,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::pdf::{info_dict, open_with_info, Info};
-use crate::pdf_nav::{links as page_links, outline, page_ids, Bookmark, Target};
-use crate::pdf_text::{extract_page, fold, PageText};
+use pyegui_core::pdf_nav::{links as page_links, outline, page_ids, Bookmark, Target};
+use pyegui_core::pdf_text::{extract_page, fold, PageText};
 use crate::style::kwarg_color;
 use crate::{current_ui, kwarg, UI};
 
@@ -1472,7 +1472,7 @@ unsafe fn pdf_view(py: Python<'_>, view: &mut PdfView, kwargs: Option<&Bound<'_,
     let dark = view.dark;
     let search = view.search.clone();
     let mut out_sel = sel;
-    let mut out_link: Option<crate::pdf_nav::Target> = None;
+    let mut out_link: Option<pyegui_core::pdf_nav::Target> = None;
     let mut edge = 0.0f32;
 
     // the hand: the pages follow the pointer, and the point that was grabbed stays under it from the press
@@ -1676,8 +1676,8 @@ unsafe fn pdf_view(py: Python<'_>, view: &mut PdfView, kwargs: Option<&Bound<'_,
         ctx.request_repaint();
     }
     match out_link {
-        Some(crate::pdf_nav::Target::Page { page, y }) => view.goto = Some((page, y.unwrap_or(0.0))),
-        Some(crate::pdf_nav::Target::Uri(uri)) => ctx.open_url(egui::OpenUrl::new_tab(uri)),
+        Some(pyegui_core::pdf_nav::Target::Page { page, y }) => view.goto = Some((page, y.unwrap_or(0.0))),
+        Some(pyegui_core::pdf_nav::Target::Uri(uri)) => ctx.open_url(egui::OpenUrl::new_tab(uri)),
         None => {}
     }
 

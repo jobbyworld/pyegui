@@ -3871,6 +3871,7 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
  "pulldown-cmark",
+ "pyegui-core",
  "pyo3",
  "pyo3-log",
  "raw-window-handle",
@@ -3881,6 +3882,17 @@ dependencies = [
  "windows",
  "windows-core",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "pyegui-core"
+version = "0.7.0"
+dependencies = [
+ "chrono",
+ "craft-pdf",
+ "egui",
+ "kurbo 0.13.1",
+ "notify",
 ]
 
 [[package]]

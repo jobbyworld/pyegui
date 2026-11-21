@@ -1,0 +1,18 @@
+# The part of pyegui that does not depend on Python: file watcher, PDF readers, text colors...
+# Used by the Python extension (`pyegui`) and by the pure Rust Finder (`finder-rs`).
+[package]
+name = "pyegui-core"
+version = "0.7.0"
+edition = "2021"
+description = "pyegui without Python: the logic shared by the Python extension and the Rust applications"
+
+[dependencies]
+egui = "0.37.0"
+notify = "8.2"
+chrono = "0.4.45"
+craft-pdf = { workspace = true, optional = true }
+kurbo = { version = "0.13", optional = true }
+
+[features]
+default = ["pdf"]
+pdf = ["dep:craft-pdf", "dep:kurbo"]

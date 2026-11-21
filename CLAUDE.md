@@ -132,6 +132,15 @@ Index of all files: [docs/framework/README.md](docs/framework/README.md).
 dock of the PyQt app `pyfinder`: one registry (`ACTIONS`: category, label, icon, shortcut, enabled
 predicate, run) read by both the panel and the keyboard, so an action is declared once.
 
+## Workspace and `core/`
+
+The repository is a Cargo workspace: the extension `pyegui` (root, built by maturin) and `pyegui-core`
+(`core/`), the part that does not depend on Python, shared with the Rust applications (`finder-rs`, in
+progress). Already in the core: `watcher` (`Core`), `transfer` (`Transfer`, `drop_operation_for`), `pdf`,
+`pdf_nav`, `pdf_text`, `gherkin`. A module of `src/` that moves to the core keeps only its `#[pyfunction]`
+and `#[pyclass]` wrappers (see `src/watcher.rs`, `src/transfer.rs`, `src/pdf.rs`); `cargo test -p pyegui-core`
+runs the tests of the core.
+
 ## Source map (`src/`)
 
 | File | Content |

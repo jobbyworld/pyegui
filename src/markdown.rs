@@ -793,7 +793,7 @@ unsafe fn code_view(text: &str, language: &str, kwargs: Option<&Bound<'_, PyDict
     let mut job = if matches!(lang.as_str(), "rst" | "rest") {
         rst_job(ui, text)
     } else if matches!(lang.as_str(), "feature" | "gherkin") {
-        crate::gherkin::job(ui, text)
+        pyegui_core::gherkin::job(ui, text)
     } else {
         egui_extras::syntax_highlighting::highlight(ui.ctx(), &style, &theme, text, highlight_language(language))
     };

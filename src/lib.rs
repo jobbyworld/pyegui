@@ -22,7 +22,6 @@ mod icons;
 mod layout;
 mod dock;
 mod files;
-mod gherkin;
 mod markdown;
 #[cfg(feature = "pdf")]
 mod markdown_pdf;
@@ -30,10 +29,6 @@ mod native_dnd;
 mod path;
 #[cfg(feature = "pdf")]
 mod pdf;
-#[cfg(feature = "pdf")]
-mod pdf_nav;
-#[cfg(feature = "pdf")]
-mod pdf_text;
 #[cfg(feature = "pdf")]
 mod pdf_view;
 mod backdrop_image;
