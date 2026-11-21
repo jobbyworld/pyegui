@@ -14,3 +14,5 @@ pub mod style;
 pub mod icons;
 pub mod terminal;
 pub mod markdown;
+#[cfg(feature = "pdf")]
+pub mod pdf_view;
