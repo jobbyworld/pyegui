@@ -1,0 +1,23 @@
+# The Finder of examples/finder.py in pure Rust: one native executable, nothing to install.
+[package]
+name = "finder-rs"
+version = "0.1.0"
+edition = "2021"
+description = "A mini Finder in pure Rust, built on pyegui-core and egui"
+
+[[bin]]
+name = "finder"
+path = "src/main.rs"
+
+[dependencies]
+pyegui-core = { path = "../core", default-features = false }
+eframe = { version = "0.37.0", features = ["glow", "persistence"] }
+egui_extras = { version = "0.37.0", features = ["all_loaders"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "ico"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4.45"
+
+[features]
+default = ["pdf"]
+pdf = ["pyegui-core/pdf"]
