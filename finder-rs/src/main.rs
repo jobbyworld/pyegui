@@ -5,6 +5,7 @@ mod app;
 mod dock;
 mod model;
 mod terminals;
+mod viewer;
 mod views;
 
 use eframe::egui;

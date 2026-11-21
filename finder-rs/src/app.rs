@@ -15,6 +15,7 @@ use crate::actions::{self, ACTIONS};
 use crate::dock::{self, Pane};
 use crate::model::{self, History, SortKey};
 use crate::terminals::{self, Terminals};
+use crate::viewer::{self, Viewer};
 use crate::views;
 
 const STATE_KEY: &str = "finder-state";
@@ -117,6 +118,8 @@ pub struct FinderApp {
     /// what the system told about the disk, newest last
     pub activity: std::collections::VecDeque<String>,
     select_after: Vec<PathBuf>,
+    viewer: Option<Viewer>,
+    preview_pdf: Option<(PathBuf, pyegui_core::pdf_view::PdfDocument)>,
 }
 
 impl FinderApp {
@@ -169,6 +172,8 @@ impl FinderApp {
             dock: Some(dock::restore(saved.dock.as_deref())),
             activity: Default::default(),
             select_after: Vec::new(),
+            viewer: None,
+            preview_pdf: None,
         };
         app.apply_theme(&cc.egui_ctx);
         app
@@ -190,6 +195,7 @@ impl FinderApp {
     }
 
     fn after_navigation(&mut self) {
+        self.viewer = None;
         self.selected.clear();
         self.anchor = None;
         self.search.clear();
@@ -200,6 +206,8 @@ impl FinderApp {
     pub fn open(&mut self, path: &Path) {
         if path.is_dir() && !path.extension().is_some_and(|x| x == "app") {
             self.go(path.to_path_buf());
+        } else if let Some(viewer) = Viewer::open(path, &self.core) {
+            self.viewer = Some(viewer);
         } else {
             open_with_system(path);
         }
@@ -715,7 +723,30 @@ impl FinderApp {
                     ui.end_row();
                 });
                 ui.separator();
-                if model::is_image(&e.path) {
+                if e.path.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf")) {
+                    if self.preview_pdf.as_ref().map(|(p, _)| p) != Some(&e.path) {
+                        let doc = pyegui_core::pdf_view::PdfDocument::open(e.path.to_string_lossy().into_owned(), None, false);
+                        self.preview_pdf = Some((e.path.clone(), doc));
+                    }
+                    if let Some((_, doc)) = self.preview_pdf.as_mut() {
+                        let info = doc.info();
+                        egui::Grid::new("pdf-infos").num_columns(2).show(ui, |ui| {
+                            ui.weak("Pages");
+                            ui.label(info.pages.map(|p| p.to_string()).unwrap_or_default());
+                            ui.end_row();
+                            for (label, value) in [("Titre", &info.title), ("Auteur", &info.author)] {
+                                if let Some(v) = value {
+                                    ui.weak(label);
+                                    ui.label(v);
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                        ui.add_space(6.0);
+                        let options = pyegui_core::pdf_view::ThumbnailOptions { size: (ui.available_width() - 12.0).min(260.0), label: false, ..Default::default() };
+                        let _ = pyegui_core::pdf_view::pdf_thumbnail(ui, doc, 1, &options);
+                    }
+                } else if model::is_image(&e.path) {
                     let uri = format!("file://{}", e.path.to_string_lossy());
                     ui.add(egui::Image::new(uri).max_width(ui.available_width()).corner_radius(6.0));
                 } else if model::is_text(&e.path) && e.size < 512 * 1024 {
@@ -822,6 +853,12 @@ impl eframe::App for FinderApp {
         }
         let mut columns = 1;
         egui::CentralPanel::default().show_inside(ui, |ui| {
+            if let Some(mut viewer) = self.viewer.take() {
+                if !viewer::show(&mut viewer, ui, &self.core) {
+                    self.viewer = Some(viewer);
+                }
+                return;
+            }
             columns = match self.view {
                 ViewMode::List | ViewMode::Tree => {
                     views::list(self, ui);
