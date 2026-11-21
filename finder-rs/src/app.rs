@@ -7,14 +7,17 @@ use std::sync::{Arc, Mutex};
 use eframe::egui::{self, Color32, Key, Modifiers, RichText};
 use pyegui_core::icons;
 use pyegui_core::style;
+use pyegui_core::transfer::Transfer;
 use pyegui_core::watcher::{default_core, expand, lock, Core, Entry};
 use serde::{Deserialize, Serialize};
 
+use crate::actions::{self, ACTIONS};
+use crate::dock::{self, Pane};
 use crate::model::{self, History, SortKey};
 use crate::views;
 
 const STATE_KEY: &str = "finder-state";
-const ACCENTS: [(&str, Color32); 4] = [
+pub const ACCENTS: [(&str, Color32); 4] = [
     ("Bleu", Color32::from_rgb(59, 130, 246)),
     ("Violet", Color32::from_rgb(139, 92, 246)),
     ("Vert", Color32::from_rgb(34, 197, 94)),
@@ -25,6 +28,7 @@ const ACCENTS: [(&str, Color32); 4] = [
 pub enum ViewMode {
     List,
     Icons,
+    Tree,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,8 +49,10 @@ struct Saved {
     sort_key: SortKey,
     ascending: bool,
     show_sidebar: bool,
-    show_preview: bool,
+    show_dock: bool,
     show_hidden: bool,
+    dock: Option<String>,
+    open_folders: Vec<PathBuf>,
 }
 
 impl Default for Saved {
@@ -59,8 +65,10 @@ impl Default for Saved {
             sort_key: SortKey::Name,
             ascending: true,
             show_sidebar: true,
-            show_preview: true,
+            show_dock: true,
             show_hidden: false,
+            dock: None,
+            open_folders: Vec::new(),
         }
     }
 }
@@ -74,18 +82,33 @@ pub struct FinderApp {
     pub sort_key: SortKey,
     pub ascending: bool,
     show_sidebar: bool,
-    show_preview: bool,
+    show_dock: bool,
     pub show_hidden: bool,
     pub search: String,
     /// the items shown, sorted and filtered; made again when the folder, the sort, the filter or the disk change
     pub items: Vec<Entry>,
-    items_key: Option<(PathBuf, SortKey, bool, bool, String, u64)>,
+    items_key: Option<(PathBuf, SortKey, bool, bool, String, u64, bool, u64)>,
+    /// the depth of each item (0 except in the tree view)
+    pub depths: Vec<usize>,
+    pub open_folders: std::collections::BTreeSet<PathBuf>,
     pub selected: HashSet<PathBuf>,
     pub anchor: Option<usize>,
     /// asks the view to scroll to the item the keyboard just selected
     pub reveal: Option<usize>,
     path_text: Option<String>,
-    preview_text: Option<(PathBuf, String)>,
+    pub preview_text: Option<(PathBuf, String)>,
+    /// copied or cut paths (true: cut)
+    pub clipboard: Option<(Vec<PathBuf>, bool)>,
+    pub transfer: Transfer,
+    /// a move waits here for its files, to select them
+    pasted_cut: bool,
+    rename: Option<(PathBuf, String)>,
+    confirm_delete: Option<Vec<PathBuf>>,
+    pub notice: Option<String>,
+    dock: Option<egui_tiles::Tree<Pane>>,
+    /// what the system told about the disk, newest last
+    pub activity: std::collections::VecDeque<String>,
+    select_after: Vec<PathBuf>,
 }
 
 impl FinderApp {
@@ -112,19 +135,34 @@ impl FinderApp {
             sort_key: saved.sort_key,
             ascending: saved.ascending,
             show_sidebar: saved.show_sidebar,
-            show_preview: saved.show_preview,
+            show_dock: saved.show_dock,
             show_hidden: saved.show_hidden,
             search: String::new(),
             items: Vec::new(),
             items_key: None,
+            depths: Vec::new(),
+            open_folders: saved.open_folders.into_iter().collect(),
             selected: HashSet::new(),
             anchor: None,
             reveal: None,
             path_text: None,
             preview_text: None,
+            clipboard: None,
+            transfer: Transfer::new(),
+            pasted_cut: false,
+            rename: None,
+            confirm_delete: None,
+            notice: None,
+            dock: Some(dock::restore(saved.dock.as_deref())),
+            activity: Default::default(),
+            select_after: Vec::new(),
         };
         app.apply_theme(&cc.egui_ctx);
         app
+    }
+
+    pub fn dock_tree(&mut self) -> &mut Option<egui_tiles::Tree<Pane>> {
+        &mut self.dock
     }
 
     pub fn folder(&self) -> &Path {
@@ -154,7 +192,7 @@ impl FinderApp {
         }
     }
 
-    fn apply_theme(&self, ctx: &egui::Context) {
+    pub fn apply_theme(&self, ctx: &egui::Context) {
         ctx.set_theme(match self.theme {
             ThemeChoice::System => egui::ThemePreference::System,
             ThemeChoice::Light => egui::ThemePreference::Light,
@@ -168,26 +206,244 @@ impl FinderApp {
         }
     }
 
-    /// The folder listed, filtered and sorted. Kept until something changes
+    /// The folder listed, filtered and sorted (in the tree view, with the open folders below their
+    /// parent). Kept until something changes
     fn refresh_items(&mut self, ctx: &egui::Context) {
         let version = lock(&self.core).version();
-        let key = (self.folder().to_path_buf(), self.sort_key, self.ascending, self.show_hidden, self.search.clone(), version);
+        let tree = self.view == ViewMode::Tree;
+        let open_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            self.open_folders.hash(&mut h);
+            h.finish()
+        };
+        let key = (self.folder().to_path_buf(), self.sort_key, self.ascending, self.show_hidden, self.search.clone(), version, tree, open_hash);
         if self.items_key.as_ref() == Some(&key) {
             return;
         }
-        let listing = lock(&self.core).list(Some(ctx), self.folder());
-        let needle = self.search.to_lowercase();
-        let mut items: Vec<Entry> = listing
-            .iter()
-            .filter(|e| (self.show_hidden || !e.hidden) && (needle.is_empty() || e.name.to_lowercase().contains(&needle)))
-            .cloned()
-            .collect();
-        model::sort_entries(&mut items, self.sort_key, self.ascending);
+        let mut items = Vec::new();
+        let mut depths = Vec::new();
+        self.collect(ctx, &self.folder().to_path_buf(), 0, tree, &mut items, &mut depths);
         self.items = items;
+        self.depths = depths;
         // what disappeared from the disk is no longer selected
         let present: HashSet<&PathBuf> = self.items.iter().map(|e| &e.path).collect();
         self.selected.retain(|p| present.contains(p));
         self.items_key = Some(key);
+        if !self.select_after.is_empty() {
+            let wanted: HashSet<PathBuf> = std::mem::take(&mut self.select_after).into_iter().collect();
+            let found: Vec<usize> = self.items.iter().enumerate().filter(|(_, e)| wanted.contains(&e.path)).map(|(i, _)| i).collect();
+            if let Some(first) = found.first() {
+                self.selected = found.iter().map(|i| self.items[*i].path.clone()).collect();
+                self.anchor = Some(*first);
+                self.reveal = Some(*first);
+            }
+        }
+    }
+
+    fn collect(&self, ctx: &egui::Context, folder: &Path, depth: usize, tree: bool, items: &mut Vec<Entry>, depths: &mut Vec<usize>) {
+        let listing = lock(&self.core).list(Some(ctx), folder);
+        let needle = self.search.to_lowercase();
+        let mut level: Vec<Entry> = listing
+            .iter()
+            .filter(|e| (self.show_hidden || !e.hidden) && (needle.is_empty() || e.name.to_lowercase().contains(&needle) || (tree && e.is_dir)))
+            .cloned()
+            .collect();
+        model::sort_entries(&mut level, self.sort_key, self.ascending);
+        for e in level {
+            let open = tree && e.is_dir && self.open_folders.contains(&e.path);
+            let path = e.path.clone();
+            items.push(e);
+            depths.push(depth);
+            if open && depth < 24 {
+                self.collect(ctx, &path, depth + 1, tree, items, depths);
+            }
+        }
+    }
+
+    pub fn toggle_folder(&mut self, path: &Path) {
+        if !self.open_folders.remove(path) {
+            self.open_folders.insert(path.to_path_buf());
+        }
+    }
+
+    pub fn selected_paths(&self) -> Vec<PathBuf> {
+        self.items.iter().filter(|e| self.selected.contains(&e.path)).map(|e| e.path.clone()).collect()
+    }
+
+    pub fn select_all(&mut self) {
+        self.selected = self.items.iter().map(|e| e.path.clone()).collect();
+    }
+
+    pub fn back(&mut self) {
+        self.history.back();
+        self.after_navigation();
+    }
+
+    pub fn forward(&mut self) {
+        self.history.forward();
+        self.after_navigation();
+    }
+
+    pub fn parent(&mut self) {
+        if let Some(p) = self.folder().parent().map(Path::to_path_buf) {
+            self.go(p);
+        }
+    }
+
+    pub fn toggle_sidebar(&mut self) {
+        self.show_sidebar = !self.show_sidebar;
+    }
+
+    pub fn toggle_dock(&mut self) {
+        self.show_dock = !self.show_dock;
+    }
+
+    pub fn new_folder(&mut self) {
+        let path = actions::unique_folder(self.folder());
+        match std::fs::create_dir(&path) {
+            Ok(()) => {
+                self.select_after = vec![path.clone()];
+                self.start_rename(path);
+            }
+            Err(e) => self.notice = Some(format!("Impossible de créer le dossier: {e}")),
+        }
+    }
+
+    pub fn start_rename(&mut self, path: PathBuf) {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        self.rename = Some((path, name));
+    }
+
+    pub fn ask_delete(&mut self) {
+        let paths = self.selected_paths();
+        if paths.is_empty() {
+            return;
+        }
+        if cfg!(target_os = "macos") {
+            self.delete(paths);
+        } else {
+            self.confirm_delete = Some(paths);
+        }
+    }
+
+    fn delete(&mut self, paths: Vec<PathBuf>) {
+        for path in paths {
+            if let Err(e) = actions::trash(&path) {
+                self.notice = Some(format!("{}: {e}", path.display()));
+            }
+        }
+        self.selected.clear();
+    }
+
+    pub fn paste(&mut self) {
+        let Some((paths, cut)) = self.clipboard.clone() else { return };
+        let folder = self.folder().to_path_buf();
+        self.transfer.start(paths, folder, cut);
+        if cut {
+            self.pasted_cut = true;
+        }
+    }
+
+    /// The end of the transfers: the new items are selected, the failures shown
+    fn poll_transfer(&mut self) {
+        let done = self.transfer.finished();
+        if !done.is_empty() {
+            self.select_after = done.into_iter().filter(|(folder, _)| folder == self.folder()).map(|(_, target)| target).collect();
+            if self.pasted_cut && self.transfer.running() == 0 {
+                self.clipboard = None;
+                self.pasted_cut = false;
+            }
+            self.items_key = None;
+        }
+        if let Some(error) = self.transfer.errors().into_iter().next() {
+            self.notice = Some(error);
+        }
+    }
+
+    fn poll_activity(&mut self) {
+        for e in lock(&self.core).take_events() {
+            if e.kind.starts_with("Access") {
+                continue;
+            }
+            let names = e.paths.iter().map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).collect::<Vec<_>>().join(", ");
+            self.activity.push_back(format!("{}  {}  {}", chrono::Local::now().format("%H:%M:%S"), e.kind, names));
+            if self.activity.len() > 300 {
+                self.activity.pop_front();
+            }
+        }
+    }
+
+    fn modals(&mut self, ctx: &egui::Context) {
+        if let Some((path, mut name)) = self.rename.take() {
+            let mut keep = true;
+            let mut apply = false;
+            egui::Modal::new(egui::Id::new("rename")).show(ctx, |ui| {
+                ui.set_width(320.0);
+                ui.heading("Renommer");
+                let edit = ui.add(egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY));
+                if !edit.has_focus() && !edit.lost_focus() {
+                    edit.request_focus();
+                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Annuler").clicked() || ui.input(|i| i.key_pressed(Key::Escape)) {
+                        keep = false;
+                    }
+                    if ui.button("Renommer").clicked() || (edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))) {
+                        apply = true;
+                    }
+                });
+            });
+            if apply {
+                let target = path.with_file_name(name.trim());
+                if name.trim().is_empty() || name.contains(['/', '\\']) {
+                    self.notice = Some("Nom invalide".into());
+                } else if target != path {
+                    match std::fs::rename(&path, &target) {
+                        Ok(()) => self.select_after = vec![target],
+                        Err(e) => self.notice = Some(format!("Impossible de renommer: {e}")),
+                    }
+                }
+            } else if keep {
+                self.rename = Some((path, name));
+            }
+        }
+        if let Some(paths) = self.confirm_delete.take() {
+            let mut keep = true;
+            let mut yes = false;
+            egui::Modal::new(egui::Id::new("delete")).show(ctx, |ui| {
+                ui.set_width(340.0);
+                ui.heading("Supprimer définitivement ?");
+                ui.label(format!("{} élément(s) seront supprimés, sans corbeille.", paths.len()));
+                ui.horizontal(|ui| {
+                    if ui.button("Annuler").clicked() {
+                        keep = false;
+                    }
+                    if ui.button(RichText::new("Supprimer").color(Color32::from_rgb(220, 60, 60))).clicked() {
+                        yes = true;
+                    }
+                });
+            });
+            if yes {
+                self.delete(paths);
+            } else if keep {
+                self.confirm_delete = Some(paths);
+            }
+        }
+        if let Some(text) = self.notice.clone() {
+            let mut close = false;
+            egui::Modal::new(egui::Id::new("notice")).show(ctx, |ui| {
+                ui.set_width(340.0);
+                ui.label(text);
+                if ui.button("OK").clicked() {
+                    close = true;
+                }
+            });
+            if close {
+                self.notice = None;
+            }
+        }
     }
 
     pub fn sort_by(&mut self, key: SortKey) {
@@ -222,17 +478,14 @@ impl FinderApp {
     }
 
     fn keyboard(&mut self, ctx: &egui::Context, columns: usize) {
-        if ctx.egui_wants_keyboard_input() {
+        if ctx.egui_wants_keyboard_input() || self.rename.is_some() || self.confirm_delete.is_some() {
             return;
         }
-        let (back, forward, up, open, parent, all, clear, left, right, up_key, down_key) = ctx.input_mut(|i| {
+        actions::run_shortcuts(self, ctx);
+        let (parent, open, clear, left, right, up_key, down_key) = ctx.input_mut(|i| {
             (
-                i.consume_key(Modifiers::COMMAND, Key::OpenBracket),
-                i.consume_key(Modifiers::COMMAND, Key::CloseBracket),
-                i.consume_key(Modifiers::COMMAND, Key::ArrowUp),
-                i.consume_key(Modifiers::NONE, Key::Enter) || i.consume_key(Modifiers::COMMAND, Key::ArrowDown),
                 i.consume_key(Modifiers::NONE, Key::Backspace),
-                i.consume_key(Modifiers::COMMAND, Key::A),
+                i.consume_key(Modifiers::NONE, Key::Enter),
                 i.consume_key(Modifiers::NONE, Key::Escape),
                 i.consume_key(Modifiers::NONE, Key::ArrowLeft),
                 i.consume_key(Modifiers::NONE, Key::ArrowRight),
@@ -240,29 +493,26 @@ impl FinderApp {
                 i.consume_key(Modifiers::NONE, Key::ArrowDown),
             )
         });
-        if back {
-            self.history.back();
-            self.after_navigation();
-        }
-        if forward {
-            self.history.forward();
-            self.after_navigation();
-        }
-        if up || parent {
-            if let Some(p) = self.folder().parent().map(Path::to_path_buf) {
-                self.go(p);
-            }
-        }
-        if all {
-            self.selected = self.items.iter().map(|e| e.path.clone()).collect();
+        if parent {
+            self.parent();
         }
         if clear {
             self.selected.clear();
             self.search.clear();
         }
         if open {
-            for path in self.selected.clone() {
+            for path in self.selected_paths() {
                 self.open(&path);
+            }
+        }
+        let tree = self.view == ViewMode::Tree;
+        if tree && (left || right) {
+            // the arrows fold and unfold the folder selected
+            if let Some(i) = self.selected_index() {
+                let e = self.items[i].clone();
+                if e.is_dir && (right != self.open_folders.contains(&e.path)) {
+                    self.toggle_folder(&e.path);
+                }
             }
         }
         let step: isize = if self.view == ViewMode::Icons {
@@ -290,12 +540,10 @@ impl FinderApp {
                 self.show_sidebar = !self.show_sidebar;
             }
             if ui.add_enabled(self.history.can_back(), egui::Button::new("◀")).on_hover_text("Précédent (⌘[)").clicked() {
-                self.history.back();
-                self.after_navigation();
+                self.back();
             }
             if ui.add_enabled(self.history.can_forward(), egui::Button::new("▶")).on_hover_text("Suivant (⌘])").clicked() {
-                self.history.forward();
-                self.after_navigation();
+                self.forward();
             }
             let parent = self.folder().parent().map(Path::to_path_buf);
             if ui.add_enabled(parent.is_some(), egui::Button::new("▲")).on_hover_text("Dossier parent (⌘↑)").clicked() {
@@ -306,12 +554,13 @@ impl FinderApp {
             ui.separator();
             ui.selectable_value(&mut self.view, ViewMode::List, "☰ Liste");
             ui.selectable_value(&mut self.view, ViewMode::Icons, "▦ Icônes");
+            ui.selectable_value(&mut self.view, ViewMode::Tree, "🗂 Arbre");
             ui.separator();
             ui.checkbox(&mut self.show_hidden, "Cachés");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button("⚙", |ui| self.appearance_menu(ui));
-                if ui.selectable_label(self.show_preview, "ⓘ").on_hover_text("Aperçu").clicked() {
-                    self.show_preview = !self.show_preview;
+                if ui.selectable_label(self.show_dock, "◨").on_hover_text("Volets (⌘J)").clicked() {
+                    self.show_dock = !self.show_dock;
                 }
                 let edit = egui::TextEdit::singleline(&mut self.search).hint_text("Rechercher").desired_width(180.0);
                 ui.add(edit);
@@ -319,7 +568,7 @@ impl FinderApp {
         });
     }
 
-    fn appearance_menu(&mut self, ui: &mut egui::Ui) {
+    pub fn appearance_menu(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(180.0);
         ui.label(RichText::new("Thème").strong());
         let before = (self.theme, self.accent);
@@ -416,7 +665,7 @@ impl FinderApp {
         }
     }
 
-    fn preview(&mut self, ui: &mut egui::Ui) {
+    pub fn preview(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         let selection: Vec<&Entry> = self.items.iter().filter(|e| self.selected.contains(&e.path)).collect();
         match selection.as_slice() {
@@ -476,7 +725,16 @@ impl FinderApp {
         if let Some(error) = lock(&self.core).error() {
             text += &format!(" — ⚠ surveillance indisponible: {error}");
         }
-        ui.horizontal(|ui| ui.weak(text));
+        ui.horizontal(|ui| {
+            if self.transfer.running() > 0 {
+                ui.add(egui::ProgressBar::new(self.transfer.progress() as f32).desired_width(140.0).animate(true));
+                ui.weak(format!("{} en cours", self.transfer.running()));
+            }
+            if let Some((paths, cut)) = &self.clipboard {
+                ui.weak(format!("{} {}", paths.len(), if *cut { "coupé(s)" } else { "copié(s)" }));
+            }
+            ui.weak(text);
+        });
     }
 }
 
@@ -490,8 +748,10 @@ impl eframe::App for FinderApp {
             sort_key: self.sort_key,
             ascending: self.ascending,
             show_sidebar: self.show_sidebar,
-            show_preview: self.show_preview,
+            show_dock: self.show_dock,
             show_hidden: self.show_hidden,
+            dock: self.dock.as_ref().and_then(|d| serde_json::to_string(d).ok()),
+            open_folders: self.open_folders.iter().cloned().collect(),
         };
         if let Ok(json) = serde_json::to_string(&saved) {
             storage.set_string(STATE_KEY, json);
@@ -500,6 +760,8 @@ impl eframe::App for FinderApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.poll_transfer();
+        self.poll_activity();
         self.refresh_items(&ctx);
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(
             self.folder().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Finder".into()),
@@ -516,13 +778,18 @@ impl eframe::App for FinderApp {
             ui.add_space(4.0);
         });
         egui::Panel::bottom("status").show_inside(ui, |ui| self.status_bar(ui));
-        if self.show_preview {
-            egui::Panel::right("preview").default_size(240.0).min_size(160.0).show_inside(ui, |ui| self.preview(ui));
+        if self.show_dock {
+            egui::Panel::right("dock").default_size(300.0).min_size(200.0).show_inside(ui, |ui| {
+                if let Some(mut tree) = self.dock.take() {
+                    dock::show(self, &mut tree, ui);
+                    self.dock = Some(tree);
+                }
+            });
         }
         let mut columns = 1;
         egui::CentralPanel::default().show_inside(ui, |ui| {
             columns = match self.view {
-                ViewMode::List => {
+                ViewMode::List | ViewMode::Tree => {
                     views::list(self, ui);
                     1
                 }
@@ -530,6 +797,10 @@ impl eframe::App for FinderApp {
             };
         });
         self.keyboard(&ctx, columns);
+        self.modals(&ctx);
+        if self.transfer.running() > 0 {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
     }
 }
 

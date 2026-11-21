@@ -1,6 +1,8 @@
 //! The Finder of pyegui in pure Rust. `finder [folder]`
 
+mod actions;
 mod app;
+mod dock;
 mod model;
 mod views;
 

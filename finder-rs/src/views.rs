@@ -1,13 +1,59 @@
-//! The two views of a folder: a table (list) and a grid of tiles (icons).
+//! The views of a folder: a table (list and tree) and a grid of tiles (icons).
+
+use std::path::PathBuf;
 
 use eframe::egui::{self, Align, RichText, Sense};
 use egui_extras::{Column, TableBuilder};
 use pyegui_core::icons;
 
-use crate::app::FinderApp;
+use crate::actions::{self, ACTIONS};
+use crate::app::{FinderApp, ViewMode};
 use crate::model::{self, SortKey};
 
 const ROW_HEIGHT: f32 = 24.0;
+const INDENT: f32 = 16.0;
+
+/// What the user did in a view during a frame, applied once the items are no longer borrowed
+#[derive(Default)]
+struct Outcome {
+    clicked: Option<(usize, egui::Modifiers)>,
+    right_clicked: Option<usize>,
+    opened: Option<usize>,
+    sort: Option<SortKey>,
+    toggled: Option<PathBuf>,
+    action: Option<usize>,
+    blank_click: bool,
+}
+
+impl Outcome {
+    fn apply(self, app: &mut FinderApp, ctx: &egui::Context) {
+        if let Some(key) = self.sort {
+            app.sort_by(key);
+        }
+        if let Some(path) = self.toggled {
+            app.toggle_folder(&path);
+        }
+        if self.blank_click {
+            app.selected.clear();
+        }
+        if let Some(index) = self.right_clicked {
+            // a right click on an item outside the selection selects it
+            if !app.selected.contains(&app.items[index].path) {
+                app.click_item(index, egui::Modifiers::NONE);
+            }
+        }
+        if let Some((index, modifiers)) = self.clicked {
+            app.click_item(index, modifiers);
+        }
+        if let Some(index) = self.opened {
+            let path = app.items[index].path.clone();
+            app.open(&path);
+        }
+        if let Some(action) = self.action {
+            (ACTIONS[action].run)(app, ctx);
+        }
+    }
+}
 
 fn header_label(app: &FinderApp, key: SortKey, title: &str) -> String {
     if app.sort_key == key {
@@ -18,11 +64,11 @@ fn header_label(app: &FinderApp, key: SortKey, title: &str) -> String {
 }
 
 pub fn list(app: &mut FinderApp, ui: &mut egui::Ui) {
-    let mut clicked: Option<(usize, egui::Modifiers)> = None;
-    let mut opened: Option<usize> = None;
-    let mut sort: Option<SortKey> = None;
+    let mut out = Outcome::default();
     let reveal = app.reveal.take();
     let ctx = ui.ctx().clone();
+    let tree = app.view == ViewMode::Tree;
+    let enabled = actions::enabled_flags(app);
 
     let mut table = TableBuilder::new(ui)
         .striped(true)
@@ -41,7 +87,7 @@ pub fn list(app: &mut FinderApp, ui: &mut egui::Ui) {
             for (key, title) in [(SortKey::Name, "Nom"), (SortKey::Modified, "Modifié"), (SortKey::Size, "Taille"), (SortKey::Kind, "Type")] {
                 header.col(|ui| {
                     if ui.add(egui::Button::new(RichText::new(header_label(app, key, title)).strong()).frame(false)).clicked() {
-                        sort = Some(key);
+                        out.sort = Some(key);
                     }
                 });
             }
@@ -50,8 +96,20 @@ pub fn list(app: &mut FinderApp, ui: &mut egui::Ui) {
             body.rows(ROW_HEIGHT, app.items.len(), |mut row| {
                 let index = row.index();
                 let e = &app.items[index];
+                let depth = app.depths.get(index).copied().unwrap_or(0);
                 row.set_selected(app.selected.contains(&e.path));
                 row.col(|ui| {
+                    if tree {
+                        ui.add_space(depth as f32 * INDENT);
+                        if e.is_dir {
+                            let open = app.open_folders.contains(&e.path);
+                            if ui.add(egui::Button::new(if open { "▾" } else { "▸" }).frame(false).min_size(egui::vec2(14.0, 0.0))).clicked() {
+                                out.toggled = Some(e.path.clone());
+                            }
+                        } else {
+                            ui.add_space(18.0);
+                        }
+                    }
                     if let Some(uri) = icons::icon_uri(&ctx, &e.path.to_string_lossy(), 18.0) {
                         ui.add(egui::Image::new(uri).fit_to_exact_size(egui::vec2(18.0, 18.0)));
                     }
@@ -71,23 +129,21 @@ pub fn list(app: &mut FinderApp, ui: &mut egui::Ui) {
                 });
                 let response = row.response();
                 if response.double_clicked() {
-                    opened = Some(index);
+                    out.opened = Some(index);
                 } else if response.clicked() {
-                    clicked = Some((index, ctx.input(|i| i.modifiers)));
+                    out.clicked = Some((index, ctx.input(|i| i.modifiers)));
                 }
+                if response.secondary_clicked() {
+                    out.right_clicked = Some(index);
+                }
+                response.context_menu(|ui| {
+                    if let Some(action) = actions::menu(ui, &enabled) {
+                        out.action = Some(action);
+                    }
+                });
             });
         });
-
-    if let Some(key) = sort {
-        app.sort_by(key);
-    }
-    if let Some((index, modifiers)) = clicked {
-        app.click_item(index, modifiers);
-    }
-    if let Some(index) = opened {
-        let path = app.items[index].path.clone();
-        app.open(&path);
-    }
+    out.apply(app, &ctx);
 }
 
 /// Draws the tiles and returns how many there are in a row (for the arrows of the keyboard)
@@ -100,22 +156,16 @@ pub fn icons(app: &mut FinderApp, ui: &mut egui::Ui) -> usize {
     let rows = app.items.len().div_ceil(columns);
     let reveal = app.reveal.take();
     let ctx = ui.ctx().clone();
-    let mut clicked: Option<(usize, egui::Modifiers)> = None;
-    let mut opened: Option<usize> = None;
-    let mut blank_click = false;
+    let enabled = actions::enabled_flags(app);
+    let mut out = Outcome::default();
 
-    let area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+    let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+    if let Some(index) = reveal {
+        // the row of the item is brought into view
+        area = area.vertical_scroll_offset(((index / columns) as f32 * TILE_H - 2.0 * TILE_H).max(0.0));
+    }
     let output = area.show_rows(ui, TILE_H, rows, |ui, range| {
         ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-        if let Some(index) = reveal {
-            let row = index / columns;
-            if !range.contains(&row) {
-                ui.scroll_to_rect(
-                    egui::Rect::from_min_size(ui.min_rect().min + egui::vec2(0.0, (row as f32 - range.start as f32) * TILE_H), egui::vec2(TILE_W, TILE_H)),
-                    None,
-                );
-            }
-        }
         for row in range {
             ui.horizontal(|ui| {
                 for column in 0..columns {
@@ -134,44 +184,35 @@ pub fn icons(app: &mut FinderApp, ui: &mut egui::Ui) -> usize {
                     }
                     let color = if selected { ui.visuals().selection.stroke.color } else { ui.visuals().text_color() };
                     let color = if e.hidden { color.gamma_multiply(0.5) } else { color };
-                    let galley = ui.painter().layout(e.name.clone(), egui::FontId::proportional(12.5), color, TILE_W - 12.0);
-                    let galley = if galley.rows.len() > 2 {
-                        // two lines at most: the end of the name is cut
-                        let mut job = egui::text::LayoutJob::single_section(e.name.clone(), egui::TextFormat::simple(egui::FontId::proportional(12.5), color));
-                        job.wrap = egui::text::TextWrapping { max_width: TILE_W - 12.0, max_rows: 2, break_anywhere: true, overflow_character: Some('…') };
-                        job.halign = Align::Center;
-                        ui.painter().layout_job(job)
-                    } else {
-                        let mut job = egui::text::LayoutJob::single_section(e.name.clone(), egui::TextFormat::simple(egui::FontId::proportional(12.5), color));
-                        job.wrap.max_width = TILE_W - 12.0;
-                        job.halign = Align::Center;
-                        ui.painter().layout_job(job)
-                    };
+                    // two lines at most: the end of a long name is cut
+                    let mut job = egui::text::LayoutJob::single_section(e.name.clone(), egui::TextFormat::simple(egui::FontId::proportional(12.5), color));
+                    job.wrap = egui::text::TextWrapping { max_width: TILE_W - 12.0, max_rows: 2, break_anywhere: true, overflow_character: Some('…') };
+                    job.halign = Align::Center;
+                    let galley = ui.painter().layout_job(job);
                     let pos = egui::pos2(rect.center().x - galley.size().x / 2.0, rect.top() + 12.0 + ICON + 6.0);
                     ui.painter().galley(pos, galley, color);
                     if response.double_clicked() {
-                        opened = Some(index);
+                        out.opened = Some(index);
                     } else if response.clicked() {
-                        clicked = Some((index, ctx.input(|i| i.modifiers)));
+                        out.clicked = Some((index, ctx.input(|i| i.modifiers)));
                     }
+                    if response.secondary_clicked() {
+                        out.right_clicked = Some(index);
+                    }
+                    response.context_menu(|ui| {
+                        if let Some(action) = actions::menu(ui, &enabled) {
+                            out.action = Some(action);
+                        }
+                    });
                 }
             });
         }
     });
     // a click in the empty space clears the selection
     let background = ui.interact(output.inner_rect, ui.id().with("icons-background"), Sense::click());
-    if background.clicked() && clicked.is_none() {
-        blank_click = true;
+    if background.clicked() && out.clicked.is_none() && out.opened.is_none() {
+        out.blank_click = true;
     }
-    if blank_click {
-        app.selected.clear();
-    }
-    if let Some((index, modifiers)) = clicked {
-        app.click_item(index, modifiers);
-    }
-    if let Some(index) = opened {
-        let path = app.items[index].path.clone();
-        app.open(&path);
-    }
+    out.apply(app, &ctx);
     columns
 }
