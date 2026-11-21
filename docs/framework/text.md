@@ -211,6 +211,10 @@ Shows markdown text: headings, lists, tables, quotes, code blocks, links and ima
 - `id` (str): id of the scroll area, needed if there are several scrollable markdown texts
 - `max_image_width` (int): max width of the images
 - `default_width` (int): width of the text, default is the available width
+- `max_width` (float): max width of the whole document, in points. A wider area leaves the rest empty. Default is the available width
+- `align` (str): where a document limited by ``max_width`` is placed: "left" (default), "center" or "right"
+- `table_width` (str): how the tables are drawn. "scroll" (default): their natural width, with a horizontal scroll if they are wider than the document. "reformat": the cells wrap their text so that the table fits the document (the width of ``max_width``). "full_width": the same, but the table fits the whole available width, out of the column of ``max_width``. The cells keep bold, code, links and images; the alignment of the columns is not applied
+- code_width, image_width, mermaid_width (str): what these blocks do when ``max_width`` limits the document. "reformat" (default): the block is fitted to the column of ``max_width``. "full_width": the block takes the whole available width, out of the column
 - `mermaid_theme` (str): theme of the mermaid diagrams: "default", "dark", "forest", "neutral" or "base".
 - Default follows the theme of the app
 - `open_links` (bool): a click on a link opens it in the browser. False: it is only returned, so that the app opens it itself, e.g. a link to another markdown file. Default is True
@@ -222,6 +226,11 @@ Shows markdown text: headings, lists, tables, quotes, code blocks, links and ima
 
 Code blocks marked ``mermaid`` are drawn as diagrams: flowcharts, sequence, class, state, ER, pie,
 gantt and more. A diagram that does not parse shows its error and its source.
+
+With a ``table_width`` other than "scroll", or a "full_width" block, the text is cut around those blocks.
+Only the blocks at the top level of the text are concerned (not those in a list or a quote), a reference
+link must be defined in the same part of the text as its use, and with ``scrollable`` the whole text is
+laid out, not only its visible part (slower for very long texts).
 
 **Example:**
 

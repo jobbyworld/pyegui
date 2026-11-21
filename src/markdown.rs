@@ -114,6 +114,244 @@ pub(crate) fn replace_mermaid<'a>(ctx: &egui::Context, text: &'a str, theme: &st
     Cow::Owned(out)
 }
 
+/// How a table is drawn
+#[derive(Clone, Copy, PartialEq)]
+enum TableFit {
+    /// its natural width, a scroll area if it is wider than the column
+    Scroll,
+    /// the cells wrap their text so that the table fits the column
+    Reformat,
+    /// the cells wrap their text so that the table fits the whole available width, out of the column
+    FullWidth,
+}
+
+/// Which blocks of the text are not drawn as the rest of it
+struct Policies {
+    table: TableFit,
+    code_wide: bool,
+    image_wide: bool,
+    mermaid_wide: bool,
+}
+
+/// A part of the text, cut around the blocks that have their own width
+enum Part {
+    Column(std::ops::Range<usize>),
+    /// a block drawn by the viewer in the whole available width
+    Wide(std::ops::Range<usize>),
+    /// a table drawn with wrapped cells, in the column (false) or in the whole available width (true)
+    Table(std::ops::Range<usize>, bool),
+}
+
+/// Cuts the text around the top level blocks that a policy takes out of the column: the tables, the code
+/// blocks, the paragraphs that are only an image, and those that are only a mermaid diagram (an image that
+/// `replace_mermaid` made). `can_break_out` is false when the column is the whole width: nothing is wider.
+/// An empty result means that the viewer draws the text as it is.
+fn split_parts(text: &str, policies: &Policies, can_break_out: bool) -> Vec<Part> {
+    use pulldown_cmark::{Event, Options, Parser, Tag};
+
+    struct Para {
+        range: std::ops::Range<usize>,
+        only_image: bool,
+        mermaid: bool,
+        images: usize,
+    }
+    let wide_table = policies.table == TableFit::FullWidth;
+    let wide_blocks = can_break_out && (policies.code_wide || policies.image_wide || policies.mermaid_wide);
+    if policies.table == TableFit::Scroll && !wide_blocks {
+        return Vec::new();
+    }
+    let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+    let mut blocks: Vec<(std::ops::Range<usize>, Option<bool>)> = Vec::new(); // (range, table in full width)
+    let mut depth = 0usize;
+    let mut para: Option<Para> = None;
+    for (event, range) in Parser::new_ext(text, options).into_offset_iter() {
+        match event {
+            Event::Start(tag) => {
+                if depth == 0 {
+                    match tag {
+                        Tag::Table(_) if policies.table != TableFit::Scroll => blocks.push((range, Some(wide_table))),
+                        Tag::CodeBlock(_) if can_break_out && policies.code_wide => blocks.push((range, None)),
+                        Tag::Paragraph => {
+                            para = Some(Para { range, only_image: true, mermaid: false, images: 0 })
+                        }
+                        _ => {}
+                    }
+                } else if depth == 1 {
+                    if let Some(p) = para.as_mut() {
+                        match &tag {
+                            Tag::Image { dest_url, .. } if p.images == 0 => {
+                                p.mermaid = dest_url.starts_with("bytes://mermaid-");
+                                p.images += 1;
+                            }
+                            _ => p.only_image = false,
+                        }
+                    }
+                }
+                depth += 1;
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    if let Some(p) = para.take() {
+                        let wide = if p.mermaid { policies.mermaid_wide } else { policies.image_wide };
+                        if can_break_out && p.only_image && p.images == 1 && wide {
+                            blocks.push((p.range, None));
+                        }
+                    }
+                }
+            }
+            _ => {
+                if depth == 1 {
+                    if let Some(p) = para.as_mut() {
+                        p.only_image = false; // a text next to the image
+                    }
+                }
+            }
+        }
+    }
+    let mut parts = Vec::new();
+    let mut pos = 0;
+    for (range, table) in blocks {
+        if range.start > pos {
+            parts.push(Part::Column(pos..range.start));
+        }
+        pos = range.end;
+        parts.push(match table {
+            Some(wide) => Part::Table(range, wide),
+            None => Part::Wide(range),
+        });
+    }
+    if !parts.is_empty() && pos < text.len() {
+        parts.push(Part::Column(pos..text.len()));
+    }
+    parts
+}
+
+/// The source of the cells of a table: the header, then the rows
+fn table_cells(src: &str) -> Option<(Vec<String>, Vec<Vec<String>>)> {
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+
+    let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+    let (mut head, mut rows, mut row) = (Vec::new(), Vec::new(), Vec::new());
+    for (event, range) in Parser::new_ext(src, options).into_offset_iter() {
+        match event {
+            Event::Start(Tag::TableHead) | Event::Start(Tag::TableRow) => row.clear(),
+            Event::End(TagEnd::TableHead) => head = std::mem::take(&mut row),
+            Event::End(TagEnd::TableRow) => rows.push(std::mem::take(&mut row)),
+            Event::Start(Tag::TableCell) => row.push(src[range].trim().to_string()),
+            _ => {}
+        }
+    }
+    (!head.is_empty()).then_some((head, rows))
+}
+
+/// The widths of the columns of a table that must fit `avail`: what the texts want when it fits, else
+/// the narrowest widths (the longest word) and the room that is left shared like what the texts want more
+fn fit_columns(desired: &[f32], min: &[f32], avail: f32) -> Vec<f32> {
+    if desired.iter().sum::<f32>() <= avail {
+        return desired.to_vec();
+    }
+    let min_sum: f32 = min.iter().sum();
+    if min_sum >= avail {
+        return min.iter().map(|w| w * avail / min_sum).collect();
+    }
+    let extra: f32 = desired.iter().zip(min).map(|(d, m)| d - m).sum();
+    let room = avail - min_sum;
+    desired
+        .iter()
+        .zip(min)
+        .map(|(d, m)| m + room * (d - m) / extra.max(f32::EPSILON))
+        .collect()
+}
+
+/// The words of the source of a cell as they are drawn (no markers of bold, code or link), each with
+/// whether it is code: a link keeps its text, not its address
+fn cell_words(cell: &str) -> Vec<(String, bool)> {
+    cell.split_whitespace()
+        .filter_map(|token| {
+            let code = token.contains('`');
+            let token = match token.find("](") {
+                Some(end) => &token[..end], // the end of a link: its address is not drawn
+                None => token,
+            };
+            let word: String = token.chars().filter(|c| !matches!(c, '*' | '`' | '[' | ']')).collect();
+            (!word.is_empty()).then_some((word, code))
+        })
+        .collect()
+}
+
+/// The width of a cell without wrapping, and of its longest word, measured with the fonts of the ui
+fn cell_widths(ui: &egui::Ui, cell: &str, bold: bool) -> (f32, f32) {
+    let width = |text: &str, code: bool| {
+        let font = if code {
+            egui::TextStyle::Monospace.resolve(ui.style())
+        } else {
+            egui::TextStyle::Body.resolve(ui.style())
+        };
+        let galley = ui.painter().layout_no_wrap(text.to_string(), font, egui::Color32::WHITE);
+        // a code has its own margins, and a bold text is wider than the regular one
+        galley.size().x * if bold && !code { 1.1 } else { 1.0 } + if code { 6.0 } else { 0.0 }
+    };
+    let space = width(" ", false);
+    let words = cell_words(cell);
+    let mut total = 0.0;
+    let mut longest: f32 = 0.0;
+    for (i, (word, code)) in words.iter().enumerate() {
+        let w = width(word, *code);
+        total += w + if i > 0 { space } else { 0.0 };
+        longest = longest.max(w);
+    }
+    (total, longest)
+}
+
+/// Draws a table whose cells wrap their text, so that it fits the width of `ui`. Every cell is drawn by the
+/// viewer, so it can hold bold, code, links and images. The columns are not aligned as the table says.
+fn wrapped_table(ui: &mut egui::Ui, cache: &mut CommonMarkCache, viewer: &dyn Fn() -> CommonMarkViewer<'static>, src: &str) {
+    let Some((head, rows)) = table_cells(src) else {
+        viewer().show(ui, cache, src);
+        return;
+    };
+    let n = head.len();
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        let spacing = ui.spacing().item_spacing.x;
+        let avail = (ui.available_width() - spacing * (n - 1) as f32).max(n as f32 * 30.0);
+        let cell = |row: &Vec<String>, i: usize| row.get(i).map(String::as_str).unwrap_or("").to_string();
+
+        let (mut desired, mut min) = (vec![0f32; n], vec![0f32; n]);
+        for (r, row) in std::iter::once(&head).chain(rows.iter()).enumerate() {
+            for i in 0..n {
+                let text = cell(row, i);
+                let (all, longest) = cell_widths(ui, &text, r == 0 || text.contains("**"));
+                desired[i] = desired[i].max(all);
+                min[i] = min[i].max(longest);
+            }
+        }
+        for i in 0..n {
+            // a little room: a word wider than its column does not wrap, it makes the column wider
+            min[i] = (min[i] + 4.0).clamp(30.0, (desired[i] + 4.0).max(30.0));
+            desired[i] = (desired[i] + 4.0).max(min[i]);
+        }
+        let widths = fit_columns(&desired, &min, avail);
+
+        egui::Grid::new(("pyegui_md_table", ui.scope_id())).striped(true).min_col_width(0.0).show(ui, |ui| {
+            for (r, row) in std::iter::once(&head).chain(rows.iter()).enumerate() {
+                for i in 0..n {
+                    let text = cell(row, i);
+                    ui.vertical(|ui| {
+                        ui.set_width(widths[i]);
+                        if text.is_empty() {
+                            return;
+                        }
+                        let text = if r == 0 && !text.contains('*') { format!("**{}**", text) } else { text };
+                        viewer().show(ui, cache, &text);
+                    });
+                }
+                ui.end_row();
+            }
+        });
+    });
+}
+
 /// Shows markdown text: headings, lists, tables, quotes, code blocks, links and images.
 ///
 /// Keyword args:
@@ -125,6 +363,21 @@ pub(crate) fn replace_mermaid<'a>(ctx: &egui::Context, text: &'a str, theme: &st
 ///     max_image_width (int): max width of the images
 ///
 ///     default_width (int): width of the text, default is the available width
+///
+///     max_width (float): max width of the whole document, in points. A wider area leaves the rest empty.
+///         Default is the available width
+///
+///     align (str): where a document limited by ``max_width`` is placed: "left" (default), "center" or "right"
+///
+///     table_width (str): how the tables are drawn. "scroll" (default): their natural width, with a
+///         horizontal scroll if they are wider than the document. "reformat": the cells wrap their text so
+///         that the table fits the document (the width of ``max_width``). "full_width": the same, but the
+///         table fits the whole available width, out of the column of ``max_width``. The cells keep bold, code,
+///         links and images; the alignment of the columns is not applied
+///
+///     code_width, image_width, mermaid_width (str): what these blocks do when ``max_width`` limits the
+///         document. "reformat" (default): the block is fitted to the column of ``max_width``. "full_width":
+///         the block takes the whole available width, out of the column
 ///
 ///     mermaid_theme (str): theme of the mermaid diagrams: "default", "dark", "forest", "neutral" or "base".
 ///     Default follows the theme of the app
@@ -138,6 +391,11 @@ pub(crate) fn replace_mermaid<'a>(ctx: &egui::Context, text: &'a str, theme: &st
 ///
 /// Code blocks marked ``mermaid`` are drawn as diagrams: flowcharts, sequence, class, state, ER, pie,
 /// gantt and more. A diagram that does not parse shows its error and its source.
+///
+/// With a ``table_width`` other than "scroll", or a "full_width" block, the text is cut around those blocks.
+/// Only the blocks at the top level of the text are concerned (not those in a list or a quote), a reference
+/// link must be defined in the same part of the text as its use, and with ``scrollable`` the whole text is
+/// laid out, not only its visible part (slower for very long texts).
 ///
 /// Example::
 ///
@@ -162,14 +420,19 @@ pub(crate) fn replace_mermaid<'a>(ctx: &egui::Context, text: &'a str, theme: &st
 #[pyo3(signature = (text, **kwargs))]
 unsafe fn markdown(text: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Option<String>> {
     let ui = current_ui(&UI)?;
-    let mut viewer = CommonMarkViewer::new();
-
-    if let Some(width) = kwarg::<usize>(kwargs, "max_image_width")? {
-        viewer = viewer.max_image_width(Some(width));
-    }
-    if let Some(width) = kwarg::<usize>(kwargs, "default_width")? {
-        viewer = viewer.default_width(Some(width));
-    }
+    let max_image_width = kwarg::<usize>(kwargs, "max_image_width")?;
+    let default_width = kwarg::<usize>(kwargs, "default_width")?;
+    // a viewer is used up by one call: one is made for every part of the text
+    let viewer = || {
+        let mut viewer = CommonMarkViewer::new();
+        if let Some(width) = max_image_width {
+            viewer = viewer.max_image_width(Some(width));
+        }
+        if let Some(width) = default_width {
+            viewer = viewer.default_width(Some(width));
+        }
+        viewer
+    };
 
     let theme = match kwarg::<String>(kwargs, "mermaid_theme")? {
         Some(theme) if !MERMAID_THEMES.contains(&theme.as_str()) => {
@@ -192,19 +455,112 @@ unsafe fn markdown(text: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<O
     // a click on a link asks egui to open its url: the commands added while the text is drawn
     let before = ui.ctx().output(|o| o.commands.len());
 
-    CACHE.with_borrow_mut(|cache| {
-        if scrollable {
-            viewer.show_scrollable(
-                egui::Id::unique(id),
-                ui,
-                cache,
-                &CommonMarkScrollOptions::default(),
-                text,
-            );
-        } else {
-            viewer.show(ui, cache, text);
+    // a document limited in width: drawn in a child ui of that width, placed in the available width
+    let max_width = kwarg::<f32>(kwargs, "max_width")?.filter(|w| *w > 0.0);
+    let align = match kwarg::<String>(kwargs, "align")?.as_deref() {
+        None | Some("left") => 0.0,
+        Some("center") => 0.5,
+        Some("right") => 1.0,
+        Some(other) => {
+            return Err(PyValueError::new_err(format!(
+                "Unknown align '{}', expected left, center or right",
+                other
+            )))
         }
-    });
+    };
+
+    let policy = |name: &str| -> PyResult<bool> {
+        match kwarg::<String>(kwargs, name)?.as_deref() {
+            None | Some("reformat") => Ok(false),
+            Some("full_width") => Ok(true),
+            Some(other) => Err(PyValueError::new_err(format!(
+                "Unknown {} '{}', expected reformat or full_width",
+                name, other
+            ))),
+        }
+    };
+    let table = match kwarg::<String>(kwargs, "table_width")?.as_deref() {
+        None | Some("scroll") => TableFit::Scroll,
+        Some("reformat") => TableFit::Reformat,
+        Some("full_width") => TableFit::FullWidth,
+        Some(other) => {
+            return Err(PyValueError::new_err(format!(
+                "Unknown table_width '{}', expected scroll, reformat or full_width",
+                other
+            )))
+        }
+    };
+    let policies = Policies {
+        table,
+        code_wide: policy("code_width")?,
+        image_wide: policy("image_width")?,
+        mermaid_wide: policy("mermaid_width")?,
+    };
+
+    let draw = |ui: &mut egui::Ui, text: &str, scrollable: bool| {
+        CACHE.with_borrow_mut(|cache| {
+            if scrollable {
+                viewer().show_scrollable(
+                    egui::Id::unique(id.clone()),
+                    ui,
+                    cache,
+                    &CommonMarkScrollOptions::default(),
+                    text,
+                );
+            } else {
+                viewer().show(ui, cache, text);
+            }
+        });
+    };
+    let avail = ui.available_width();
+    let column_width = max_width.map_or(avail, |max| max.min(avail));
+    let can_break_out = column_width < avail;
+    // a part of the text in the column: a child ui of the width, placed in the available width
+    let in_column = |ui: &mut egui::Ui, f: &mut dyn FnMut(&mut egui::Ui)| {
+        if !can_break_out {
+            return f(ui);
+        }
+        let area = ui.available_rect_before_wrap();
+        let left = area.min.x + (area.width() - column_width) * align;
+        let rect = egui::Rect::from_min_max(
+            egui::pos2(left, area.min.y),
+            egui::pos2(left + column_width, area.max.y),
+        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| f(ui));
+    };
+    let parts = split_parts(text, &policies, can_break_out);
+    if parts.is_empty() {
+        in_column(ui, &mut |ui| draw(ui, text, scrollable));
+    } else {
+        // blocks with a width of their own: the text is cut around them. To keep one scroll area for
+        // all the parts, it is made here, and the viewer draws every part without its own
+        let draw_parts = |ui: &mut egui::Ui| {
+            for (index, part) in parts.iter().enumerate() {
+                ui.push_id(index, |ui| match part {
+                    Part::Column(range) => in_column(ui, &mut |ui| draw(ui, &text[range.clone()], false)),
+                    Part::Wide(range) => draw(ui, &text[range.clone()], false),
+                    Part::Table(range, wide) => {
+                        let mut table = |ui: &mut egui::Ui| {
+                            CACHE.with_borrow_mut(|cache| wrapped_table(ui, cache, &viewer, &text[range.clone()]))
+                        };
+                        if *wide {
+                            table(ui);
+                        } else {
+                            in_column(ui, &mut table);
+                        }
+                    }
+                });
+            }
+        };
+        if scrollable {
+            egui::ScrollArea::vertical()
+                .id_salt(egui::Id::unique(format!("markdown_parts_{id}")))
+                .auto_shrink([false, false])
+                .show(ui, draw_parts);
+        } else {
+            draw_parts(ui);
+        }
+    }
 
     let mut clicked = None;
     ui.ctx().output_mut(|o| {

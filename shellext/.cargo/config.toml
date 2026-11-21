@@ -1,0 +1,3 @@
+[build]
+# no dependency on the Visual C++ runtime redistributable
+rustflags = ["-C", "target-feature=+crt-static"]
