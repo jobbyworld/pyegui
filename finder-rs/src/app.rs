@@ -122,6 +122,7 @@ pub struct FinderApp {
     show_terminal: bool,
     pub terminal_opacity: f32,
     pub glass: GlassChoice,
+    title: String,
     /// a window opened by the first one: it has no native backdrop and closes on its own
     secondary: bool,
     /// the other windows, drawn after this one
@@ -164,6 +165,9 @@ pub struct FinderApp {
     /// the tags of the rows shown, by path, until the store changes
     tag_cache: std::cell::RefCell<(u64, std::collections::HashMap<PathBuf, std::rc::Rc<Vec<(Color32, String, How)>>>)>,
     opened_cache: std::cell::RefCell<(u64, std::collections::HashMap<String, f64>)>,
+    opened_loaded: std::cell::Cell<bool>,
+    /// every tag, read once per version of the store (not once per row)
+    all_tags: std::cell::RefCell<(u64, Vec<crate::tagstore::Tag>)>,
     viewer: Option<Viewer>,
     preview_pdf: Option<(PathBuf, pyegui_core::pdf_view::PdfDocument)>,
 }
@@ -222,6 +226,7 @@ impl FinderApp {
             show_terminal: saved.show_terminal,
             terminal_opacity: saved.terminal_opacity.clamp(0.0, 1.0),
             glass: saved.glass,
+            title: String::new(),
             secondary: false,
             windows: Vec::new(),
             new_window: None,
@@ -255,6 +260,8 @@ impl FinderApp {
             tag_edit: None,
             tag_cache: Default::default(),
             opened_cache: Default::default(),
+            opened_loaded: Default::default(),
+            all_tags: Default::default(),
             viewer: None,
             preview_pdf: None,
         };
@@ -431,7 +438,12 @@ impl FinderApp {
             return found.clone();
         }
         let effective = store.effective(path);
-        let all = store.all();
+        let mut known = self.all_tags.borrow_mut();
+        // the version is kept plus one: the first value is 0, "never read"
+        if known.0 != store.version + 1 {
+            *known = (store.version + 1, store.all());
+        }
+        let all = &known.1;
         let mut tags: Vec<(Color32, String, How)> = all
             .iter()
             .filter_map(|t| effective.get(&t.id).map(|how| (tagsui::parse_color(&t.color), t.name.clone(), *how)))
@@ -445,8 +457,10 @@ impl FinderApp {
     pub fn opened_at(&self, path: &Path) -> Option<std::time::SystemTime> {
         let store = self.tags.as_ref()?;
         let mut cache = self.opened_cache.borrow_mut();
-        if cache.0 != store.version || cache.1.is_empty() {
+        // reloaded when the store changed (not when it is empty: an empty one would be read at every row of every frame)
+        if cache.0 != store.version || !self.opened_loaded.get() {
             *cache = (store.version, store.opened_dates());
+            self.opened_loaded.set(true);
         }
         cache.1.get(&crate::tagstore::key(path)).map(|t| std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(*t))
     }
@@ -1225,12 +1239,18 @@ impl FinderApp {
     /// The window: its panels and its views
     fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        let prof = std::env::var_os("FINDER_PROF").is_some();
+        let t0 = std::time::Instant::now();
         self.poll_transfer();
         self.poll_activity();
         self.refresh_items(&ctx);
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(
-            self.folder().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Finder".into()),
-        ));
+        let t_refresh = t0.elapsed();
+        // only when it changes: a viewport command asks for another frame, so sending it every frame never lets the app sleep
+        let title = self.folder().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Finder".into());
+        if self.title != title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.title = title;
+        }
 
         if self.custom_titlebar {
             egui::Panel::top("titlebar").show(ui, |ui| self.titlebar(ui));
@@ -1259,6 +1279,7 @@ impl FinderApp {
                 }
             });
         }
+        let t_panels = t0.elapsed();
         let mut columns = 1;
         let mut central = egui::Frame::central_panel(ui.style());
         if let Some(fill) = style::surface_fill(ui.visuals(), style::Surface::Central) {
@@ -1279,9 +1300,27 @@ impl FinderApp {
                 ViewMode::Icons => views::icons(self, ui),
             };
         });
+        let t_central = t0.elapsed();
         self.drops(&ctx);
         self.keyboard(&ctx, columns);
         self.modals(&ctx);
+        if prof {
+            thread_local! { static FPS: std::cell::Cell<(std::time::Instant, u32)> = std::cell::Cell::new((std::time::Instant::now(), 0)); }
+            FPS.with(|f| {
+                let (start, n) = f.get();
+                if start.elapsed().as_secs_f32() >= 2.0 {
+                    eprintln!("{:.1} frames/s", n as f32 / start.elapsed().as_secs_f32());
+                    f.set((std::time::Instant::now(), 0));
+                } else {
+                    f.set((start, n + 1));
+                }
+            });
+            let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+            let total = ms(t0.elapsed());
+            if total > 4.0 {
+                eprintln!("frame {total:.1} ms: refresh {:.1}, panels {:.1}, central {:.1}, rest {:.1} ({} items)", ms(t_refresh), ms(t_panels) - ms(t_refresh), ms(t_central) - ms(t_panels), total - ms(t_central), self.items.len());
+            }
+        }
         if self.transfer.running() > 0 {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }

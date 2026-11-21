@@ -14,6 +14,24 @@ use crate::tagsui;
 const ROW_HEIGHT: f32 = 24.0;
 const INDENT: f32 = 16.0;
 
+thread_local! {
+    /// the first file seen of each extension: its icon is the one of every file of that extension
+    static TYPE_ICONS: std::cell::RefCell<std::collections::HashMap<String, String>> = Default::default();
+}
+
+/// The icon of an item. The system draws one icon per path, which is slow (a few milliseconds
+/// each, on the thread of the window): the files that have an extension share the icon of the
+/// first one seen, so a folder of a thousand files makes a few requests, not a thousand
+pub fn entry_icon(ctx: &egui::Context, e: &pyegui_core::watcher::Entry, size: f32) -> Option<String> {
+    let path = &e.path;
+    let shared = if e.is_dir { None } else { path.extension().map(|x| x.to_string_lossy().to_lowercase()) };
+    let key = match shared {
+        Some(ext) => TYPE_ICONS.with(|t| t.borrow_mut().entry(ext).or_insert_with(|| path.to_string_lossy().into_owned()).clone()),
+        None => path.to_string_lossy().into_owned(),
+    };
+    icons::icon_uri(ctx, &key, size)
+}
+
 /// What the user did in a view during a frame, applied once the items are no longer borrowed
 #[derive(Default)]
 struct Outcome {
@@ -130,7 +148,7 @@ pub fn list(app: &mut FinderApp, ui: &mut egui::Ui) {
                             ui.add_space(18.0);
                         }
                     }
-                    if let Some(uri) = icons::icon_uri(&ctx, &e.path.to_string_lossy(), 18.0) {
+                    if let Some(uri) = entry_icon(&ctx, e, 18.0) {
                         ui.add(egui::Image::new(uri).fit_to_exact_size(egui::vec2(18.0, 18.0)));
                     }
                     let name = RichText::new(&e.name);
@@ -211,7 +229,7 @@ pub fn icons(app: &mut FinderApp, ui: &mut egui::Ui) -> usize {
                         ui.painter().rect_filled(rect.shrink(3.0), 8.0, ui.visuals().widgets.hovered.weak_bg_fill);
                     }
                     let icon_rect = egui::Rect::from_center_size(rect.center_top() + egui::vec2(0.0, 12.0 + ICON / 2.0), egui::vec2(ICON, ICON));
-                    if let Some(uri) = icons::icon_uri(&ctx, &e.path.to_string_lossy(), ICON) {
+                    if let Some(uri) = entry_icon(&ctx, e, ICON) {
                         egui::Image::new(uri).fit_to_exact_size(egui::vec2(ICON, ICON)).paint_at(ui, icon_rect);
                     }
                     let color = if selected { ui.visuals().selection.stroke.color } else { ui.visuals().text_color() };
