@@ -11,6 +11,7 @@ pub mod pdf_text;
 pub mod watcher;
 pub mod transfer;
 pub mod style;
+pub mod window;
 pub mod icons;
 pub mod terminal;
 pub mod markdown;

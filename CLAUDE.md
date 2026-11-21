@@ -141,7 +141,7 @@ The repository is a Cargo workspace of three crates:
 - `pyegui-core` (`core/`): what does not depend on Python, shared with the Rust applications: `watcher`
   (`Core`), `transfer` (`Transfer`, `drop_operation_for`), `pdf`, `pdf_nav`, `pdf_text`, `pdf_view`
   (`PdfDocument`, `PdfView`, `pdf_view`, `pdf_thumbnail`), `terminal` (`Terminal`, `show`), `markdown`
-  (`show`, `code_view`), `gherkin`, `style`, `icons`. A module of `src/` that moved to the core keeps only
+  (`show`, `code_view`), `gherkin`, `style`, `window` (native backdrops, blur, corner radius), `icons`. A module of `src/` that moved to the core keeps only
   its wrappers (see `src/watcher.rs`, `src/terminal.rs`, `src/pdf_view.rs`); options read from kwargs become
   a struct of the core (`TerminalOptions`, `MarkdownOptions`, `PdfViewOptions`...). Still in `src/` because
   they hold Python callbacks: `files`, `dock`, `columns`, `tags`, `table`, `tree`, `widgets`, `containers`.
@@ -153,7 +153,7 @@ The repository is a Cargo workspace of three crates:
   `tagsui.rs`, `search.rs`, `model.rs`. Build `cargo build --profile dist -p finder-rs`; on macOS
   `python scripts/bundle_finder_macos.py` makes `dist/Finder.app` and `dist/Finder.dmg`. The CI builds
   and attaches the executables of Windows (x64, ARM64), macOS (x86_64, aarch64) and Linux to the release.
-  Not done compared with `finder.py`: other windows, glass and native backdrop, custom title bar, drag of files
+  Not done compared with `finder.py`: drag of files
   out of the window, Windows Explorer integration.
 
 ## Source map (`src/`)

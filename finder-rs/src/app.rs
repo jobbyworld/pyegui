@@ -42,6 +42,31 @@ pub enum ThemeChoice {
     Dark,
 }
 
+/// The glass of the window: what is seen behind it through the panels
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GlassChoice {
+    None,
+    Partial,
+    Full,
+}
+
+impl GlassChoice {
+    fn default_for_system() -> Self {
+        if cfg!(any(target_os = "macos", target_os = "windows")) { GlassChoice::Full } else { GlassChoice::None }
+    }
+}
+
+/// The native backdrop put behind the window when the glass is on
+fn backdrop_name() -> Option<&'static str> {
+    if cfg!(target_os = "macos") {
+        Some("liquid_glass")
+    } else if cfg!(target_os = "windows") {
+        Some("acrylic")
+    } else {
+        None
+    }
+}
+
 /// What is kept between two runs
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
@@ -56,6 +81,7 @@ struct Saved {
     show_dock: bool,
     show_terminal: bool,
     terminal_opacity: f32,
+    glass: GlassChoice,
     show_hidden: bool,
     dock: Option<String>,
     open_folders: Vec<PathBuf>,
@@ -74,6 +100,7 @@ impl Default for Saved {
             show_dock: true,
             show_terminal: true,
             terminal_opacity: 0.2,
+            glass: GlassChoice::default_for_system(),
             show_hidden: false,
             dock: None,
             open_folders: Vec::new(),
@@ -93,6 +120,15 @@ pub struct FinderApp {
     show_dock: bool,
     show_terminal: bool,
     pub terminal_opacity: f32,
+    pub glass: GlassChoice,
+    /// a window opened by the first one: it has no native backdrop and closes on its own
+    secondary: bool,
+    /// the other windows, drawn after this one
+    windows: Vec<(egui::ViewportId, Box<FinderApp>)>,
+    pub new_window: Option<PathBuf>,
+    window_serial: u64,
+    backdrop_applied: bool,
+    custom_titlebar: bool,
     terminals: Terminals,
     pub show_hidden: bool,
     pub search: String,
@@ -132,7 +168,7 @@ pub struct FinderApp {
 }
 
 impl FinderApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, start: Option<PathBuf>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, start: Option<PathBuf>, custom_titlebar: bool) -> Self {
         egui_extras::install_image_loaders(&cc.egui_ctx);
         let font_path = terminals::nerd_font();
         cc.egui_ctx.set_fonts(fonts(font_path.as_deref()));
@@ -141,6 +177,30 @@ impl FinderApp {
             .and_then(|s| s.get_string(STATE_KEY))
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
+        Self::build(&cc.egui_ctx, saved, start, custom_titlebar)
+    }
+
+    /// Another window of the app: its own folder, view and selection, the look of this one, no
+    /// terminal and no dock
+    pub fn new_window(&self, ctx: &egui::Context, folder: PathBuf) -> Self {
+        let saved = Saved {
+            view: self.view,
+            theme: self.theme,
+            accent: self.accent,
+            glass: self.glass,
+            show_hidden: self.show_hidden,
+            show_dock: false,
+            show_terminal: false,
+            terminal_opacity: self.terminal_opacity,
+            ..Saved::default()
+        };
+        let mut app = Self::build(ctx, saved, Some(folder), false);
+        app.secondary = true;
+        app
+    }
+
+    fn build(ctx: &egui::Context, saved: Saved, start: Option<PathBuf>, custom_titlebar: bool) -> Self {
+        let font_path = terminals::nerd_font();
         let home = home();
         let folder = start
             .map(|p| expand(&p))
@@ -160,6 +220,13 @@ impl FinderApp {
             show_dock: saved.show_dock,
             show_terminal: saved.show_terminal,
             terminal_opacity: saved.terminal_opacity.clamp(0.0, 1.0),
+            glass: saved.glass,
+            secondary: false,
+            windows: Vec::new(),
+            new_window: None,
+            window_serial: 0,
+            backdrop_applied: false,
+            custom_titlebar,
             terminals: Terminals::new(&folder_for_terminal, font_path.as_deref()),
             show_hidden: saved.show_hidden,
             search: String::new(),
@@ -190,7 +257,7 @@ impl FinderApp {
             viewer: None,
             preview_pdf: None,
         };
-        app.apply_theme(&cc.egui_ctx);
+        app.apply_theme(ctx);
         app
     }
 
@@ -238,9 +305,22 @@ impl FinderApp {
             ThemeChoice::Dark => egui::ThemePreference::Dark,
         });
         let accent = ACCENTS[self.accent].1;
+        let mode = match self.glass {
+            GlassChoice::None => None,
+            GlassChoice::Partial => Some(style::GlassMode::Partial),
+            GlassChoice::Full => Some(style::GlassMode::Full),
+        };
+        // the clear glass of the content and of the docks, like examples/finder.py
+        let levels = style::GlassLevels { scale: 1.2, central: Some(0.3), dock: Some(0.3), ..style::GlassLevels::DEFAULT };
+        if let Ok(mut state) = style::THEME.lock() {
+            *state = style::ThemeState { accent: Some(accent), glass: mode, levels, tint: None };
+        }
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
             let mut s = style::default_style(theme);
-            style::accent_style(&mut s, accent);
+            match mode {
+                Some(mode) => style::modern_glass_style(&mut s, None, accent, mode, levels),
+                None => style::accent_style(&mut s, accent),
+            }
             ctx.set_style_of(theme, s);
         }
     }
@@ -734,6 +814,18 @@ impl FinderApp {
         if before != (self.theme, self.accent) {
             self.apply_theme(ui.ctx());
         }
+        if backdrop_name().is_some() {
+            ui.label(RichText::new("Verre").strong());
+            let before = self.glass;
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.glass, GlassChoice::None, "Aucun");
+                ui.selectable_value(&mut self.glass, GlassChoice::Partial, "Partiel");
+                ui.selectable_value(&mut self.glass, GlassChoice::Full, "Complet");
+            });
+            if before != self.glass {
+                self.apply_theme(ui.ctx());
+            }
+        }
         ui.add_space(4.0);
         ui.label(RichText::new("Terminal").strong());
         ui.add(egui::Slider::new(&mut self.terminal_opacity, 0.0..=1.0).text("Opacité"));
@@ -777,8 +869,33 @@ impl FinderApp {
         });
     }
 
+    /// The title bar drawn by the app (no system one): the title, and the buttons of the window
+    fn titlebar(&mut self, ui: &mut egui::Ui) {
+        let strip = ui.max_rect();
+        ui.horizontal(|ui| {
+            let title = self.folder().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Finder".into());
+            ui.label(RichText::new(title).strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let ctx = ui.ctx().clone();
+                let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                if ui.add(egui::Button::new("✕").frame(false)).on_hover_text("Fermer").clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                if ui.add(egui::Button::new(if maximized { "❐" } else { "☐" }).frame(false)).clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                }
+                if ui.add(egui::Button::new("—").frame(false)).on_hover_text("Réduire").clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                }
+            });
+        });
+        drag_window(ui, strip);
+    }
+
     fn sidebar(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(6.0);
+        let strip = ui.max_rect();
+        ui.add_space(if MAC_TITLEBAR { 30.0 } else { 6.0 });
+        drag_window(ui, egui::Rect::from_min_size(strip.min, egui::vec2(strip.width(), 28.0)));
         ui.label(RichText::new("Favoris").weak().small());
         let home = home();
         let mut places: Vec<(String, PathBuf)> = vec![("Départ".into(), home.clone())];
@@ -923,6 +1040,7 @@ impl eframe::App for FinderApp {
             show_dock: self.show_dock,
             show_terminal: self.show_terminal,
             terminal_opacity: self.terminal_opacity,
+            glass: self.glass,
             show_hidden: self.show_hidden,
             dock: self.dock.as_ref().and_then(|d| serde_json::to_string(d).ok()),
             open_folders: self.open_folders.iter().cloned().collect(),
@@ -932,7 +1050,73 @@ impl eframe::App for FinderApp {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        if self.glass == GlassChoice::None {
+            visuals.panel_fill.to_normalized_gamma_f32()
+        } else {
+            [0.0; 4]
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        if self.glass != GlassChoice::None && !self.backdrop_applied {
+            self.backdrop_applied = true;
+            if let Some(name) = backdrop_name() {
+                if let Err(err) = pyegui_core::window::apply_backdrop(&*frame, name) {
+                    self.notice = Some(format!("Verre : {err}"));
+                }
+            }
+        }
+        self.draw(ui);
+        self.other_windows(ui.ctx());
+    }
+}
+
+impl FinderApp {
+    /// Opens the windows asked for and draws them; the closed ones are dropped
+    fn other_windows(&mut self, ctx: &egui::Context) {
+        if let Some(folder) = self.new_window.take() {
+            self.window_serial += 1;
+            let id = egui::ViewportId::from_hash_of(("finder-window", self.window_serial));
+            let window = self.new_window(ctx, folder);
+            self.windows.push((id, Box::new(window)));
+        }
+        let mut open = std::mem::take(&mut self.windows);
+        open.retain_mut(|(id, window)| {
+            let builder = egui::ViewportBuilder::default()
+                .with_title("Finder")
+                .with_inner_size([900.0, 600.0])
+                .with_min_inner_size([480.0, 320.0])
+                .with_transparent(true);
+            let builder = if MAC_TITLEBAR {
+                builder.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false)
+            } else {
+                builder
+            };
+            let mut keep = true;
+            ctx.show_viewport_immediate(*id, builder, |ui, _class| {
+                ui.push_id(*id, |ui| {
+                    // no native backdrop here: the window is filled
+                    let rect = ui.ctx().content_rect();
+                    ui.painter().rect_filled(rect, 0.0, style::glass_base(ui.visuals().dark_mode, None));
+                    window.draw(ui);
+                });
+                if ui.ctx().input(|i| i.viewport().close_requested()) {
+                    keep = false;
+                }
+            });
+            // a window opened from this one
+            if let Some(folder) = window.new_window.take() {
+                self.new_window = Some(folder);
+            }
+            keep
+        });
+        open.append(&mut self.windows);
+        self.windows = open;
+    }
+
+    /// The window: its panels and its views
+    fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.poll_transfer();
         self.poll_activity();
@@ -941,11 +1125,17 @@ impl eframe::App for FinderApp {
             self.folder().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Finder".into()),
         ));
 
+        if self.custom_titlebar {
+            egui::Panel::top("titlebar").show_inside(ui, |ui| self.titlebar(ui));
+            edge_resize(&ctx);
+        }
         if self.show_sidebar {
             egui::Panel::left("sidebar").default_size(170.0).min_size(130.0).show_inside(ui, |ui| self.sidebar(ui));
         }
         egui::Panel::top("toolbar").show_inside(ui, |ui| {
-            ui.add_space(4.0);
+            let strip = ui.max_rect();
+            ui.add_space(if MAC_TITLEBAR && !self.show_sidebar { 26.0 } else { 4.0 });
+            drag_window(ui, strip);
             self.toolbar(ui);
             ui.add_space(2.0);
             self.path_bar(ui);
@@ -969,7 +1159,11 @@ impl eframe::App for FinderApp {
             });
         }
         let mut columns = 1;
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        let mut central = egui::Frame::central_panel(ui.style());
+        if let Some(fill) = style::surface_fill(ui.visuals(), style::Surface::Central) {
+            central = central.fill(fill);
+        }
+        egui::CentralPanel::default().frame(central).show_inside(ui, |ui| {
             if let Some(mut viewer) = self.viewer.take() {
                 if !viewer::show(&mut viewer, ui, &self.core) {
                     self.viewer = Some(viewer);
@@ -989,6 +1183,55 @@ impl eframe::App for FinderApp {
         self.modals(&ctx);
         if self.transfer.running() > 0 {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+}
+
+/// macOS: the content goes under the title bar, with the buttons of the system over the sidebar
+pub const MAC_TITLEBAR: bool = cfg!(target_os = "macos");
+
+/// A strip of the window that moves it when it is dragged (double click: maximize)
+fn drag_window(ui: &mut egui::Ui, rect: egui::Rect) {
+    let response = ui.interact(rect, ui.id().with("drag-window"), egui::Sense::click_and_drag());
+    if response.double_clicked() {
+        let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+    } else if response.drag_started() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+}
+
+/// Resize a window without a system title bar by its edges
+fn edge_resize(ctx: &egui::Context) {
+    use egui::viewport::ResizeDirection as D;
+    let (rect, pos, pressed, maximized) =
+        ctx.input(|i| (i.viewport_rect(), i.pointer.hover_pos(), i.pointer.primary_pressed(), i.viewport().maximized.unwrap_or(false)));
+    let Some(pos) = pos else { return };
+    if maximized {
+        return;
+    }
+    let m = 5.0;
+    let (l, r, t, b) = (pos.x < rect.left() + m, pos.x > rect.right() - m, pos.y < rect.top() + m, pos.y > rect.bottom() - m);
+    let dir = match (l, r, t, b) {
+        (true, _, true, _) => Some(D::NorthWest),
+        (_, true, true, _) => Some(D::NorthEast),
+        (true, _, _, true) => Some(D::SouthWest),
+        (_, true, _, true) => Some(D::SouthEast),
+        (true, ..) => Some(D::West),
+        (_, true, ..) => Some(D::East),
+        (_, _, true, _) => Some(D::North),
+        (_, _, _, true) => Some(D::South),
+        _ => None,
+    };
+    if let Some(dir) = dir {
+        ctx.set_cursor_icon(match dir {
+            D::North | D::South => egui::CursorIcon::ResizeVertical,
+            D::East | D::West => egui::CursorIcon::ResizeHorizontal,
+            D::NorthWest | D::SouthEast => egui::CursorIcon::ResizeNwSe,
+            D::NorthEast | D::SouthWest => egui::CursorIcon::ResizeNeSw,
+        });
+        if pressed {
+            ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
         }
     }
 }

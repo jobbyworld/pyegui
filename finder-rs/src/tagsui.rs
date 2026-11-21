@@ -204,3 +204,46 @@ pub fn recent_pane(app: &mut FinderApp, ui: &mut egui::Ui) {
         app.reveal_path(&path);
     }
 }
+
+/// What the "Étiquettes" submenu of the context menu shows: every tag, and whether all the items
+/// selected own it. Only read while a menu is open
+pub fn menu_tags(app: &FinderApp, ctx: &egui::Context) -> Vec<(Tag, bool)> {
+    let Some(store) = &app.tags else { return Vec::new() };
+    if !egui::Popup::is_any_open(ctx) {
+        return Vec::new();
+    }
+    let selected = app.selected_paths();
+    let owned: Vec<_> = selected.iter().map(|p| store.own(p)).collect();
+    store
+        .all()
+        .into_iter()
+        .map(|tag| {
+            let all = !owned.is_empty() && owned.iter().all(|o| o.contains(&tag.id));
+            (tag, all)
+        })
+        .collect()
+}
+
+/// The submenu: a click puts the tag on the selection, or takes it off when all have it.
+/// Returns the tag toggled and whether it is now on
+pub fn menu(ui: &mut egui::Ui, tags: &[(Tag, bool)], enabled: bool) -> Option<(i64, bool)> {
+    let mut chosen = None;
+    ui.add_enabled_ui(enabled, |ui| {
+        ui.menu_button("🏷  Étiquettes", |ui| {
+            if tags.is_empty() {
+                ui.weak("Aucune étiquette");
+            }
+            for (tag, on) in tags {
+                ui.horizontal(|ui| {
+                    ui.add_space(tag.depth as f32 * 14.0);
+                    let text = RichText::new(format!("{} {}", if *on { "☑" } else { "☐" }, tag.name)).color(parse_color(&tag.color));
+                    if ui.button(text).clicked() {
+                        chosen = Some((tag.id, !*on));
+                        ui.close();
+                    }
+                });
+            }
+        });
+    });
+    chosen
+}

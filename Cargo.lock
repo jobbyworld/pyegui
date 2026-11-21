@@ -3959,8 +3959,11 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
  "pulldown-cmark",
+ "raw-window-handle",
  "usvg",
+ "window-vibrancy",
  "windows",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -23,6 +23,7 @@ struct Outcome {
     sort: Option<SortKey>,
     toggled: Option<PathBuf>,
     action: Option<usize>,
+    tag: Option<(i64, bool)>,
     blank_click: bool,
 }
 
@@ -53,6 +54,14 @@ impl Outcome {
         if let Some(action) = self.action {
             (ACTIONS[action].run)(app, ctx);
         }
+        if let Some((tag, on)) = self.tag {
+            let paths = app.selected_paths();
+            if let Some(store) = app.tags.as_mut() {
+                for path in &paths {
+                    if on { store.tag(path, tag) } else { store.untag(path, tag) }
+                }
+            }
+        }
     }
 }
 
@@ -70,6 +79,8 @@ pub fn list(app: &mut FinderApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let tree = app.view == ViewMode::Tree;
     let enabled = actions::enabled_flags(app);
+    let tag_menu = crate::tagsui::menu_tags(app, ui.ctx());
+    let has_selection = !app.selected.is_empty();
 
     let mut table = TableBuilder::new(ui)
         .striped(true)
@@ -155,6 +166,10 @@ pub fn list(app: &mut FinderApp, ui: &mut egui::Ui) {
                     if let Some(action) = actions::menu(ui, &enabled) {
                         out.action = Some(action);
                     }
+                    ui.separator();
+                    if let Some(change) = crate::tagsui::menu(ui, &tag_menu, has_selection) {
+                        out.tag = Some(change);
+                    }
                 });
             });
         });
@@ -172,6 +187,8 @@ pub fn icons(app: &mut FinderApp, ui: &mut egui::Ui) -> usize {
     let reveal = app.reveal.take();
     let ctx = ui.ctx().clone();
     let enabled = actions::enabled_flags(app);
+    let tag_menu = crate::tagsui::menu_tags(app, ui.ctx());
+    let has_selection = !app.selected.is_empty();
     let mut out = Outcome::default();
 
     let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
@@ -217,6 +234,10 @@ pub fn icons(app: &mut FinderApp, ui: &mut egui::Ui) -> usize {
                     response.context_menu(|ui| {
                         if let Some(action) = actions::menu(ui, &enabled) {
                             out.action = Some(action);
+                        }
+                        ui.separator();
+                        if let Some(change) = crate::tagsui::menu(ui, &tag_menu, has_selection) {
+                            out.tag = Some(change);
                         }
                     });
                 }
