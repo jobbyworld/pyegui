@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::actions;
 use crate::dock::{self, Pane};
 use crate::glyphs;
+use pyegui_core::path::{breadcrumb, combo, BreadcrumbOptions, ComboOptions};
 use crate::model::{self, History, SortKey};
 use crate::tagstore::{How, TagStore};
 use crate::tagsui::{self, TagEdit};
@@ -781,7 +782,7 @@ impl FinderApp {
 
     /// The top band, like the toolbar of examples/finder.py: the navigation and the name of the
     /// folder at the left, the free space moves the window, the view, the search, the terminal and
-    /// the panes at the right
+    /// the panes at the right (each group in a segmented control)
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         let outer = ui.max_rect();
         let band = egui::Rect::from_min_size(outer.min, egui::vec2(outer.width(), TOP_H));
@@ -791,6 +792,8 @@ impl FinderApp {
         let search_width = (row - TOOLBAR_FIXED).min(SEARCH_WIDTH);
         let show_search = search_width >= SEARCH_MIN;
         let show_view = row >= TOOLBAR_FIXED - 120.0;
+        // what the right part takes, to keep the name of the folder out of it
+        let right_part = 2.0 * 34.0 + 12.0 + if show_search { search_width + 8.0 } else { 0.0 } + if show_view { 3.0 * 32.0 + 8.0 } else { 0.0 };
         let height = band.height();
         ui.allocate_ui_with_layout(egui::vec2(row, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             if MAC_TITLEBAR && !self.show_sidebar {
@@ -800,29 +803,38 @@ impl FinderApp {
                 self.sidebar_button(ui);
                 ui.add_space(6.0);
             }
-            if glyphs::button(ui, glyphs::CHEVRON_LEFT, 16.0, false, "Précédent (⌘[)").clicked() && self.history.can_back() {
-                self.back();
-            }
-            if glyphs::button(ui, glyphs::CHEVRON_RIGHT, 16.0, false, "Suivant (⌘])").clicked() && self.history.can_forward() {
-                self.forward();
-            }
             let parent = self.folder().parent().map(Path::to_path_buf);
-            let up = ui.add_enabled(parent.is_some(), glyphs::button_of(ui, glyphs::CHEVRON_UP, 16.0, false)).on_hover_text("Dossier parent (⌘↑)");
-            if up.clicked() {
-                if let Some(p) = parent {
-                    self.go(p);
+            let nav = glyphs::segmented(ui, "nav", 16.0, &[
+                glyphs::Cell { glyph: glyphs::CHEVRON_LEFT, on: false, enabled: self.history.can_back(), tip: "Précédent (⌘[)" },
+                glyphs::Cell { glyph: glyphs::CHEVRON_RIGHT, on: false, enabled: self.history.can_forward(), tip: "Suivant (⌘])" },
+                glyphs::Cell { glyph: glyphs::CHEVRON_UP, on: false, enabled: parent.is_some(), tip: "Dossier parent (⌘↑)" },
+            ]);
+            match nav.clicked {
+                Some(0) => self.back(),
+                Some(1) => self.forward(),
+                Some(2) => {
+                    if let Some(p) = parent {
+                        self.go(p);
+                    }
                 }
+                _ => {}
             }
-            ui.add_space(6.0);
-            self.folder_name(ui);
-            // the right part, from the edge: the panes, the terminal, the search, the view
+            ui.add_space(8.0);
+            let room = (ui.available_width() - right_part).max(60.0);
+            self.folder_name(ui, room);
+            // the right part, from the edge: the terminal and the panes, the search, the view
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(4.0);
-                let panes = glyphs::button(ui, glyphs::PANES, 18.0, self.show_dock, "Afficher / masquer les volets (clic droit : gérer)");
-                if panes.clicked() {
-                    self.show_dock = !self.show_dock;
+                let toggles = glyphs::segmented(ui, "panes", 18.0, &[
+                    glyphs::cell(glyphs::TERMINAL, self.show_terminal, "Terminal (⌘T)"),
+                    glyphs::cell(glyphs::PANES, self.show_dock, "Afficher / masquer les volets (clic droit : gérer)"),
+                ]);
+                match toggles.clicked {
+                    Some(0) => self.show_terminal = !self.show_terminal,
+                    Some(1) => self.show_dock = !self.show_dock,
+                    _ => {}
                 }
-                panes.context_menu(|ui| {
+                toggles.responses[1].clone().context_menu(|ui| {
                     if ui.checkbox(&mut self.show_dock, "Afficher / Masquer").clicked() {
                         ui.close();
                     }
@@ -831,43 +843,53 @@ impl FinderApp {
                         dock::menu(tree, ui);
                     }
                 });
-                if glyphs::button(ui, glyphs::TERMINAL, 18.0, self.show_terminal, "Terminal (⌘T)").clicked() {
-                    self.show_terminal = !self.show_terminal;
-                }
+                ui.add_space(8.0);
                 if show_search {
                     ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("Rechercher").desired_width(search_width));
+                    ui.add_space(8.0);
                 }
                 if show_view {
-                    // left to right: tree, list, grid; drawn from the right
-                    for (glyph, mode, tip) in [(glyphs::GRID, ViewMode::Icons, "Icônes (⌘2)"), (glyphs::LIST, ViewMode::List, "Liste (⌘1)"), (glyphs::TREE, ViewMode::Tree, "Arbre (⌘3)")] {
-                        if glyphs::button(ui, glyph, 16.0, self.view == mode, tip).clicked() {
-                            self.view = mode;
-                        }
+                    let views = glyphs::segmented(ui, "view", 16.0, &[
+                        glyphs::cell(glyphs::TREE, self.view == ViewMode::Tree, "Arbre (⌘3)"),
+                        glyphs::cell(glyphs::LIST, self.view == ViewMode::List, "Liste (⌘1)"),
+                        glyphs::cell(glyphs::GRID, self.view == ViewMode::Icons, "Icônes (⌘2)"),
+                    ]);
+                    match views.clicked {
+                        Some(0) => self.view = ViewMode::Tree,
+                        Some(1) => self.view = ViewMode::List,
+                        Some(2) => self.view = ViewMode::Icons,
+                        _ => {}
                     }
                 }
             });
         });
     }
 
-    /// The name of the folder with its icon; a click opens the menu of its parent folders
-    fn folder_name(&mut self, ui: &mut egui::Ui) {
+    /// The name of the folder with its icon, in a combo: a click opens the list of its parent folders
+    fn folder_name(&mut self, ui: &mut egui::Ui, room: f32) {
         let folder = self.folder().to_path_buf();
-        if let Some(uri) = icons::icon_uri(ui.ctx(), &folder.to_string_lossy(), 15.0) {
-            ui.add(egui::Image::new(uri).fit_to_exact_size(egui::vec2(15.0, 15.0)));
+        let options = ComboOptions { size: 15.0, max_width: Some(room), always_icon: true, ..Default::default() };
+        let out = combo(ui, &folder, &options);
+        for (path, response) in out.hits {
+            response.context_menu(|ui| self.path_menu(ui, &path));
         }
-        let name = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "/".into());
-        let mut target = None;
-        ui.menu_button(RichText::new(name).strong(), |ui| {
-            for parent in folder.ancestors().skip(1) {
-                let label = parent.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "/".into());
-                if ui.button(label).clicked() {
-                    target = Some(parent.to_path_buf());
-                    ui.close();
-                }
-            }
-        });
-        if let Some(path) = target {
-            self.go(path);
+        if let Some(path) = out.clicked {
+            self.go(PathBuf::from(path));
+        }
+    }
+
+    /// The menu of a folder of the path bar or of the title
+    fn path_menu(&mut self, ui: &mut egui::Ui, path: &str) {
+        let name = Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
+        ui.label(RichText::new(name).strong());
+        ui.separator();
+        if ui.button("Ouvrir").clicked() {
+            self.reveal_path(Path::new(path));
+            ui.close();
+        }
+        if ui.button("Copier le chemin").clicked() {
+            ui.ctx().copy_text(path.to_string());
+            ui.close();
         }
     }
 
@@ -875,7 +897,7 @@ impl FinderApp {
     fn bottom_bar(&mut self, ui: &mut egui::Ui) {
         let row = ui.max_rect();
         let height = BOTTOM_H;
-        let right_width = 330.0_f32.min(row.width() * 0.5);
+        let right_width = 380.0_f32.min(row.width() * 0.5);
         ui.allocate_ui_with_layout(egui::vec2(row.width(), height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             let left = egui::vec2((row.width() - right_width).max(60.0), height);
             ui.allocate_ui_with_layout(left, egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -890,15 +912,22 @@ impl FinderApp {
         });
     }
 
-    /// Light, dark or the system theme, and the menu of the look
+    /// Light, dark or the system theme (a segmented control), and the menu of the look
     fn theme_control(&mut self, ui: &mut egui::Ui) {
         let before = self.theme;
         let (response, _) = egui::containers::menu::MenuButton::from_button(glyphs::button_of(ui, glyphs::GEAR, 14.0, false)).ui(ui, |ui| self.appearance_menu(ui));
         response.on_hover_text("Apparence");
-        for (glyph, choice, tip) in [(glyphs::THEME_SYSTEM, ThemeChoice::System, "Thème du système"), (glyphs::MOON, ThemeChoice::Dark, "Sombre"), (glyphs::SUN, ThemeChoice::Light, "Clair")] {
-            if glyphs::button(ui, glyph, 14.0, self.theme == choice, tip).clicked() {
-                self.theme = choice;
-            }
+        ui.add_space(4.0);
+        let choice = glyphs::segmented(ui, "theme", 14.0, &[
+            glyphs::cell(glyphs::SUN, self.theme == ThemeChoice::Light, "Clair"),
+            glyphs::cell(glyphs::MOON, self.theme == ThemeChoice::Dark, "Sombre"),
+            glyphs::cell(glyphs::THEME_SYSTEM, self.theme == ThemeChoice::System, "Thème du système"),
+        ]);
+        match choice.clicked {
+            Some(0) => self.theme = ThemeChoice::Light,
+            Some(1) => self.theme = ThemeChoice::Dark,
+            Some(2) => self.theme = ThemeChoice::System,
+            _ => {}
         }
         if before != self.theme {
             self.apply_theme(ui.ctx());
@@ -944,41 +973,38 @@ impl FinderApp {
         ui.checkbox(&mut self.show_terminal, "Afficher le terminal (⌘T)");
     }
 
+    /// The path, with the breadcrumb widget of pyegui: the folders down to the selected item, the
+    /// parents shortened when room is missing; "…" turns it into a field to type a path
     fn path_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            if let Some(mut text) = self.path_text.take() {
-                let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY));
-                edit.request_focus();
-                if edit.lost_focus() {
-                    if ui.input(|i| i.key_pressed(Key::Enter)) {
-                        self.go(expand(Path::new(text.trim())));
-                    }
-                } else {
-                    self.path_text = Some(text);
+        if let Some(mut text) = self.path_text.take() {
+            let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width().max(100.0)));
+            edit.request_focus();
+            if edit.lost_focus() {
+                if ui.input(|i| i.key_pressed(Key::Enter)) {
+                    self.go(expand(Path::new(text.trim())));
                 }
-                return;
+            } else if ui.input(|i| i.key_pressed(Key::Escape)) {
+                // abandoned
+            } else {
+                self.path_text = Some(text);
             }
-            let folder = self.folder().to_path_buf();
-            let mut target = None;
-            let mut accumulated = PathBuf::new();
-            for component in folder.components() {
-                accumulated.push(component);
-                let name = match component {
-                    std::path::Component::RootDir => "/".to_string(),
-                    other => other.as_os_str().to_string_lossy().into_owned(),
-                };
-                if ui.add(egui::Button::new(name).frame(false)).clicked() {
-                    target = Some(accumulated.clone());
-                }
-                ui.label("›");
-            }
-            if ui.add(egui::Button::new("✎").frame(false)).on_hover_text("Saisir un chemin").clicked() {
-                self.path_text = Some(folder.to_string_lossy().into_owned());
-            }
-            if let Some(t) = target {
-                self.go(t);
-            }
-        });
+            return;
+        }
+        let here = match self.selected_paths().as_slice() {
+            [one] => one.clone(),
+            _ => self.folder().to_path_buf(),
+        };
+        let options = BreadcrumbOptions { max_width: (ui.available_width() - EDIT_BUTTON).max(40.0), ..Default::default() };
+        let out = breadcrumb(ui, &here, &options);
+        for (path, response) in out.hits {
+            response.context_menu(|ui| self.path_menu(ui, &path));
+        }
+        if let Some(path) = out.clicked {
+            self.reveal_path(Path::new(&path));
+        }
+        if ui.add(egui::Button::new("…").small().frame(false)).on_hover_text("Saisir un chemin").clicked() {
+            self.path_text = Some(self.folder().to_string_lossy().into_owned());
+        }
     }
 
     /// The title bar drawn by the app (no system one): the title, and the buttons of the window
@@ -1005,12 +1031,40 @@ impl FinderApp {
         drag_window(ui, strip);
     }
 
+    /// The tags of the store, read once per version of the store
+    pub fn tag_list(&self) -> Vec<crate::tagstore::Tag> {
+        let Some(store) = &self.tags else { return Vec::new() };
+        let mut known = self.all_tags.borrow_mut();
+        if known.0 != store.version + 1 {
+            *known = (store.version + 1, store.all());
+        }
+        known.1.clone()
+    }
+
+    /// One row of the sidebar: the icon in the accent color (white when selected) and the name
+    fn place_row(&self, ui: &mut egui::Ui, glyph: glyphs::Glyph, name: &str, on: bool) -> egui::Response {
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), egui::Sense::click());
+        let accent = ACCENTS[self.accent].1;
+        if on {
+            ui.painter().rect_filled(rect, 7.0, ui.visuals().selection.bg_fill);
+        } else if response.hovered() {
+            ui.painter().rect_filled(rect, 7.0, ui.visuals().widgets.hovered.weak_bg_fill);
+        }
+        let tint = if on { Color32::WHITE } else { accent };
+        glyphs::image(glyph, 16.0, tint).paint_at(ui, egui::Rect::from_center_size(egui::pos2(rect.left() + 16.0, rect.center().y), egui::vec2(16.0, 16.0)));
+        let color = if on { Color32::WHITE } else { ui.visuals().text_color() };
+        ui.painter().text(egui::pos2(rect.left() + 32.0, rect.center().y), egui::Align2::LEFT_CENTER, name, egui::TextStyle::Body.resolve(ui.style()), color);
+        response
+    }
+
+    /// The sidebar of examples/finder.py: a top band (the window buttons and the toggle), the favorites,
+    /// the locations and the tags in a scroll area, a bottom band with the free space of the drive
     fn sidebar(&mut self, ui: &mut egui::Ui) {
         // the panel takes the width it was given (or dragged to): without this it shrinks to its content
         ui.set_min_width(ui.available_width());
         // the top band, as high as the toolbar: the window buttons are over it, the whole band moves the window
         let outer = ui.max_rect();
-        let width = (ui.available_width()).max(60.0);
+        let width = ui.available_width().max(60.0);
         drag_window(ui, egui::Rect::from_min_size(outer.min, egui::vec2(width, TOP_H)));
         ui.horizontal(|ui| {
             ui.set_height(TOP_H);
@@ -1019,39 +1073,84 @@ impl FinderApp {
             }
             self.sidebar_button(ui);
         });
-        ui.label(RichText::new("Favoris").weak().small());
-        let home = home();
-        let mut places: Vec<(String, PathBuf)> = vec![("Départ".into(), home.clone())];
-        for (label, name) in [
-            ("Bureau", "Desktop"),
-            ("Documents", "Documents"),
-            ("Téléchargements", "Downloads"),
-            ("Images", "Pictures"),
-            ("Musique", "Music"),
-            ("Vidéos", if cfg!(target_os = "macos") { "Movies" } else { "Videos" }),
-        ] {
-            let path = home.join(name);
-            if path.is_dir() {
-                places.push((label.into(), path));
+        let folder = self.folder().to_path_buf();
+        egui::Panel::bottom("sidebar_bottom").exact_size(BOTTOM_H).frame(egui::Frame::NONE).show(ui, |ui| {
+            let anchor = folder.ancestors().last().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("/"));
+            if let Some(free) = free_space(&anchor) {
+                ui.horizontal_centered(|ui| {
+                    ui.add_space(4.0);
+                    ui.add(glyphs::image(glyphs::DRIVE, 16.0, ui.visuals().text_color()));
+                    ui.weak(format!("{:.0} Go libres", free as f64 / 1e9));
+                });
             }
-        }
-        if cfg!(target_os = "macos") {
-            places.push(("Applications".into(), "/Applications".into()));
-        }
-        places.push(("Racine".into(), if cfg!(windows) { "C:\\".into() } else { "/".into() }));
-        let ctx = ui.ctx().clone();
-        for (label, path) in places {
-            let current = self.folder() == path;
-            ui.horizontal(|ui| {
-                if let Some(uri) = icons::icon_uri(&ctx, &path.to_string_lossy(), 18.0) {
-                    ui.add(egui::Image::new(uri).fit_to_exact_size(egui::vec2(18.0, 18.0)));
+        });
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.label(RichText::new("Favoris").weak().small());
+            let home = home();
+            let mut places: Vec<(glyphs::Glyph, String, PathBuf)> = vec![(glyphs::HOME, home.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Départ".into()), home.clone())];
+            for (glyph, label, name) in [
+                (glyphs::DESKTOP, "Bureau", "Desktop"),
+                (glyphs::DOCUMENT, "Documents", "Documents"),
+                (glyphs::DOWNLOAD, "Téléchargements", "Downloads"),
+                (glyphs::IMAGE, "Images", "Pictures"),
+                (glyphs::FOLDER, "Musique", "Music"),
+                (glyphs::FOLDER, "Vidéos", if cfg!(target_os = "macos") { "Movies" } else { "Videos" }),
+            ] {
+                let path = home.join(name);
+                if path.is_dir() {
+                    places.push((glyph, label.into(), path));
                 }
-                let response = ui.selectable_label(current, label);
-                if response.clicked() {
-                    self.go(path.clone());
+            }
+            if cfg!(target_os = "macos") {
+                places.push((glyphs::FOLDER, "Applications".into(), "/Applications".into()));
+            }
+            for (glyph, label, path) in places {
+                if self.place_row(ui, glyph, &label, folder == path).clicked() {
+                    self.go(path);
                 }
-            });
-        }
+            }
+            ui.add_space(12.0);
+            ui.label(RichText::new("Emplacements").weak().small());
+            let drives: Vec<(String, PathBuf)> = if cfg!(windows) {
+                ('A'..='Z').map(|c| (format!("{c}:"), PathBuf::from(format!("{c}:\\")))).filter(|(_, p)| p.is_dir()).collect()
+            } else {
+                vec![(root_name(), PathBuf::from("/"))]
+            };
+            for (name, path) in drives {
+                if self.place_row(ui, glyphs::DRIVE, &name, folder == path).clicked() {
+                    self.go(path);
+                }
+            }
+            ui.add_space(12.0);
+            ui.label(RichText::new("Étiquettes").weak().small());
+            let tags = self.tag_list();
+            if tags.is_empty() {
+                ui.weak("Aucune étiquette");
+            }
+            let mut filter = None;
+            for tag in &tags {
+                ui.horizontal(|ui| {
+                    ui.add_space(tag.depth as f32 * 14.0);
+                    let on = self.tag_filter == Some(tag.id);
+                    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click());
+                    if on {
+                        ui.painter().rect_filled(rect, 7.0, ui.visuals().selection.bg_fill);
+                    } else if response.hovered() {
+                        ui.painter().rect_filled(rect, 7.0, ui.visuals().widgets.hovered.weak_bg_fill);
+                    }
+                    ui.painter().circle_filled(egui::pos2(rect.left() + 14.0, rect.center().y), 5.0, tagsui::parse_color(&tag.color));
+                    let color = if on { Color32::WHITE } else { ui.visuals().text_color() };
+                    ui.painter().text(egui::pos2(rect.left() + 28.0, rect.center().y), egui::Align2::LEFT_CENTER, &tag.name, egui::TextStyle::Body.resolve(ui.style()), color);
+                    if response.clicked() {
+                        filter = Some(tag.id);
+                    }
+                });
+            }
+            if let Some(id) = filter {
+                let next = if self.tag_filter == Some(id) { None } else { Some(id) };
+                self.set_tag_filter(next);
+            }
+        });
     }
 
     pub fn preview(&mut self, ui: &mut egui::Ui) {
@@ -1328,9 +1427,34 @@ impl FinderApp {
 }
 
 /// macOS: the content goes under the title bar, with the buttons of the system over the sidebar
+/// The name of the volume of the root of the disk
+fn root_name() -> String {
+    if cfg!(target_os = "macos") { "Macintosh HD".into() } else { "/".into() }
+}
+
+/// The free space of the drive of a folder, read every few seconds (not at every frame)
+fn free_space(path: &Path) -> Option<u64> {
+    thread_local! {
+        static CACHE: std::cell::RefCell<Option<(PathBuf, std::time::Instant, Option<u64>)>> = Default::default();
+    }
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if let Some((p, when, value)) = c.as_ref() {
+            if p == path && when.elapsed().as_secs() < 10 {
+                return *value;
+            }
+        }
+        let value = fs4::available_space(path).ok();
+        *c = Some((path.to_path_buf(), std::time::Instant::now(), value));
+        value
+    })
+}
+
 /// The heights of the top and bottom bands, in the sidebar and in the body
 const TOP_H: f32 = 52.0;
 const BOTTOM_H: f32 = 44.0;
+/// What the "…" button that ends the path takes, with its spacing
+const EDIT_BUTTON: f32 = 40.0;
 /// What the toolbar keeps for the navigation, the name, the view and the panes
 const TOOLBAR_FIXED: f32 = 560.0;
 /// The search field: its widest, and the least worth showing

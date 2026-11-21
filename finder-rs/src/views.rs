@@ -239,7 +239,8 @@ pub fn icons(app: &mut FinderApp, ui: &mut egui::Ui) -> usize {
                     job.wrap = egui::text::TextWrapping { max_width: TILE_W - 12.0, max_rows: 2, break_anywhere: true, overflow_character: Some('…') };
                     job.halign = Align::Center;
                     let galley = ui.painter().layout_job(job);
-                    let pos = egui::pos2(rect.center().x - galley.size().x / 2.0, rect.top() + 12.0 + ICON + 6.0);
+                    // the galley is centered by its own layout: put the middle of what it drew on the middle of the tile
+                    let pos = egui::pos2(rect.center().x - galley.rect.center().x, rect.top() + 12.0 + ICON + 6.0);
                     ui.painter().galley(pos, galley, color);
                     if response.double_clicked() {
                         out.opened = Some(index);

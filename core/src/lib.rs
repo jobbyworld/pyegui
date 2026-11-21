@@ -13,6 +13,7 @@ pub mod transfer;
 pub mod style;
 pub mod window;
 pub mod icons;
+pub mod path;
 pub mod terminal;
 pub mod markdown;
 #[cfg(feature = "pdf")]
