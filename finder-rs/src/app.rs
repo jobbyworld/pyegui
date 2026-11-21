@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use crate::actions::{self, ACTIONS};
 use crate::dock::{self, Pane};
 use crate::model::{self, History, SortKey};
+use crate::tagstore::{How, TagStore};
+use crate::tagsui::{self, TagEdit};
 use crate::terminals::{self, Terminals};
 use crate::viewer::{self, Viewer};
 use crate::views;
@@ -96,7 +98,7 @@ pub struct FinderApp {
     pub search: String,
     /// the items shown, sorted and filtered; made again when the folder, the sort, the filter or the disk change
     pub items: Vec<Entry>,
-    items_key: Option<(PathBuf, SortKey, bool, bool, String, u64, bool, u64)>,
+    items_key: Option<(PathBuf, SortKey, bool, bool, String, u64, bool, u64, Option<i64>, u64)>,
     /// the depth of each item (0 except in the tree view)
     pub depths: Vec<usize>,
     pub open_folders: std::collections::BTreeSet<PathBuf>,
@@ -118,6 +120,13 @@ pub struct FinderApp {
     /// what the system told about the disk, newest last
     pub activity: std::collections::VecDeque<String>,
     select_after: Vec<PathBuf>,
+    pub tags: Option<TagStore>,
+    pub search_state: crate::search::Search,
+    pub tag_filter: Option<i64>,
+    pub tag_edit: Option<TagEdit>,
+    /// the tags of the rows shown, by path, until the store changes
+    tag_cache: std::cell::RefCell<(u64, std::collections::HashMap<PathBuf, std::rc::Rc<Vec<(Color32, String, How)>>>)>,
+    opened_cache: std::cell::RefCell<(u64, std::collections::HashMap<String, f64>)>,
     viewer: Option<Viewer>,
     preview_pdf: Option<(PathBuf, pyegui_core::pdf_view::PdfDocument)>,
 }
@@ -172,6 +181,12 @@ impl FinderApp {
             dock: Some(dock::restore(saved.dock.as_deref())),
             activity: Default::default(),
             select_after: Vec::new(),
+            tags: TagStore::open(None).ok(),
+            search_state: Default::default(),
+            tag_filter: None,
+            tag_edit: None,
+            tag_cache: Default::default(),
+            opened_cache: Default::default(),
             viewer: None,
             preview_pdf: None,
         };
@@ -204,6 +219,9 @@ impl FinderApp {
 
     /// Opens a folder here, a file with the application of the system
     pub fn open(&mut self, path: &Path) {
+        if let Some(store) = self.tags.as_mut() {
+            store.opened(path);
+        }
         if path.is_dir() && !path.extension().is_some_and(|x| x == "app") {
             self.go(path.to_path_buf());
         } else if let Some(viewer) = Viewer::open(path, &self.core) {
@@ -238,13 +256,27 @@ impl FinderApp {
             self.open_folders.hash(&mut h);
             h.finish()
         };
-        let key = (self.folder().to_path_buf(), self.sort_key, self.ascending, self.show_hidden, self.search.clone(), version, tree, open_hash);
+        let tags_version = self.tags.as_ref().map_or(0, |t| t.version);
+        let key = (self.folder().to_path_buf(), self.sort_key, self.ascending, self.show_hidden, self.search.clone(), version, tree, open_hash, self.tag_filter, if self.tag_filter.is_some() { tags_version } else { 0 });
         if self.items_key.as_ref() == Some(&key) {
             return;
         }
         let mut items = Vec::new();
         let mut depths = Vec::new();
-        self.collect(ctx, &self.folder().to_path_buf(), 0, tree, &mut items, &mut depths);
+        if let Some(tag) = self.tag_filter {
+            // the items that carry the tag (or a tag under it), wherever they are
+            let needle = self.search.to_lowercase();
+            let paths = self.tags.as_ref().map(|t| t.tagged_with(tag)).unwrap_or_default();
+            items = paths
+                .iter()
+                .filter_map(|p| pyegui_core::watcher::entry(Path::new(p)))
+                .filter(|e| (self.show_hidden || !e.hidden) && (needle.is_empty() || e.name.to_lowercase().contains(&needle)))
+                .collect();
+            model::sort_entries(&mut items, self.sort_key, self.ascending);
+            depths = vec![0; items.len()];
+        } else {
+            self.collect(ctx, &self.folder().to_path_buf(), 0, tree, &mut items, &mut depths);
+        }
         self.items = items;
         self.depths = depths;
         // what disappeared from the disk is no longer selected
@@ -280,6 +312,61 @@ impl FinderApp {
                 self.collect(ctx, &path, depth + 1, tree, items, depths);
             }
         }
+    }
+
+    pub fn set_tag_filter(&mut self, tag: Option<i64>) {
+        self.tag_filter = tag;
+        self.selected.clear();
+        self.anchor = None;
+        self.items_key = None;
+    }
+
+    /// Goes to the folder of an item and selects it
+    pub fn reveal_path(&mut self, path: &Path) {
+        if path.is_dir() {
+            self.set_tag_filter(None);
+            self.go(path.to_path_buf());
+            return;
+        }
+        if let Some(parent) = path.parent() {
+            self.set_tag_filter(None);
+            if parent != self.folder() {
+                self.go(parent.to_path_buf());
+            }
+            self.select_after = vec![path.to_path_buf()];
+            self.items_key = None;
+        }
+    }
+
+    /// The tags of an item to draw: the color, the name and where the tag comes from. Kept until the store changes
+    pub fn row_tags(&self, path: &Path) -> std::rc::Rc<Vec<(Color32, String, How)>> {
+        let Some(store) = &self.tags else { return Default::default() };
+        let mut cache = self.tag_cache.borrow_mut();
+        if cache.0 != store.version {
+            *cache = (store.version, Default::default());
+        }
+        if let Some(found) = cache.1.get(path) {
+            return found.clone();
+        }
+        let effective = store.effective(path);
+        let all = store.all();
+        let mut tags: Vec<(Color32, String, How)> = all
+            .iter()
+            .filter_map(|t| effective.get(&t.id).map(|how| (tagsui::parse_color(&t.color), t.name.clone(), *how)))
+            .collect();
+        tags.sort_by_key(|(_, _, how)| match how { How::Own => 0, How::Folder => 1, How::Parent => 2 });
+        let value = std::rc::Rc::new(tags);
+        cache.1.insert(path.to_path_buf(), value.clone());
+        value
+    }
+
+    pub fn opened_at(&self, path: &Path) -> Option<std::time::SystemTime> {
+        let store = self.tags.as_ref()?;
+        let mut cache = self.opened_cache.borrow_mut();
+        if cache.0 != store.version || cache.1.is_empty() {
+            *cache = (store.version, store.opened_dates());
+        }
+        cache.1.get(&crate::tagstore::key(path)).map(|t| std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(*t))
     }
 
     pub fn toggle_folder(&mut self, path: &Path) {
@@ -386,6 +473,35 @@ impl FinderApp {
         }
     }
 
+    /// Files dropped on the window are copied or moved into the folder shown, by the rules of the file
+    /// managers (same disk: move, Option/Ctrl copies; two disks: copy, Cmd/Shift moves)
+    fn drops(&mut self, ctx: &egui::Context) {
+        let hovered: Vec<PathBuf> = ctx.input(|i| i.raw.hovered_files.iter().filter_map(|f| f.path.clone()).collect());
+        let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
+        let modifiers = ctx.input(|i| i.modifiers);
+        let held = (modifiers.shift, modifiers.ctrl, modifiers.alt, modifiers.command);
+        let folder = self.folder().to_path_buf();
+        if !hovered.is_empty() {
+            let operation = pyegui_core::transfer::drop_operation_for(held, &hovered, &folder);
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop-hint")));
+            let screen = ctx.content_rect();
+            painter.rect_filled(screen, 0.0, Color32::from_black_alpha(110));
+            painter.text(
+                screen.center(),
+                egui::Align2::CENTER_CENTER,
+                format!("Déposer pour {} dans « {} »", if operation == "move" { "déplacer" } else { "copier" }, folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
+                egui::FontId::proportional(20.0),
+                Color32::WHITE,
+            );
+        }
+        if !dropped.is_empty() {
+            let operation = pyegui_core::transfer::drop_operation_for(held, &dropped, &folder);
+            // an item already in this folder is not moved onto itself
+            let sources: Vec<PathBuf> = dropped.into_iter().filter(|p| !(operation == "move" && p.parent() == Some(folder.as_path()))).collect();
+            self.transfer.start(sources, folder, operation == "move");
+        }
+    }
+
     fn poll_activity(&mut self) {
         for e in lock(&self.core).take_events() {
             if e.kind.starts_with("Access") {
@@ -400,6 +516,7 @@ impl FinderApp {
     }
 
     fn modals(&mut self, ctx: &egui::Context) {
+        tagsui::modal(self, ctx);
         if let Some((path, mut name)) = self.rename.take() {
             let mut keep = true;
             let mut apply = false;
@@ -867,6 +984,7 @@ impl eframe::App for FinderApp {
                 ViewMode::Icons => views::icons(self, ui),
             };
         });
+        self.drops(&ctx);
         self.keyboard(&ctx, columns);
         self.modals(&ctx);
         if self.transfer.running() > 0 {

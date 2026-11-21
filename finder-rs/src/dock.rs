@@ -14,9 +14,12 @@ pub enum Pane {
     Actions,
     Appearance,
     Activity,
+    Tags,
+    Recent,
+    Search,
 }
 
-pub const PANES: [Pane; 4] = [Pane::Preview, Pane::Actions, Pane::Appearance, Pane::Activity];
+pub const PANES: [Pane; 7] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::Recent, Pane::Search, Pane::Appearance, Pane::Activity];
 
 impl Pane {
     pub fn title(self) -> &'static str {
@@ -25,6 +28,9 @@ impl Pane {
             Pane::Actions => "Actions",
             Pane::Appearance => "Apparence",
             Pane::Activity => "Activités",
+            Pane::Tags => "Étiquettes",
+            Pane::Recent => "Récents",
+            Pane::Search => "Recherche",
         }
     }
 }
@@ -57,6 +63,9 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
             Pane::Actions => actions_pane(self.app, ui),
             Pane::Appearance => self.app.appearance_menu(ui),
             Pane::Activity => activity_pane(self.app, ui),
+            Pane::Tags => crate::tagsui::pane(self.app, ui),
+            Pane::Recent => crate::tagsui::recent_pane(self.app, ui),
+            Pane::Search => crate::search::pane(self.app, ui),
         });
         UiResponse::None
     }

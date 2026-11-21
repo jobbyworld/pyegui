@@ -9,6 +9,7 @@ use pyegui_core::icons;
 use crate::actions::{self, ACTIONS};
 use crate::app::{FinderApp, ViewMode};
 use crate::model::{self, SortKey};
+use crate::tagsui;
 
 const ROW_HEIGHT: f32 = 24.0;
 const INDENT: f32 = 16.0;
@@ -78,7 +79,9 @@ pub fn list(app: &mut FinderApp, ui: &mut egui::Ui) {
         .column(Column::remainder().at_least(160.0).clip(true))
         .column(Column::initial(140.0).at_least(80.0))
         .column(Column::initial(80.0).at_least(60.0))
-        .column(Column::initial(140.0).at_least(80.0).clip(true));
+        .column(Column::initial(140.0).at_least(80.0).clip(true))
+        .column(Column::initial(90.0).at_least(40.0).clip(true))
+        .column(Column::initial(140.0).at_least(80.0));
     if let Some(row) = reveal {
         table = table.scroll_to_row(row, None);
     }
@@ -91,6 +94,12 @@ pub fn list(app: &mut FinderApp, ui: &mut egui::Ui) {
                     }
                 });
             }
+            header.col(|ui| {
+                ui.label(RichText::new("Étiquettes").strong());
+            });
+            header.col(|ui| {
+                ui.label(RichText::new("Dernière ouverture").strong());
+            });
         })
         .body(|body| {
             body.rows(ROW_HEIGHT, app.items.len(), |mut row| {
@@ -126,6 +135,12 @@ pub fn list(app: &mut FinderApp, ui: &mut egui::Ui) {
                 });
                 row.col(|ui| {
                     ui.add(egui::Label::new(RichText::new(model::kind_of(e)).weak()).truncate().selectable(false));
+                });
+                row.col(|ui| {
+                    tagsui::dots(ui, &app.row_tags(&e.path));
+                });
+                row.col(|ui| {
+                    ui.add(egui::Label::new(RichText::new(model::format_date(app.opened_at(&e.path))).weak()).selectable(false));
                 });
                 let response = row.response();
                 if response.double_clicked() {
