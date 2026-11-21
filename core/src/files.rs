@@ -15,7 +15,6 @@ use egui::{
 use egui_ltreeview::{Action, NodeBuilder, TreeViewBuilder, TreeViewState};
 
 use crate::columns::{self, hscroll_bar, hscroll_wheel, Cell, ColumnsState, DataType, Filter, HeaderOptions, Value, Zones};
-use crate::icons::icon_uri;
 use crate::watcher::{entry, expand, lock, natural_cmp, Core, Entry};
 
 /// What the system gives to the views for the drag and drop with the Finder: the pointer while
@@ -151,7 +150,7 @@ pub fn emoji(e: &Entry) -> &'static str {
 
 /// Paints the native icon of the entry, or an emoji where the platform gives none
 pub fn paint_icon(ui: &egui::Ui, e: &Entry, rect: Rect) {
-    match icon_uri(ui.ctx(), &e.path.to_string_lossy(), rect.width()) {
+    match crate::icons::entry_icon_uri(ui.ctx(), &e.path, e.is_dir, rect.width()) {
         Some(uri) => egui::Image::new(uri).paint_at(ui, rect),
         None => {
             ui.painter().text(
@@ -1611,7 +1610,7 @@ pub fn add_tree_nodes<'a>(
 ) {
     for node in nodes {
         let side = 16.0;
-        let uri = icon_uri(ctx, &node.id, side);
+        let uri = crate::icons::entry_icon_uri(ctx, &node.entry.path, node.entry.is_dir, side);
         let label = match uri {
             Some(_) => node.entry.name.clone(),
             None => format!("{}  {}", emoji(&node.entry), node.entry.name),

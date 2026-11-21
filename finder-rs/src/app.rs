@@ -20,7 +20,7 @@ use crate::tagstore::{How, TagStore};
 use crate::tagsui::{self, TagEdit};
 use crate::terminals::{self, Terminals};
 use crate::viewer::{self, Viewer};
-use crate::views;
+use crate::views::{self, Views};
 
 const STATE_KEY: &str = "finder-state";
 pub const ACCENTS: [(&str, Color32); 4] = [
@@ -135,16 +135,12 @@ pub struct FinderApp {
     terminals: Terminals,
     pub show_hidden: bool,
     pub search: String,
-    /// the items shown, sorted and filtered; made again when the folder, the sort, the filter or the disk change
+    /// the items shown at the last frame, in their order (what the views show: filters and sort included)
     pub items: Vec<Entry>,
-    items_key: Option<(PathBuf, SortKey, bool, bool, String, u64, bool, u64, Option<i64>, u64)>,
-    /// the depth of each item (0 except in the tree view)
-    pub depths: Vec<usize>,
+    /// the views of the folder (list, icons, tree): the file views of pyegui-core
+    pub views: Views,
     pub open_folders: std::collections::BTreeSet<PathBuf>,
     pub selected: HashSet<PathBuf>,
-    pub anchor: Option<usize>,
-    /// asks the view to scroll to the item the keyboard just selected
-    pub reveal: Option<usize>,
     path_text: Option<String>,
     pub preview_text: Option<(PathBuf, String)>,
     /// copied or cut paths (true: cut)
@@ -216,8 +212,11 @@ impl FinderApp {
             .or(saved.folder.filter(|p| p.is_dir()))
             .unwrap_or(home);
         let folder_for_terminal = folder.clone();
+        let core = default_core();
+        let views = Views::new(&core, &folder, saved.show_hidden);
+        views.open_in_tree(&saved.open_folders);
         let app = FinderApp {
-            core: default_core(),
+            core,
             history: History::new(folder),
             view: saved.view,
             theme: saved.theme,
@@ -240,12 +239,9 @@ impl FinderApp {
             show_hidden: saved.show_hidden,
             search: String::new(),
             items: Vec::new(),
-            items_key: None,
-            depths: Vec::new(),
+            views,
             open_folders: saved.open_folders.into_iter().collect(),
             selected: HashSet::new(),
-            anchor: None,
-            reveal: None,
             path_text: None,
             preview_text: None,
             clipboard: None,
@@ -294,7 +290,6 @@ impl FinderApp {
         self.tag_filter = None;
         self.viewer = None;
         self.selected.clear();
-        self.anchor = None;
         self.search.clear();
         self.path_text = None;
     }
@@ -340,71 +335,19 @@ impl FinderApp {
         }
     }
 
-    /// The folder listed, filtered and sorted (in the tree view, with the open folders below their
-    /// parent). Kept until something changes
-    fn refresh_items(&mut self, ctx: &egui::Context) {
-        let version = lock(&self.core).version();
-        let tree = self.view == ViewMode::Tree;
-        let open_hash = {
-            use std::hash::{Hash, Hasher};
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            self.open_folders.hash(&mut h);
-            h.finish()
-        };
-        let tags_version = self.tags.as_ref().map_or(0, |t| t.version);
-        let key = (self.folder().to_path_buf(), self.sort_key, self.ascending, self.show_hidden, self.search.clone(), version, tree, open_hash, self.tag_filter, if self.tag_filter.is_some() { tags_version } else { 0 });
-        if self.items_key.as_ref() == Some(&key) {
-            return;
-        }
-        let mut items = Vec::new();
-        let mut depths = Vec::new();
-        if let Some(tag) = self.tag_filter {
-            // the items that carry the tag (or a tag under it), wherever they are
-            let needle = self.search.to_lowercase();
-            let paths = self.tags.as_ref().map(|t| t.tagged_with(tag)).unwrap_or_default();
-            items = paths
-                .iter()
-                .filter_map(|p| pyegui_core::watcher::entry(Path::new(p)))
-                .filter(|e| (self.show_hidden || !e.hidden) && (needle.is_empty() || e.name.to_lowercase().contains(&needle)))
-                .collect();
-            model::sort_entries(&mut items, self.sort_key, self.ascending);
-            depths = vec![0; items.len()];
-        } else {
-            self.collect(ctx, &self.folder().to_path_buf(), 0, tree, &mut items, &mut depths);
-        }
+    /// The items the views show: made from their paths, kept while they and the listings stay the
+    /// same. What was asked to select (a new folder, a pasted file) is selected once it is shown
+    pub fn set_items(&mut self, ctx: &egui::Context, shown: Vec<PathBuf>) {
+        let core = self.core.clone();
+        let Some(items) = self.views.items(ctx, &core, shown) else { return };
         self.items = items;
-        self.depths = depths;
-        // what disappeared from the disk is no longer selected
-        let present: HashSet<&PathBuf> = self.items.iter().map(|e| &e.path).collect();
-        self.selected.retain(|p| present.contains(p));
-        self.items_key = Some(key);
         if !self.select_after.is_empty() {
-            let wanted: HashSet<PathBuf> = std::mem::take(&mut self.select_after).into_iter().collect();
-            let found: Vec<usize> = self.items.iter().enumerate().filter(|(_, e)| wanted.contains(&e.path)).map(|(i, _)| i).collect();
-            if let Some(first) = found.first() {
-                self.selected = found.iter().map(|i| self.items[*i].path.clone()).collect();
-                self.anchor = Some(*first);
-                self.reveal = Some(*first);
-            }
-        }
-    }
-
-    fn collect(&self, ctx: &egui::Context, folder: &Path, depth: usize, tree: bool, items: &mut Vec<Entry>, depths: &mut Vec<usize>) {
-        let listing = lock(&self.core).list(Some(ctx), folder);
-        let needle = self.search.to_lowercase();
-        let mut level: Vec<Entry> = listing
-            .iter()
-            .filter(|e| (self.show_hidden || !e.hidden) && (needle.is_empty() || e.name.to_lowercase().contains(&needle) || (tree && e.is_dir)))
-            .cloned()
-            .collect();
-        model::sort_entries(&mut level, self.sort_key, self.ascending);
-        for e in level {
-            let open = tree && e.is_dir && self.open_folders.contains(&e.path);
-            let path = e.path.clone();
-            items.push(e);
-            depths.push(depth);
-            if open && depth < 24 {
-                self.collect(ctx, &path, depth + 1, tree, items, depths);
+            let wanted: HashSet<PathBuf> = self.select_after.iter().cloned().collect();
+            let found: Vec<PathBuf> = self.items.iter().filter(|e| wanted.contains(&e.path)).map(|e| e.path.clone()).collect();
+            if let Some(first) = found.first().cloned() {
+                self.select_after.clear();
+                self.selected = found.into_iter().collect();
+                self.views.scroll_to(&first);
             }
         }
     }
@@ -412,8 +355,6 @@ impl FinderApp {
     pub fn set_tag_filter(&mut self, tag: Option<i64>) {
         self.tag_filter = tag;
         self.selected.clear();
-        self.anchor = None;
-        self.items_key = None;
     }
 
     /// Goes to the folder of an item and selects it
@@ -429,7 +370,6 @@ impl FinderApp {
                 self.go(parent.to_path_buf());
             }
             self.select_after = vec![path.to_path_buf()];
-            self.items_key = None;
         }
     }
 
@@ -469,12 +409,6 @@ impl FinderApp {
             self.opened_loaded.set(true);
         }
         cache.1.get(&crate::tagstore::key(path)).map(|t| std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(*t))
-    }
-
-    pub fn toggle_folder(&mut self, path: &Path) {
-        if !self.open_folders.remove(path) {
-            self.open_folders.insert(path.to_path_buf());
-        }
     }
 
     pub fn selected_paths(&self) -> Vec<PathBuf> {
@@ -568,7 +502,6 @@ impl FinderApp {
                 self.clipboard = None;
                 self.pasted_cut = false;
             }
-            self.items_key = None;
         }
         if let Some(error) = self.transfer.errors().into_iter().next() {
             self.notice = Some(error);
@@ -690,91 +623,19 @@ impl FinderApp {
         }
     }
 
-    pub fn sort_by(&mut self, key: SortKey) {
-        if self.sort_key == key {
-            self.ascending = !self.ascending;
-        } else {
-            self.sort_key = key;
-            self.ascending = true;
-        }
-    }
-
-    /// A click on an item: Cmd or Ctrl adds or removes it, Shift extends from the anchor
-    pub fn click_item(&mut self, index: usize, modifiers: Modifiers) {
-        let path = self.items[index].path.clone();
-        if modifiers.command {
-            if !self.selected.remove(&path) {
-                self.selected.insert(path);
-            }
-            self.anchor = Some(index);
-        } else if modifiers.shift && self.anchor.is_some() {
-            let (a, b) = (self.anchor.unwrap().min(index), self.anchor.unwrap().max(index));
-            self.selected = self.items[a..=b].iter().map(|e| e.path.clone()).collect();
-        } else {
-            self.selected.clear();
-            self.selected.insert(path);
-            self.anchor = Some(index);
-        }
-    }
-
-    fn selected_index(&self) -> Option<usize> {
-        self.anchor.filter(|i| *i < self.items.len() && self.selected.contains(&self.items[*i].path))
-    }
-
-    fn keyboard(&mut self, ctx: &egui::Context, columns: usize) {
+    fn keyboard(&mut self, ctx: &egui::Context) {
         if ctx.egui_wants_keyboard_input() || pyegui_core::terminal::terminal_focused(ctx) || self.rename.is_some() || self.confirm_delete.is_some() {
             return;
         }
         actions::run_shortcuts(self, ctx);
-        let (parent, open, clear, left, right, up_key, down_key) = ctx.input_mut(|i| {
-            (
-                i.consume_key(Modifiers::NONE, Key::Backspace),
-                i.consume_key(Modifiers::NONE, Key::Enter),
-                i.consume_key(Modifiers::NONE, Key::Escape),
-                i.consume_key(Modifiers::NONE, Key::ArrowLeft),
-                i.consume_key(Modifiers::NONE, Key::ArrowRight),
-                i.consume_key(Modifiers::NONE, Key::ArrowUp),
-                i.consume_key(Modifiers::NONE, Key::ArrowDown),
-            )
-        });
+        // the arrows, Enter and the letters are read by the views
+        let (parent, clear) = ctx.input_mut(|i| (i.consume_key(Modifiers::NONE, Key::Backspace), i.consume_key(Modifiers::NONE, Key::Escape)));
         if parent {
             self.parent();
         }
         if clear {
             self.selected.clear();
             self.search.clear();
-        }
-        if open {
-            for path in self.selected_paths() {
-                self.open(&path);
-            }
-        }
-        let tree = self.view == ViewMode::Tree;
-        if tree && (left || right) {
-            // the arrows fold and unfold the folder selected
-            if let Some(i) = self.selected_index() {
-                let e = self.items[i].clone();
-                if e.is_dir && (right != self.open_folders.contains(&e.path)) {
-                    self.toggle_folder(&e.path);
-                }
-            }
-        }
-        let step: isize = if self.view == ViewMode::Icons {
-            if left { -1 } else if right { 1 } else if up_key { -(columns as isize) } else if down_key { columns as isize } else { 0 }
-        } else if up_key {
-            -1
-        } else if down_key {
-            1
-        } else {
-            0
-        };
-        if step != 0 && !self.items.is_empty() {
-            let current = self.selected_index().map(|i| i as isize).unwrap_or(if step > 0 { -1 } else { self.items.len() as isize });
-            let next = (current + step).clamp(0, self.items.len() as isize - 1) as usize;
-            self.selected.clear();
-            self.selected.insert(self.items[next].path.clone());
-            self.anchor = Some(next);
-            self.reveal = Some(next);
         }
     }
 
@@ -1401,7 +1262,6 @@ impl FinderApp {
         let t0 = std::time::Instant::now();
         self.poll_transfer();
         self.poll_activity();
-        self.refresh_items(&ctx);
         let t_refresh = t0.elapsed();
         // only when it changes: a viewport command asks for another frame, so sending it every frame never lets the app sleep
         let title = self.folder().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Finder".into());
@@ -1438,7 +1298,6 @@ impl FinderApp {
             });
         }
         let t_panels = t0.elapsed();
-        let mut columns = 1;
         let mut central = egui::Frame::central_panel(ui.style());
         if let Some(fill) = style::surface_fill(ui.visuals(), style::Surface::Central) {
             central = central.fill(fill);
@@ -1451,17 +1310,11 @@ impl FinderApp {
                 return;
             }
             self.tag_header(ui);
-            columns = match self.view {
-                ViewMode::List | ViewMode::Tree => {
-                    views::list(self, ui);
-                    1
-                }
-                ViewMode::Icons => views::icons(self, ui),
-            };
+            views::show(self, ui);
         });
         let t_central = t0.elapsed();
         self.drops(&ctx);
-        self.keyboard(&ctx, columns);
+        self.keyboard(&ctx);
         self.modals(&ctx);
         if prof {
             thread_local! { static FPS: std::cell::Cell<(std::time::Instant, u32)> = std::cell::Cell::new((std::time::Instant::now(), 0)); }

@@ -190,3 +190,27 @@ pub fn icon_uri(ctx: &egui::Context, path: &str, size: f32) -> Option<String> {
             .clone()
     })
 }
+
+thread_local! {
+    /// the first file seen of each extension: its icon is the one of every file of that extension
+    static TYPE_ICONS: std::cell::RefCell<std::collections::HashMap<String, String>> = Default::default();
+}
+
+/// The icon of an item of a listing. The system draws one icon per path, which is slow (a few
+/// milliseconds each, on the thread of the window): the files whose icon only depends on their
+/// type share the icon of the first one seen of their extension, so a folder of a thousand files
+/// makes a few requests, not a thousand. Folders, files without an extension and the files whose
+/// icon is their own (programs, shortcuts, icons) are asked one by one
+pub fn entry_icon_uri(ctx: &egui::Context, path: &std::path::Path, is_dir: bool, size: f32) -> Option<String> {
+    let own = ["exe", "lnk", "ico", "cur", "ani", "msi", "scr", "url", "app", "icns"];
+    let shared = if is_dir {
+        None
+    } else {
+        path.extension().map(|x| x.to_string_lossy().to_lowercase()).filter(|x| !own.contains(&x.as_str()))
+    };
+    let key = match shared {
+        Some(ext) => TYPE_ICONS.with(|t| t.borrow_mut().entry(ext).or_insert_with(|| path.to_string_lossy().into_owned()).clone()),
+        None => path.to_string_lossy().into_owned(),
+    };
+    icon_uri(ctx, &key, size)
+}

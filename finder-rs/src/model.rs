@@ -117,51 +117,9 @@ pub fn format_date(time: Option<SystemTime>) -> String {
     }
 }
 
-/// The folders first, then by the key; the name breaks the ties
-pub fn sort_entries(entries: &mut [Entry], key: SortKey, ascending: bool) {
-    entries.sort_by(|a, b| {
-        let order = b.is_dir.cmp(&a.is_dir).then_with(|| {
-            let by_key = match key {
-                SortKey::Name => Ordering::Equal,
-                SortKey::Modified => a.modified.cmp(&b.modified),
-                SortKey::Size => a.size.cmp(&b.size),
-                SortKey::Kind => kind_of(a).cmp(&kind_of(b)),
-            };
-            if ascending {
-                by_key
-            } else {
-                by_key.reverse()
-            }
-        });
-        order.then_with(|| {
-            let by_name = natural_cmp(&a.name, &b.name);
-            if ascending || key != SortKey::Name {
-                by_name
-            } else {
-                by_name.reverse()
-            }
-        })
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn entry(name: &str, is_dir: bool, size: u64) -> Entry {
-        Entry { path: PathBuf::from(name), name: name.into(), is_dir, size, modified: None, hidden: false }
-    }
-
-    #[test]
-    fn folders_come_first_and_names_are_natural() {
-        let mut v = vec![entry("b10", false, 1), entry("a", false, 1), entry("b2", false, 1), entry("z", true, 0)];
-        sort_entries(&mut v, SortKey::Name, true);
-        let names: Vec<_> = v.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, ["z", "a", "b2", "b10"]);
-        sort_entries(&mut v, SortKey::Name, false);
-        let names: Vec<_> = v.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, ["z", "b10", "b2", "a"], "folders stay first when descending");
-    }
 
     #[test]
     fn history_forgets_what_was_forward() {
