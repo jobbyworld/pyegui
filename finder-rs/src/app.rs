@@ -11,7 +11,7 @@ use pyegui_core::transfer::Transfer;
 use pyegui_core::watcher::{default_core, expand, lock, Core, Entry};
 use serde::{Deserialize, Serialize};
 
-use crate::actions::{self, ACTIONS};
+use crate::actions;
 use crate::dock::{self, Pane};
 use crate::model::{self, History, SortKey};
 use crate::tagstore::{How, TagStore};
@@ -261,6 +261,7 @@ impl FinderApp {
         app
     }
 
+    #[allow(dead_code)]
     pub fn dock_tree(&mut self) -> &mut Option<egui_tiles::Tree<Pane>> {
         &mut self.dock
     }
@@ -1126,13 +1127,13 @@ impl FinderApp {
         ));
 
         if self.custom_titlebar {
-            egui::Panel::top("titlebar").show_inside(ui, |ui| self.titlebar(ui));
+            egui::Panel::top("titlebar").show(ui, |ui| self.titlebar(ui));
             edge_resize(&ctx);
         }
         if self.show_sidebar {
-            egui::Panel::left("sidebar").default_size(170.0).min_size(130.0).show_inside(ui, |ui| self.sidebar(ui));
+            egui::Panel::left("sidebar").default_size(170.0).min_size(130.0).show(ui, |ui| self.sidebar(ui));
         }
-        egui::Panel::top("toolbar").show_inside(ui, |ui| {
+        egui::Panel::top("toolbar").show(ui, |ui| {
             let strip = ui.max_rect();
             ui.add_space(if MAC_TITLEBAR && !self.show_sidebar { 26.0 } else { 4.0 });
             drag_window(ui, strip);
@@ -1141,17 +1142,17 @@ impl FinderApp {
             self.path_bar(ui);
             ui.add_space(4.0);
         });
-        egui::Panel::bottom("status").show_inside(ui, |ui| self.status_bar(ui));
+        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         if self.show_terminal {
             let folder = self.folder().to_path_buf();
             self.terminals.follow(&folder);
             let opacity = self.terminal_opacity;
-            egui::Panel::bottom("terminal").resizable(true).default_size(220.0).min_size(80.0).show_inside(ui, |ui| {
+            egui::Panel::bottom("terminal").resizable(true).default_size(220.0).min_size(80.0).show(ui, |ui| {
                 self.terminals.ui(ui, &folder, opacity);
             });
         }
         if self.show_dock {
-            egui::Panel::right("dock").default_size(300.0).min_size(200.0).show_inside(ui, |ui| {
+            egui::Panel::right("dock").default_size(300.0).min_size(200.0).show(ui, |ui| {
                 if let Some(mut tree) = self.dock.take() {
                     dock::show(self, &mut tree, ui);
                     self.dock = Some(tree);
@@ -1163,7 +1164,7 @@ impl FinderApp {
         if let Some(fill) = style::surface_fill(ui.visuals(), style::Surface::Central) {
             central = central.fill(fill);
         }
-        egui::CentralPanel::default().frame(central).show_inside(ui, |ui| {
+        egui::CentralPanel::default().frame(central).show(ui, |ui| {
             if let Some(mut viewer) = self.viewer.take() {
                 if !viewer::show(&mut viewer, ui, &self.core) {
                     self.viewer = Some(viewer);

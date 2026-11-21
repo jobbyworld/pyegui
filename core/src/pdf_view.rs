@@ -17,7 +17,7 @@ use craft_pdf::syntax::object::ObjectIdentifier;
 use craft_pdf::syntax::Pdf;
 use egui::{self, Align2, Color32, FontId, Key, Modifiers, Pos2, Rect, Sense, Stroke, Vec2};
 use crate::pdf::{open_with_info, Info};
-use crate::pdf_nav::{links as page_links, outline, page_ids, Bookmark, Target};
+use crate::pdf_nav::{links as page_links, outline, page_ids, Bookmark};
 use crate::pdf_text::{extract_page, fold, PageText};
 
 /// Logical pixels of one point of the page at a zoom of 1 (100%): 96 pixels for 72 points.

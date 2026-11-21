@@ -144,6 +144,7 @@ impl TagStore {
     }
 
     /// Puts a tag under another one (None: at the root). False if that would make a loop
+    #[allow(dead_code)]
     pub fn move_tag(&mut self, tag: i64, parent: Option<i64>) -> bool {
         if parent.is_some_and(|p| self.subtree(tag).contains(&p)) {
             return false;
@@ -283,11 +284,13 @@ impl TagStore {
 
     // the notes
 
+    #[allow(dead_code)]
     pub fn note(&self, path: &Path) -> String {
         self.db.query_row("SELECT text FROM notes WHERE path = ?", params![key(path)], |r| r.get(0)).optional().ok().flatten().unwrap_or_default()
     }
 
     /// Writes the note of an item; an empty text removes it
+    #[allow(dead_code)]
     pub fn set_note(&mut self, path: &Path, text: &str) {
         if text.trim().is_empty() {
             let _ = self.db.execute("DELETE FROM notes WHERE path = ?", params![key(path)]);
@@ -302,6 +305,7 @@ impl TagStore {
     }
 
     /// The stored paths that have a note
+    #[allow(dead_code)]
     pub fn noted(&self) -> HashSet<String> {
         let Ok(mut statement) = self.db.prepare("SELECT path FROM notes") else { return HashSet::new() };
         statement.query_map([], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
