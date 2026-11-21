@@ -94,6 +94,27 @@ pub fn show(app: &mut FinderApp, tree: &mut Tree<Pane>, ui: &mut egui::Ui) {
     }
 }
 
+/// The menu of the panes: a check box for each, to show it or close it, and the first layout
+pub fn menu(tree: &mut Tree<Pane>, ui: &mut egui::Ui) {
+    for pane in PANES {
+        let found = tree.tiles.find_pane(&pane);
+        let mut on = found.is_some();
+        if ui.checkbox(&mut on, pane.title()).changed() {
+            match found {
+                Some(id) => {
+                    tree.remove_recursively(id);
+                }
+                None => add(tree, pane),
+            }
+        }
+    }
+    ui.separator();
+    if ui.button("Réinitialiser la disposition").clicked() {
+        *tree = default_tree();
+        ui.close();
+    }
+}
+
 /// A pane brought back goes in the tabs of the root, or becomes the root
 fn add(tree: &mut Tree<Pane>, pane: Pane) {
     let id = tree.tiles.insert_pane(pane);

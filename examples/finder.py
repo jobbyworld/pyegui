@@ -2187,7 +2187,7 @@ widths = {
 }
 
 
-TOOLBAR_FIXED = 520  # what the toolbar keeps for the navigation, the name, the view and the panes
+TOOLBAR_FIXED = 550  # what the toolbar keeps for the navigation, the name, the view and the panes
 COUNT_MIN_ROW = 560  # the width of the bottom band from which the count of items is shown
 SEARCH_WIDTH, SEARCH_MIN = (
     240,
@@ -2300,6 +2300,10 @@ def toolbar():
 
             # in the unified layout the field is centered in the band like the other buttons
             horizontal_centered(search_field)
+        # the terminal: shows the Terminal pane of the dock
+        if image_button_clicked(svg("terminal"), size=18, tint=icon_tint(), tooltip="Afficher le terminal"):
+            show_dock.value = True
+            show_pane("Terminal")
         # a click shows or hides the docks, a right click opens the menu of the panes
         if image_button_clicked(
             svg("panes"),

@@ -3,6 +3,7 @@
 mod actions;
 mod app;
 mod dock;
+mod glyphs;
 mod model;
 mod tagsui;
 mod tagstore;
