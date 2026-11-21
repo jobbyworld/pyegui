@@ -162,6 +162,8 @@ pub struct FinderApp {
     pub tags: Option<TagStore>,
     pub search_state: crate::search::Search,
     pub tag_filter: Option<i64>,
+    /// the tags folded in the tree of the sidebar
+    tag_folded: HashSet<i64>,
     pub tag_edit: Option<TagEdit>,
     /// the tags of the rows shown, by path, until the store changes
     tag_cache: std::cell::RefCell<(u64, std::collections::HashMap<PathBuf, std::rc::Rc<Vec<(Color32, String, How)>>>)>,
@@ -258,6 +260,7 @@ impl FinderApp {
             tags: TagStore::open(None).ok(),
             search_state: Default::default(),
             tag_filter: None,
+            tag_folded: HashSet::new(),
             tag_edit: None,
             tag_cache: Default::default(),
             opened_cache: Default::default(),
@@ -287,6 +290,8 @@ impl FinderApp {
     }
 
     fn after_navigation(&mut self) {
+        // leaving a tag view: going to a folder shows the folder
+        self.tag_filter = None;
         self.viewer = None;
         self.selected.clear();
         self.anchor = None;
@@ -1155,23 +1160,50 @@ impl FinderApp {
                 ui.weak("Aucune étiquette");
             }
             let mut filter = None;
-            for tag in &tags {
-                ui.horizontal(|ui| {
-                    ui.add_space(tag.depth as f32 * 14.0);
-                    let on = self.tag_filter == Some(tag.id);
-                    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click());
-                    if on {
-                        ui.painter().rect_filled(rect, 7.0, ui.visuals().selection.bg_fill);
-                    } else if response.hovered() {
-                        ui.painter().rect_filled(rect, 7.0, ui.visuals().widgets.hovered.weak_bg_fill);
+            let mut fold = None;
+            // the tree: a tag folded hides what is under it
+            let mut hidden_below: Option<usize> = None;
+            for (index, tag) in tags.iter().enumerate() {
+                if let Some(depth) = hidden_below {
+                    if tag.depth > depth {
+                        continue;
                     }
-                    ui.painter().circle_filled(egui::pos2(rect.left() + 14.0, rect.center().y), 5.0, tagsui::parse_color(&tag.color));
-                    let color = if on { Color32::WHITE } else { ui.visuals().text_color() };
-                    ui.painter().text(egui::pos2(rect.left() + 28.0, rect.center().y), egui::Align2::LEFT_CENTER, &tag.name, egui::TextStyle::Body.resolve(ui.style()), color);
-                    if response.clicked() {
-                        filter = Some(tag.id);
+                    hidden_below = None;
+                }
+                let has_children = tags.get(index + 1).is_some_and(|next| next.depth > tag.depth);
+                let folded = self.tag_folded.contains(&tag.id);
+                if folded && has_children {
+                    hidden_below = Some(tag.depth);
+                }
+                let on = self.tag_filter == Some(tag.id);
+                let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click());
+                if on {
+                    ui.painter().rect_filled(rect, 7.0, ui.visuals().selection.bg_fill);
+                } else if response.hovered() {
+                    ui.painter().rect_filled(rect, 7.0, ui.visuals().widgets.hovered.weak_bg_fill);
+                }
+                let x = rect.left() + 6.0 + tag.depth as f32 * 14.0;
+                let color = if on { Color32::WHITE } else { ui.visuals().text_color() };
+                if has_children {
+                    // the arrow: its own click folds, the rest of the row shows the tag
+                    let arrow = egui::Rect::from_center_size(egui::pos2(x + 6.0, rect.center().y), egui::vec2(16.0, 22.0));
+                    let arrow_response = ui.interact(arrow, ui.id().with(("tag-fold", tag.id)), egui::Sense::click());
+                    let text = if folded { "▸" } else { "▾" };
+                    ui.painter().text(arrow.center(), egui::Align2::CENTER_CENTER, text, egui::TextStyle::Small.resolve(ui.style()), color);
+                    if arrow_response.clicked() {
+                        fold = Some(tag.id);
                     }
-                });
+                }
+                ui.painter().circle_filled(egui::pos2(x + 20.0, rect.center().y), 5.0, tagsui::parse_color(&tag.color));
+                ui.painter().text(egui::pos2(x + 34.0, rect.center().y), egui::Align2::LEFT_CENTER, &tag.name, egui::TextStyle::Body.resolve(ui.style()), color);
+                if response.clicked() && fold != Some(tag.id) {
+                    filter = Some(tag.id);
+                }
+            }
+            if let Some(id) = fold {
+                if !self.tag_folded.remove(&id) {
+                    self.tag_folded.insert(id);
+                }
             }
             if let Some(id) = filter {
                 let next = if self.tag_filter == Some(id) { None } else { Some(id) };
