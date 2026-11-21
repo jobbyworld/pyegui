@@ -135,6 +135,7 @@ colors given by Terminal(light=..., dark=...) or term.set_colors().
 - `foreground` (tuple | str): the color of the text, before the one of Terminal(light=, dark=), the one of the theme by default
 - `height` (float): the height, the available one by default
 - `padding` (float): the space around the text, 6 by default
+- `opacity` (float): 0 to 1, makes the terminal translucent: the background (the one given, else the one of the theme) and the colored cells are drawn with this opacity, so the sheet or the backdrop of the window shows through; the text stays opaque. Opaque by default when a background is given, transparent when not
 
 **Example:**
 
@@ -152,4 +153,7 @@ def update_func(ctx):
 
 # a dark terminal whatever the theme
 terminal(term, background="#1e1e1e", foreground="#d4d4d4")
+
+# the same, translucent
+terminal(term, background="#1e1e1e", opacity=0.6)
 ```

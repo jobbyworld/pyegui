@@ -682,6 +682,11 @@ struct Run {
 ///
 ///     padding (float): the space around the text, 6 by default
 ///
+///     opacity (float): 0 to 1, makes the terminal translucent: the background (the one given, else
+///         the one of the theme) and the colored cells are drawn with this opacity, so the sheet
+///         or the backdrop of the window shows through; the text stays opaque. Opaque by default
+///         when a background is given, transparent when not
+///
 /// Example::
 ///
 ///     term = Terminal()
@@ -697,13 +702,22 @@ struct Run {
 ///
 ///     # a dark terminal whatever the theme
 ///     terminal(term, background="#1e1e1e", foreground="#d4d4d4")
+///
+///     # the same, translucent
+///     terminal(term, background="#1e1e1e", opacity=0.6)
 #[pyfunction]
 #[pyo3(signature = (term, **kwargs))]
 unsafe fn terminal(term: &mut Terminal, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
     let ui = current_ui(&UI)?;
     // the colors of the theme shown, those of the call first
     let scheme = if ui.visuals().dark_mode { term.dark.clone() } else { term.light.clone() };
-    let background = kwarg_color(kwargs, "background")?.or(scheme.background);
+    let mut background = kwarg_color(kwargs, "background")?.or(scheme.background);
+    // a translucent terminal: the background, and the colors behind the text, let the sheet show through
+    let opacity = kwarg::<f32>(kwargs, "opacity")?.map(|value| value.clamp(0.0, 1.0));
+    if let Some(opacity) = opacity {
+        let color = background.unwrap_or_else(|| ui.visuals().extreme_bg_color);
+        background = Some(color.gamma_multiply(opacity));
+    }
     let foreground = kwarg_color(kwargs, "foreground")?.or(scheme.foreground);
     let padding = kwarg::<f32>(kwargs, "padding")?.unwrap_or(6.0);
     // the font file of the terminal once egui has it, the monospace font of egui until then
@@ -989,6 +1003,9 @@ unsafe fn terminal(term: &mut Terminal, kwargs: Option<&Bound<'_, PyDict>>) -> P
         }
         if flags.contains(Flags::DIM) {
             fg = fg.gamma_multiply(0.66);
+        }
+        if let (Some(opacity), Some(color)) = (opacity, bg) {
+            bg = Some(color.gamma_multiply(opacity));
         }
         if selection.is_some_and(|range| range.contains(indexed.point)) {
             bg = Some(selection_color);

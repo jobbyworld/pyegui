@@ -556,6 +556,9 @@ TERMINAL_DARK = dict(
     ],
 )
 
+# how opaque the background of the terminals is: below 1 the sheet and the backdrop show through
+TERMINAL_OPACITY = 0.2
+
 # the terminals of the dock at the bottom: states, created once, outside the update function.
 # They start in the folder the Finder opens
 shell = Terminal(cwd=str(start), font=nerd_font(), light=TERMINAL_LIGHT, dark=TERMINAL_DARK)
@@ -588,11 +591,11 @@ def shell_pane():
             shell.restart(cwd=str(current()))
 
     horizontal(bar)
-    terminal(shell)
+    terminal(shell, opacity=TERMINAL_OPACITY)
 
 
 def python_pane():
-    terminal(python)
+    terminal(python, opacity=TERMINAL_OPACITY)
 
 
 probe_cache = {}  # what a call that may block (a disconnected network drive) answered last
