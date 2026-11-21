@@ -1031,6 +1031,33 @@ impl FinderApp {
         drag_window(ui, strip);
     }
 
+    /// Above a tag view: which tag it is, how many items it holds, and the way back to the folder
+    fn tag_header(&mut self, ui: &mut egui::Ui) {
+        let Some(id) = self.tag_filter else { return };
+        let Some(tag) = self.tag_list().into_iter().find(|t| t.id == id) else {
+            // the tag was deleted
+            self.set_tag_filter(None);
+            return;
+        };
+        let count = self.items.len();
+        let mut close = false;
+        ui.horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+            ui.painter().circle_filled(rect.center(), 5.0, tagsui::parse_color(&tag.color));
+            ui.label(RichText::new(&tag.name).strong());
+            ui.weak(format!("{count} élément(s) avec cette étiquette ou ses sous-étiquettes"));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(egui::Button::image(glyphs::image(glyphs::CLOSE, 12.0, ui.visuals().text_color())).frame(false).min_size(egui::vec2(28.0, 22.0))).on_hover_text("Revenir au dossier").clicked() {
+                    close = true;
+                }
+            });
+        });
+        ui.separator();
+        if close {
+            self.set_tag_filter(None);
+        }
+    }
+
     /// The tags of the store, read once per version of the store
     pub fn tag_list(&self) -> Vec<crate::tagstore::Tag> {
         let Some(store) = &self.tags else { return Vec::new() };
@@ -1391,6 +1418,7 @@ impl FinderApp {
                 }
                 return;
             }
+            self.tag_header(ui);
             columns = match self.view {
                 ViewMode::List | ViewMode::Tree => {
                     views::list(self, ui);

@@ -24,6 +24,7 @@ pub const SUN: Glyph = glyph!("sun");
 pub const MOON: Glyph = glyph!("moon");
 pub const THEME_SYSTEM: Glyph = glyph!("theme-system");
 pub const GEAR: Glyph = glyph!("gear");
+pub const CLOSE: Glyph = glyph!("close");
 pub const TAG: Glyph = glyph!("tag");
 pub const DRIVE: Glyph = glyph!("drive");
 pub const FOLDER: Glyph = glyph!("folder");
