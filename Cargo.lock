@@ -1543,6 +1543,7 @@ dependencies = [
  "chrono",
  "eframe",
  "egui_extras",
+ "egui_tiles",
  "image",
  "pyegui-core",
  "serde",
@@ -3901,6 +3902,7 @@ dependencies = [
 name = "pyegui-core"
 version = "0.7.0"
 dependencies = [
+ "alacritty_terminal",
  "chrono",
  "craft-pdf",
  "egui",

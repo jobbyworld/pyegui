@@ -9,6 +9,7 @@ description = "pyegui without Python: the logic shared by the Python extension a
 [dependencies]
 egui = "0.37.0"
 notify = "8.2"
+alacritty_terminal = "0.26"
 image = { version = "0.25", default-features = false, features = ["png"] }
 chrono = "0.4.45"
 craft-pdf = { workspace = true, optional = true }

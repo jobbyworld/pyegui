@@ -72,6 +72,7 @@ pub static ACTIONS: &[Action] = &[
     Action { category: "Affichage", label: "Arbre", icon: "🗂", shortcut: cmd(Key::Num3), enabled: always, in_menu: false, run: |app, _| app.view = ViewMode::Tree },
     Action { category: "Affichage", label: "Fichiers cachés", icon: "◌", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Period)), enabled: always, in_menu: false, run: |app, _| app.show_hidden = !app.show_hidden },
     Action { category: "Affichage", label: "Barre latérale", icon: "◧", shortcut: cmd(Key::B), enabled: always, in_menu: false, run: |app, _| app.toggle_sidebar() },
+    Action { category: "Affichage", label: "Terminal", icon: ">_", shortcut: cmd(Key::T), enabled: always, in_menu: false, run: |app, _| app.toggle_terminal() },
     Action { category: "Affichage", label: "Volets", icon: "◨", shortcut: cmd(Key::J), enabled: always, in_menu: false, run: |app, _| app.toggle_dock() },
 ];
 

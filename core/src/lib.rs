@@ -12,3 +12,4 @@ pub mod watcher;
 pub mod transfer;
 pub mod style;
 pub mod icons;
+pub mod terminal;

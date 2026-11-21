@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::actions::{self, ACTIONS};
 use crate::dock::{self, Pane};
 use crate::model::{self, History, SortKey};
+use crate::terminals::{self, Terminals};
 use crate::views;
 
 const STATE_KEY: &str = "finder-state";
@@ -50,6 +51,8 @@ struct Saved {
     ascending: bool,
     show_sidebar: bool,
     show_dock: bool,
+    show_terminal: bool,
+    terminal_opacity: f32,
     show_hidden: bool,
     dock: Option<String>,
     open_folders: Vec<PathBuf>,
@@ -66,6 +69,8 @@ impl Default for Saved {
             ascending: true,
             show_sidebar: true,
             show_dock: true,
+            show_terminal: true,
+            terminal_opacity: 0.2,
             show_hidden: false,
             dock: None,
             open_folders: Vec::new(),
@@ -83,6 +88,9 @@ pub struct FinderApp {
     pub ascending: bool,
     show_sidebar: bool,
     show_dock: bool,
+    show_terminal: bool,
+    pub terminal_opacity: f32,
+    terminals: Terminals,
     pub show_hidden: bool,
     pub search: String,
     /// the items shown, sorted and filtered; made again when the folder, the sort, the filter or the disk change
@@ -114,7 +122,8 @@ pub struct FinderApp {
 impl FinderApp {
     pub fn new(cc: &eframe::CreationContext<'_>, start: Option<PathBuf>) -> Self {
         egui_extras::install_image_loaders(&cc.egui_ctx);
-        cc.egui_ctx.set_fonts(fonts());
+        let font_path = terminals::nerd_font();
+        cc.egui_ctx.set_fonts(fonts(font_path.as_deref()));
         let saved: Saved = cc
             .storage
             .and_then(|s| s.get_string(STATE_KEY))
@@ -126,6 +135,7 @@ impl FinderApp {
             .filter(|p| p.is_dir())
             .or(saved.folder.filter(|p| p.is_dir()))
             .unwrap_or(home);
+        let folder_for_terminal = folder.clone();
         let app = FinderApp {
             core: default_core(),
             history: History::new(folder),
@@ -136,6 +146,9 @@ impl FinderApp {
             ascending: saved.ascending,
             show_sidebar: saved.show_sidebar,
             show_dock: saved.show_dock,
+            show_terminal: saved.show_terminal,
+            terminal_opacity: saved.terminal_opacity.clamp(0.0, 1.0),
+            terminals: Terminals::new(&folder_for_terminal, font_path.as_deref()),
             show_hidden: saved.show_hidden,
             search: String::new(),
             items: Vec::new(),
@@ -293,6 +306,10 @@ impl FinderApp {
 
     pub fn toggle_sidebar(&mut self) {
         self.show_sidebar = !self.show_sidebar;
+    }
+
+    pub fn toggle_terminal(&mut self) {
+        self.show_terminal = !self.show_terminal;
     }
 
     pub fn toggle_dock(&mut self) {
@@ -478,7 +495,7 @@ impl FinderApp {
     }
 
     fn keyboard(&mut self, ctx: &egui::Context, columns: usize) {
-        if ctx.egui_wants_keyboard_input() || self.rename.is_some() || self.confirm_delete.is_some() {
+        if ctx.egui_wants_keyboard_input() || pyegui_core::terminal::terminal_focused(ctx) || self.rename.is_some() || self.confirm_delete.is_some() {
             return;
         }
         actions::run_shortcuts(self, ctx);
@@ -559,6 +576,9 @@ impl FinderApp {
             ui.checkbox(&mut self.show_hidden, "Cachés");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button("⚙", |ui| self.appearance_menu(ui));
+                if ui.selectable_label(self.show_terminal, ">_").on_hover_text("Terminal (⌘T)").clicked() {
+                    self.show_terminal = !self.show_terminal;
+                }
                 if ui.selectable_label(self.show_dock, "◨").on_hover_text("Volets (⌘J)").clicked() {
                     self.show_dock = !self.show_dock;
                 }
@@ -589,6 +609,10 @@ impl FinderApp {
         if before != (self.theme, self.accent) {
             self.apply_theme(ui.ctx());
         }
+        ui.add_space(4.0);
+        ui.label(RichText::new("Terminal").strong());
+        ui.add(egui::Slider::new(&mut self.terminal_opacity, 0.0..=1.0).text("Opacité"));
+        ui.checkbox(&mut self.show_terminal, "Afficher le terminal (⌘T)");
     }
 
     fn path_bar(&mut self, ui: &mut egui::Ui) {
@@ -749,6 +773,8 @@ impl eframe::App for FinderApp {
             ascending: self.ascending,
             show_sidebar: self.show_sidebar,
             show_dock: self.show_dock,
+            show_terminal: self.show_terminal,
+            terminal_opacity: self.terminal_opacity,
             show_hidden: self.show_hidden,
             dock: self.dock.as_ref().and_then(|d| serde_json::to_string(d).ok()),
             open_folders: self.open_folders.iter().cloned().collect(),
@@ -778,6 +804,14 @@ impl eframe::App for FinderApp {
             ui.add_space(4.0);
         });
         egui::Panel::bottom("status").show_inside(ui, |ui| self.status_bar(ui));
+        if self.show_terminal {
+            let folder = self.folder().to_path_buf();
+            self.terminals.follow(&folder);
+            let opacity = self.terminal_opacity;
+            egui::Panel::bottom("terminal").resizable(true).default_size(220.0).min_size(80.0).show_inside(ui, |ui| {
+                self.terminals.ui(ui, &folder, opacity);
+            });
+        }
         if self.show_dock {
             egui::Panel::right("dock").default_size(300.0).min_size(200.0).show_inside(ui, |ui| {
                 if let Some(mut tree) = self.dock.take() {
@@ -821,7 +855,7 @@ fn open_with_system(path: &Path) {
 }
 
 /// Inter for the texts, with a semibold family for the titles (the style of pyegui needs it)
-fn fonts() -> egui::FontDefinitions {
+fn fonts(nerd: Option<&Path>) -> egui::FontDefinitions {
     use egui::{FontData, FontFamily};
     let mut fonts = egui::FontDefinitions::default();
     let proportional = fonts.families[&FontFamily::Proportional].clone();
@@ -834,5 +868,11 @@ fn fonts() -> egui::FontDefinitions {
     fonts.families.get_mut(&FontFamily::Proportional).unwrap().insert(0, "Inter-Regular".to_owned());
     let bold = std::iter::once("Inter-SemiBold".to_owned()).chain(proportional).collect();
     fonts.families.insert(style::bold_family(), bold);
+    // the font of the prompt, with the monospace fonts behind it for the characters it does not have
+    if let Some(data) = nerd.and_then(|p| std::fs::read(p).ok()) {
+        fonts.font_data.insert("nerd".to_owned(), Arc::new(FontData::from_owned(data)));
+        let family = std::iter::once("nerd".to_owned()).chain(fonts.families[&FontFamily::Monospace].clone()).collect();
+        fonts.families.insert(FontFamily::Name("nerd".into()), family);
+    }
     fonts
 }

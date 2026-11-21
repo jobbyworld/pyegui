@@ -4,6 +4,7 @@ mod actions;
 mod app;
 mod dock;
 mod model;
+mod terminals;
 mod views;
 
 use eframe::egui;
