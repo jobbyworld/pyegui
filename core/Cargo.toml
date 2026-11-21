@@ -14,6 +14,7 @@ doctest = false
 egui = "0.37.0"
 notify = "8.2"
 egui_extras = { version = "0.37.0", features = ["all_loaders"] }
+egui_ltreeview = "0.10.0"
 egui_commonmark = "0.26.0"
 mermaid-svg = "0.7"
 pulldown-cmark = { version = "0.13", default-features = false }

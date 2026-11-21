@@ -1,822 +1,115 @@
-//! The columns of the file views (FileListView and FileTreeView): the state the user changes with
-//! the header (width, order, sort, filters), the type of data of a column (text, number, date,
-//! choice) and the header itself: a click sorts, a drag on a title moves the column, a drag on its
-//! border resizes it, the funnel opens the filter that fits the type of the column.
+//! The columns of the file views, in Python terms: the logic is in `pyegui_core::columns`, this
+//! file converts what the Python code gives (type names, values, filters, keyword args) and what
+//! it reads.
 
-use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
-use eframe::egui::{
-    self, pos2, vec2, Color32, CursorIcon, Id, Pos2, Rect, Sense, Stroke, TextStyle, TextWrapMode,
-};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 
-use crate::watcher::natural_cmp;
+pub(crate) use pyegui_core::columns::*;
 
-/// The smallest and the largest width of a column
-pub(crate) const WIDTH_RANGE: (f32, f32) = (40.0, 1200.0);
-
-/// What a column holds: it decides how it sorts and which filter it gets
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum DataType {
-    /// a text: sorted in natural order, filtered by "contains"
-    Text,
-    /// a number: sorted by value, filtered by a minimum and a maximum
-    Number,
-    /// a date (seconds since 1970): sorted by time, filtered by a period
-    Date,
-    /// one value among a few: filtered by the values kept
-    Choice,
+pub(crate) fn parse_type(name: &str) -> PyResult<DataType> {
+    DataType::parse(name).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err("type must be \"text\", \"number\", \"date\" or \"choice\"")
+    })
 }
 
-impl DataType {
-    pub(crate) fn parse(name: &str) -> PyResult<Self> {
-        Ok(match name {
-            "text" | "str" => DataType::Text,
-            "number" | "int" | "float" => DataType::Number,
-            "date" | "datetime" => DataType::Date,
-            "choice" | "enum" | "bool" => DataType::Choice,
-            _ => {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "type must be \"text\", \"number\", \"date\" or \"choice\"",
-                ))
-            }
-        })
+/// What a Python function returned for a column of this type. None (or a value that does not
+/// fit) is Value::None: it sorts first and no filter keeps it
+pub(crate) fn value_from_py(obj: &Bound<'_, PyAny>, ty: DataType) -> Value {
+    if obj.is_none() {
+        return Value::None;
     }
-}
-
-/// The value of an item in a column, to sort and to filter
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Value {
-    None,
-    Text(String),
-    Num(f64),
-}
-
-impl Value {
-    /// What a Python function returned for a column of this type. None (or a value that does not
-    /// fit) is Value::None: it sorts first and no filter keeps it
-    pub(crate) fn from_py(obj: &Bound<'_, PyAny>, ty: DataType) -> Value {
-        if obj.is_none() {
-            return Value::None;
-        }
-        match ty {
-            DataType::Text => obj.str().map(|s| Value::Text(s.to_string())).unwrap_or(Value::None),
-            DataType::Choice => match obj.extract::<bool>() {
-                Ok(b) if obj.is_instance_of::<pyo3::types::PyBool>() => Value::Text(b.to_string()),
-                _ => obj.str().map(|s| Value::Text(s.to_string())).unwrap_or(Value::None),
-            },
-            DataType::Number => obj.extract::<f64>().map(Value::Num).unwrap_or(Value::None),
-            DataType::Date => obj
-                .extract::<f64>()
-                .or_else(|_| obj.call_method0("timestamp").and_then(|t| t.extract::<f64>()))
-                .map(Value::Num)
-                .unwrap_or(Value::None),
-        }
-    }
-
-    pub(crate) fn compare(&self, other: &Value) -> Ordering {
-        match (self, other) {
-            (Value::None, Value::None) => Ordering::Equal,
-            (Value::None, _) => Ordering::Less,
-            (_, Value::None) => Ordering::Greater,
-            (Value::Num(a), Value::Num(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
-            (Value::Text(a), Value::Text(b)) => natural_cmp(a, b),
-            (Value::Num(_), Value::Text(_)) => Ordering::Less,
-            (Value::Text(_), Value::Num(_)) => Ordering::Greater,
-        }
-    }
-
-    fn text(&self) -> Option<&str> {
-        match self {
-            Value::Text(t) => Some(t),
-            _ => None,
-        }
-    }
-}
-
-/// A number with an optional unit: "12", "1.5k", "2 MB" (units are powers of 1000, like the
-/// sizes shown)
-pub(crate) fn parse_number(text: &str) -> Option<f64> {
-    let t = text.trim().to_lowercase().replace(',', ".");
-    let split = t.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(t.len());
-    let number: f64 = t[..split].parse().ok()?;
-    let power = match t[split..].trim() {
-        "" | "b" | "o" | "byte" | "bytes" => 0,
-        "k" | "kb" | "ko" => 1,
-        "m" | "mb" | "mo" => 2,
-        "g" | "gb" | "go" => 3,
-        "t" | "tb" | "to" => 4,
-        _ => return None,
-    };
-    Some(number * 1000f64.powi(power))
-}
-
-/// A date or a date and time of the local time zone, as seconds since 1970, and whether only the
-/// day was given ("2024-05-01", "01/05/2024", "2024-05-01 14:30"), or a number of seconds
-pub(crate) fn parse_date(text: &str) -> Option<(f64, bool)> {
-    use chrono::TimeZone;
-    let t = text.trim();
-    if t.is_empty() {
-        return None;
-    }
-    for format in ["%Y-%m-%d", "%d/%m/%Y", "%d.%m.%Y"] {
-        if let Ok(day) = chrono::NaiveDate::parse_from_str(t, format) {
-            let time = chrono::Local.from_local_datetime(&day.and_hms_opt(0, 0, 0)?).earliest()?;
-            return Some((time.timestamp() as f64, true));
-        }
-    }
-    for format in ["%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M", "%Y-%m-%dT%H:%M:%S"] {
-        if let Ok(time) = chrono::NaiveDateTime::parse_from_str(t, format) {
-            let time = chrono::Local.from_local_datetime(&time).earliest()?;
-            return Some((time.timestamp() as f64, false));
-        }
-    }
-    t.parse::<f64>().ok().map(|seconds| (seconds, false))
-}
-
-/// What a filter keeps in a column. Which fields count depends on the type of the column: text for
-/// a text, min and max for a number or a date, choices for a choice
-#[derive(Clone, Default, PartialEq, Debug)]
-pub(crate) struct Filter {
-    pub text: String,
-    pub min: String,
-    pub max: String,
-    /// the values kept; None keeps all of them
-    pub choices: Option<BTreeSet<String>>,
-}
-
-impl Filter {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.text.is_empty() && self.min.trim().is_empty() && self.max.trim().is_empty() && self.choices.is_none()
-    }
-
-    pub(crate) fn matches(&self, ty: DataType, value: &Value) -> bool {
-        match ty {
-            DataType::Text => {
-                let text = self.text.trim().to_lowercase();
-                text.is_empty() || value.text().is_some_and(|v| v.to_lowercase().contains(&text))
-            }
-            DataType::Choice => match &self.choices {
-                None => true,
-                Some(set) => value.text().is_some_and(|v| set.contains(v)),
-            },
-            DataType::Number | DataType::Date => {
-                let (min, max) = self.range(ty);
-                if min.is_none() && max.is_none() {
-                    return true;
-                }
-                match value {
-                    Value::Num(n) => min.is_none_or(|m| *n >= m) && max.is_none_or(|m| *n <= m),
-                    _ => false,
-                }
-            }
-        }
-    }
-
-    /// The bounds of the range. A last day is kept up to its end
-    fn range(&self, ty: DataType) -> (Option<f64>, Option<f64>) {
-        match ty {
-            DataType::Date => (
-                parse_date(&self.min).map(|(t, _)| t),
-                parse_date(&self.max).map(|(t, day)| if day { t + 86_399.0 } else { t }),
-            ),
-            _ => (parse_number(&self.min), parse_number(&self.max)),
-        }
-    }
-
-    /// A text, a (min, max) tuple or a list of values, as the Python code gives it
-    pub(crate) fn from_py(obj: &Bound<'_, PyAny>) -> PyResult<Filter> {
-        let bound = |item: &Bound<'_, PyAny>| -> PyResult<String> {
-            if item.is_none() {
-                Ok(String::new())
-            } else if let Ok(n) = item.extract::<f64>() {
-                Ok(n.to_string())
-            } else {
-                Ok(item.str()?.to_string())
-            }
-        };
-        if let Ok(text) = obj.extract::<String>() {
-            return Ok(Filter { text, ..Default::default() });
-        }
-        if let Ok(tuple) = obj.cast::<PyTuple>() {
-            if tuple.len() != 2 {
-                return Err(pyo3::exceptions::PyValueError::new_err("a range filter is a (min, max) tuple"));
-            }
-            return Ok(Filter { min: bound(&tuple.get_item(0)?)?, max: bound(&tuple.get_item(1)?)?, ..Default::default() });
-        }
-        let mut set = BTreeSet::new();
-        for item in obj.try_iter()? {
-            set.insert(item?.str()?.to_string());
-        }
-        Ok(Filter { choices: Some(set), ..Default::default() })
-    }
-
-    pub(crate) fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        if let Some(set) = &self.choices {
-            return Ok(PyList::new(py, set.iter())?.into_any());
-        }
-        if !self.min.trim().is_empty() || !self.max.trim().is_empty() {
-            let side = |s: &str| -> Option<String> { (!s.trim().is_empty()).then(|| s.trim().to_string()) };
-            return Ok(PyTuple::new(py, [side(&self.min), side(&self.max)])?.into_any());
-        }
-        Ok(pyo3::types::PyString::new(py, &self.text).into_any())
-    }
-}
-
-/// The columns of a view as the user left them
-pub(crate) struct ColumnsState {
-    /// the keys of the columns, in the order wanted; the missing ones follow in their default order
-    pub order: Vec<String>,
-    /// the widths the user chose; a column without one has its default width
-    pub widths: HashMap<String, f32>,
-    pub filters: BTreeMap<String, Filter>,
-    pub sort_key: String,
-    pub ascending: bool,
-    /// the column being moved
-    dragging: Option<String>,
-    /// the columns pinned at the left and at the right, by key
-    pub pinned_left: Vec<String>,
-    pub pinned_right: Vec<String>,
-    /// how far the columns that are not pinned are scrolled
-    pub scroll: f32,
-    /// the menu of a title (a column key and where it was asked)
-    menu: Option<(String, Pos2)>,
-    /// the last text of `filter` given by the Python code. The code often gives it again at every
-    /// frame (a search field): only a new text replaces the filter the user set in the header
-    given_name_text: Option<String>,
-}
-
-impl ColumnsState {
-    pub(crate) fn new(sort_key: &str) -> Self {
-        ColumnsState {
-            order: vec![],
-            widths: HashMap::new(),
-            filters: BTreeMap::new(),
-            sort_key: sort_key.to_string(),
-            ascending: true,
-            dragging: None,
-            pinned_left: vec![],
-            pinned_right: vec![],
-            scroll: 0.0,
-            menu: None,
-            given_name_text: None,
-        }
-    }
-
-    /// The text filter of the name, also the `filter` of the views
-    pub(crate) fn name_text(&self) -> &str {
-        self.filters.get("name").map_or("", |f| f.text.as_str())
-    }
-
-    pub(crate) fn set_name_text(&mut self, text: String) {
-        if self.given_name_text.as_ref() == Some(&text) {
-            return;
-        }
-        self.given_name_text = Some(text.clone());
-        if text.is_empty() {
-            self.filters.remove("name");
-        } else {
-            self.filters.entry("name".into()).or_default().text = text;
-        }
-    }
-
-    /// The keys in the order wanted: the default order, changed by the user's order
-    pub(crate) fn ordered(&self, default: &[String]) -> Vec<String> {
-        let mut keys: Vec<String> = self.order.iter().filter(|k| default.contains(k)).cloned().collect();
-        keys.dedup();
-        for key in default {
-            if !keys.contains(key) {
-                keys.push(key.clone());
-            }
-        }
-        keys
-    }
-
-    /// A click on a title: sorts by it, a second click reverses the order
-    pub(crate) fn toggle_sort(&mut self, key: &str) {
-        if self.sort_key == key {
-            self.ascending = !self.ascending;
-        } else {
-            self.sort_key = key.to_string();
-            self.ascending = true;
-        }
-    }
-
-    pub(crate) fn widths_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let dict = PyDict::new(py);
-        for (key, width) in &self.widths {
-            dict.set_item(key, width)?;
-        }
-        Ok(dict)
-    }
-
-    pub(crate) fn set_widths(&mut self, widths: HashMap<String, f32>) {
-        self.widths = widths.into_iter().map(|(k, w)| (k, w.clamp(WIDTH_RANGE.0, WIDTH_RANGE.1))).collect();
-    }
-
-    pub(crate) fn filters_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let dict = PyDict::new(py);
-        for (key, filter) in self.filters.iter().filter(|(_, f)| !f.is_empty()) {
-            dict.set_item(key, filter.to_py(py)?)?;
-        }
-        Ok(dict)
-    }
-
-    pub(crate) fn set_filters(&mut self, filters: &Bound<'_, PyDict>) -> PyResult<()> {
-        let mut new = BTreeMap::new();
-        for (key, value) in filters.iter() {
-            let filter = Filter::from_py(&value)?;
-            if !filter.is_empty() {
-                new.insert(key.extract::<String>()?, filter);
-            }
-        }
-        self.filters = new;
-        Ok(())
-    }
-}
-
-/// A cell of the header, placed by the view
-#[derive(Clone)]
-pub(crate) struct Cell {
-    pub key: String,
-    pub title: String,
-    pub rect: Rect,
-    pub ty: DataType,
-    pub sortable: bool,
-    pub filterable: bool,
-    /// can be moved by a drag on its title
-    pub movable: bool,
-    pub resizable: bool,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct HeaderOptions {
-    pub resizable: bool,
-    pub pinnable: bool,
-    pub reorderable: bool,
-    pub filterable: bool,
-    /// a drag of items out of the window starts a drag of the files to the Finder
-    pub drag_out: bool,
-    /// the columns are at the right end and grow to the left (the tree)
-    pub grow_left: bool,
-}
-
-impl HeaderOptions {
-    pub(crate) fn read(kwargs: Option<&Bound<'_, PyDict>>, grow_left: bool) -> PyResult<Self> {
-        let flag = |name: &str| crate::kwarg::<bool>(kwargs, name).map(|v| v.unwrap_or(true));
-        Ok(HeaderOptions {
-            resizable: flag("resizable")?,
-            pinnable: flag("pinnable")?,
-            reorderable: flag("reorderable")?,
-            filterable: flag("filterable")?,
-            drag_out: flag("drag_out")?,
-            grow_left,
-        })
-    }
-}
-
-fn galley(ui: &egui::Ui, text: &str, width: f32, color: Color32) -> std::sync::Arc<egui::Galley> {
-    egui::WidgetText::from(egui::RichText::new(text).color(color)).into_galley(
-        ui,
-        Some(TextWrapMode::Truncate),
-        width.max(1.0),
-        TextStyle::Body,
-    )
-}
-
-fn paint_sort_arrow(ui: &egui::Ui, at: Pos2, ascending: bool, color: Color32) {
-    let s = 3.5;
-    let points = if ascending {
-        vec![at + vec2(-s, s * 0.6), at + vec2(s, s * 0.6), at + vec2(0.0, -s * 0.6)]
-    } else {
-        vec![at + vec2(-s, -s * 0.6), at + vec2(s, -s * 0.6), at + vec2(0.0, s * 0.6)]
-    };
-    ui.painter().add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
-}
-
-fn paint_funnel(ui: &egui::Ui, center: Pos2, color: Color32, filled: bool) {
-    let body = vec![center + vec2(-5.0, -4.5), center + vec2(5.0, -4.5), center + vec2(0.8, 0.5), center + vec2(0.8, 4.5), center + vec2(-0.8, 3.5), center + vec2(-0.8, 0.5)];
-    let fill = if filled { color } else { Color32::TRANSPARENT };
-    ui.painter().add(egui::Shape::convex_polygon(body, fill, Stroke::new(1.2, color)));
-}
-
-/// The header of the columns. A click on a title sorts, a drag on a title moves the column, a drag
-/// on the border resizes it (a double click gives it its default width back), the funnel opens the
-/// filter. `choices` gives the values of a column of choices, called only while its filter is open
-pub(crate) fn header(
-    ui: &mut egui::Ui,
-    id: Id,
-    cells: &[Cell],
-    state: &mut ColumnsState,
-    opts: HeaderOptions,
-    choices: &mut dyn FnMut(&str) -> Vec<String>,
-) {
-    let line = Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color);
-    let accent = ui.visuals().selection.bg_fill;
-    let pointer = ui.input(|i| i.pointer.interact_pos());
-
-    for (i, cell) in cells.iter().enumerate() {
-        let rect = cell.rect;
-        let movable = opts.reorderable && cell.movable;
-        let sense = if movable {
-            Sense::click_and_drag()
-        } else if cell.sortable {
-            Sense::click()
-        } else {
-            Sense::hover()
-        };
-        let body = ui.interact(rect, id.with(("cell", &cell.key)), sense);
-        if body.clicked() && cell.sortable {
-            state.toggle_sort(&cell.key);
-        }
-        if movable && body.drag_started() {
-            state.dragging = Some(cell.key.clone());
-        }
-
-        let active_sort = cell.sortable && state.sort_key == cell.key;
-        let filter_active = state.filters.get(&cell.key).is_some_and(|f| !f.is_empty());
-        let popup_id = id.with(("popup", &cell.key));
-        let popup_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
-        let filterable = opts.filterable && cell.filterable;
-        let hovered = ui.rect_contains_pointer(rect);
-
-        // the title and the arrow of the sort
-        let color = if active_sort || (body.hovered() && cell.sortable) {
-            ui.visuals().strong_text_color()
-        } else {
-            ui.visuals().weak_text_color()
-        };
-        let reserved = 26.0 + if filterable { 18.0 } else { 0.0 };
-        let text = galley(ui, &cell.title, rect.width() - reserved, color);
-        let pos = pos2(rect.left() + 8.0, rect.center().y - text.size().y / 2.0);
-        let text_right = pos.x + text.size().x;
-        ui.painter().with_clip_rect(rect).galley(pos, text, color);
-        if active_sort {
-            paint_sort_arrow(ui, pos2(text_right + 9.0, rect.center().y), state.ascending, color);
-        }
-        if i > 0 {
-            ui.painter().vline(rect.left(), rect.y_range().shrink(4.0), line);
-        }
-
-        // the funnel of the filter
-        if filterable {
-            let spot = Rect::from_center_size(pos2(rect.right() - 14.0, rect.center().y), vec2(18.0, 18.0));
-            let funnel = ui.interact(spot, id.with(("funnel", &cell.key)), Sense::click());
-            if hovered || filter_active || popup_open {
-                if funnel.hovered() || popup_open {
-                    ui.painter().rect_filled(spot, 4.0, ui.visuals().widgets.hovered.weak_bg_fill);
-                }
-                let color = if filter_active { ui.visuals().hyperlink_color } else { ui.visuals().weak_text_color() };
-                paint_funnel(ui, spot.center(), color, filter_active);
-            }
-            let popup = egui::Popup::menu(&funnel)
-                .id(popup_id)
-                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-            popup.show(|ui| {
-                let values = if cell.ty == DataType::Choice { choices(&cell.key) } else { vec![] };
-                let first = ui.data_mut(|d| d.get_temp::<bool>(popup_id).is_none());
-                ui.data_mut(|d| d.insert_temp(popup_id, true));
-                let filter = state.filters.entry(cell.key.clone()).or_default();
-                filter_ui(ui, cell.ty, filter, &values, first);
-            });
-            if !popup_open {
-                ui.data_mut(|d| d.remove::<bool>(popup_id));
-            }
-        }
-
-        // the border: resizes
-        if opts.resizable && cell.resizable {
-            let x = if opts.grow_left { rect.left() } else { rect.right() };
-            let handle = Rect::from_x_y_ranges((x - 3.0)..=(x + 3.0), rect.y_range());
-            let grip = ui.interact(handle, id.with(("grip", &cell.key)), Sense::click_and_drag());
-            if grip.hovered() || grip.dragged() {
-                ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
-                ui.painter().vline(x, rect.y_range().shrink(3.0), Stroke::new(2.0, accent));
-            }
-            if grip.dragged() {
-                let dx = grip.drag_delta().x * if opts.grow_left { -1.0 } else { 1.0 };
-                let width = (rect.width() + dx).clamp(WIDTH_RANGE.0, WIDTH_RANGE.1);
-                state.widths.insert(cell.key.clone(), width);
-            }
-            if grip.double_clicked() {
-                state.widths.remove(&cell.key);
-            }
-        }
-    }
-    state.filters.retain(|_, f| !f.is_empty());
-
-    // a column being moved: a bar shows where it lands
-    if let Some(key) = state.dragging.clone().filter(|k| cells.iter().any(|c| &c.key == k)) {
-        let from = cells.iter().position(|c| c.key == key);
-        let targets: Vec<usize> = (0..cells.len()).filter(|i| cells[*i].movable).collect();
-        let released = !ui.input(|i| i.pointer.any_down());
-        match (from, pointer, targets.first(), targets.last()) {
-            (Some(from), Some(pointer), Some(&first), Some(&last)) => {
-                let to = targets
-                    .iter()
-                    .copied()
-                    .find(|i| pointer.x < cells[*i].rect.right())
-                    .unwrap_or(last)
-                    .clamp(first, last);
-                ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
-                ui.painter().rect_filled(cells[from].rect, 0.0, ui.visuals().text_color().gamma_multiply(0.08));
-                if to != from {
-                    let x = if to > from { cells[to].rect.right() } else { cells[to].rect.left() };
-                    ui.painter().vline(x, cells[to].rect.y_range(), Stroke::new(2.0, accent));
-                }
-                if released {
-                    if to != from {
-                        let mut keys: Vec<String> = cells.iter().map(|c| c.key.clone()).collect();
-                        let moved = keys.remove(from);
-                        keys.insert(to, moved);
-                        let rest: Vec<String> = state.order.iter().filter(|k| !keys.contains(k)).cloned().collect();
-                        keys.extend(rest);
-                        state.order = keys;
-                    }
-                    state.dragging = None;
-                }
-            }
-            _ => state.dragging = None,
-        }
-        if released {
-            state.dragging = None;
-        }
-    }
-}
-
-/// The filter of a column, in its popup
-fn filter_ui(ui: &mut egui::Ui, ty: DataType, filter: &mut Filter, values: &[String], first: bool) {
-    ui.set_min_width(200.0);
     match ty {
-        DataType::Text => {
-            let edit = ui.add(egui::TextEdit::singleline(&mut filter.text).hint_text("Contient…").desired_width(200.0));
-            if first {
-                edit.request_focus();
-            }
-        }
-        DataType::Number => {
-            ui.label("Entre");
-            range_edits(ui, filter, "min, ex. 10 Ko", "max", first);
-        }
-        DataType::Date => {
-            ui.horizontal_wrapped(|ui| {
-                let today = chrono::Local::now().date_naive();
-                let day = |d: chrono::NaiveDate| d.format("%Y-%m-%d").to_string();
-                for (label, from) in [
-                    ("Aujourd'hui", today),
-                    ("7 jours", today - chrono::Duration::days(7)),
-                    ("30 jours", today - chrono::Duration::days(30)),
-                    ("Cette année", chrono::NaiveDate::from_ymd_opt(chrono::Datelike::year(&today), 1, 1).unwrap_or(today)),
-                ] {
-                    if ui.small_button(label).clicked() {
-                        filter.min = day(from);
-                        filter.max.clear();
-                    }
-                }
-            });
-            range_edits(ui, filter, "du AAAA-MM-JJ", "au AAAA-MM-JJ", first);
-        }
-        DataType::Choice => {
-            ui.horizontal(|ui| {
-                if ui.small_button("Tout").clicked() {
-                    filter.choices = None;
-                }
-                if ui.small_button("Aucun").clicked() {
-                    filter.choices = Some(BTreeSet::new());
-                }
-            });
-            egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
-                for value in values {
-                    let mut kept = filter.choices.as_ref().is_none_or(|set| set.contains(value));
-                    if ui.checkbox(&mut kept, value).changed() {
-                        let mut set: BTreeSet<String> =
-                            filter.choices.clone().unwrap_or_else(|| values.iter().cloned().collect());
-                        if kept {
-                            set.insert(value.clone());
-                        } else {
-                            set.remove(value);
-                        }
-                        filter.choices = if values.iter().all(|v| set.contains(v)) { None } else { Some(set) };
-                    }
-                }
-            });
-        }
-    }
-    if !filter.is_empty() {
-        ui.separator();
-        if ui.button("Effacer").clicked() {
-            *filter = Filter::default();
-        }
+        DataType::Text => obj.str().map(|s| Value::Text(s.to_string())).unwrap_or(Value::None),
+        DataType::Choice => match obj.extract::<bool>() {
+            Ok(b) if obj.is_instance_of::<pyo3::types::PyBool>() => Value::Text(b.to_string()),
+            _ => obj.str().map(|s| Value::Text(s.to_string())).unwrap_or(Value::None),
+        },
+        DataType::Number => obj.extract::<f64>().map(Value::Num).unwrap_or(Value::None),
+        DataType::Date => obj
+            .extract::<f64>()
+            .or_else(|_| obj.call_method0("timestamp").and_then(|t| t.extract::<f64>()))
+            .map(Value::Num)
+            .unwrap_or(Value::None),
     }
 }
 
-fn range_edits(ui: &mut egui::Ui, filter: &mut Filter, min_hint: &str, max_hint: &str, first: bool) {
-    let edit = ui.add(egui::TextEdit::singleline(&mut filter.min).hint_text(min_hint).desired_width(200.0));
-    if first {
-        edit.request_focus();
+/// A text, a (min, max) tuple or a list of values, as the Python code gives it
+pub(crate) fn filter_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Filter> {
+    let bound = |item: &Bound<'_, PyAny>| -> PyResult<String> {
+        if item.is_none() {
+            Ok(String::new())
+        } else if let Ok(n) = item.extract::<f64>() {
+            Ok(n.to_string())
+        } else {
+            Ok(item.str()?.to_string())
+        }
+    };
+    if let Ok(text) = obj.extract::<String>() {
+        return Ok(Filter { text, ..Default::default() });
     }
-    ui.add(egui::TextEdit::singleline(&mut filter.max).hint_text(max_hint).desired_width(200.0));
+    if let Ok(tuple) = obj.cast::<PyTuple>() {
+        if tuple.len() != 2 {
+            return Err(pyo3::exceptions::PyValueError::new_err("a range filter is a (min, max) tuple"));
+        }
+        return Ok(Filter { min: bound(&tuple.get_item(0)?)?, max: bound(&tuple.get_item(1)?)?, ..Default::default() });
+    }
+    let mut set = BTreeSet::new();
+    for item in obj.try_iter()? {
+        set.insert(item?.str()?.to_string());
+    }
+    Ok(Filter { choices: Some(set), ..Default::default() })
 }
 
-
-/// A column placed in its zone: 0 pinned at the left, 1 scrolling, 2 pinned at the right
-#[derive(Clone)]
-pub(crate) struct Placed {
-    /// the position of the column in the lists given to `Zones::new`
-    pub index: usize,
-    /// the left of the column in its zone
-    pub rel: f32,
-    pub width: f32,
-    pub zone: u8,
+pub(crate) fn filter_to_py<'py>(filter: &Filter, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    if let Some(set) = &filter.choices {
+        return Ok(PyList::new(py, set.iter())?.into_any());
+    }
+    if !filter.min.trim().is_empty() || !filter.max.trim().is_empty() {
+        let side = |s: &str| -> Option<String> { (!s.trim().is_empty()).then(|| s.trim().to_string()) };
+        return Ok(PyTuple::new(py, [side(&filter.min), side(&filter.max)])?.into_any());
+    }
+    Ok(pyo3::types::PyString::new(py, &filter.text).into_any())
 }
 
-/// The three zones of a view with pinned columns: what is pinned at the left, what scrolls
-/// horizontally between them, what is pinned at the right
-#[derive(Clone)]
-pub(crate) struct Zones {
-    pub placed: Vec<Placed>,
-    pub left: f32,
-    pub scrolling: f32,
-    pub right: f32,
-    /// the room of the zone that scrolls
-    pub room: f32,
+pub(crate) fn widths_py<'py>(state: &ColumnsState, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    for (key, width) in &state.widths {
+        dict.set_item(key, width)?;
+    }
+    Ok(dict)
 }
 
-impl Zones {
-    /// `keys` and `widths` are the columns in the order shown. `always_left` is a column that is
-    /// always in the first zone (the name of a tree), and must come first
-    pub(crate) fn new(keys: &[String], widths: &[f32], state: &ColumnsState, available: f32, always_left: Option<&str>) -> Self {
-        let zone_of = |key: &String| -> u8 {
-            if always_left == Some(key.as_str()) || state.pinned_left.contains(key) {
-                0
-            } else if state.pinned_right.contains(key) {
-                2
-            } else {
-                1
-            }
-        };
-        let mut placed = vec![];
-        let mut used = [0.0f32; 3];
-        for zone in 0..3u8 {
-            for (index, key) in keys.iter().enumerate() {
-                if zone_of(key) == zone {
-                    placed.push(Placed { index, rel: used[zone as usize], width: widths[index], zone });
-                    used[zone as usize] += widths[index];
-                }
-            }
-        }
-        let room = (available - used[0] - used[2]).max(0.0);
-        Zones { placed, left: used[0], scrolling: used[1], right: used[2], room }
+pub(crate) fn filters_py<'py>(state: &ColumnsState, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    for (key, filter) in state.filters.iter().filter(|(_, f)| !f.is_empty()) {
+        dict.set_item(key, filter_to_py(filter, py)?)?;
     }
-
-    pub(crate) fn max_scroll(&self) -> f32 {
-        (self.scrolling - self.room).max(0.0)
-    }
-
-    pub(crate) fn zone_rect(&self, table: Rect, zone: u8) -> Rect {
-        match zone {
-            0 => Rect::from_min_size(table.min, vec2(self.left, table.height())),
-            1 => Rect::from_min_size(pos2(table.left() + self.left, table.top()), vec2(self.room, table.height())),
-            _ => Rect::from_min_max(pos2((table.right() - self.right).max(table.left()), table.top()), table.max),
-        }
-    }
-
-    /// Where a column is in a row (or in the header) that is `table`, with the columns that are
-    /// not pinned scrolled by `scroll`
-    pub(crate) fn cell_rect(&self, table: Rect, p: &Placed, scroll: f32) -> Rect {
-        let zone = self.zone_rect(table, p.zone);
-        let x = zone.left() + p.rel - if p.zone == 1 { scroll } else { 0.0 };
-        Rect::from_min_size(pos2(x, table.top()), vec2(p.width, table.height()))
-    }
-
-    /// The part of a cell that can be seen: the cell cut by its zone
-    pub(crate) fn visible(&self, table: Rect, p: &Placed, scroll: f32) -> Rect {
-        self.cell_rect(table, p, scroll).intersect(self.zone_rect(table, p.zone))
-    }
+    Ok(dict)
 }
 
-/// The header of a view with pinned columns: one `header` per zone (the titles of the columns that
-/// scroll are cut by their zone), and the menu that pins a column, on a right click on a title.
-/// `cells` are in the order given to `Zones::new`; their rect is set here
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn zoned_header(
-    ui: &mut egui::Ui,
-    id: Id,
-    rect: Rect,
-    zones: &Zones,
-    mut cells: Vec<Cell>,
-    state: &mut ColumnsState,
-    opts: HeaderOptions,
-    choices: &mut dyn FnMut(&str) -> Vec<String>,
-) {
-    let scroll = state.scroll;
-    for p in &zones.placed {
-        cells[p.index].rect = zones.cell_rect(rect, p, scroll);
-    }
-    let mut hits: Vec<(String, Rect)> = vec![];
-    for zone in 0..3u8 {
-        let group: Vec<Cell> = zones.placed.iter().filter(|p| p.zone == zone).map(|p| cells[p.index].clone()).collect();
-        if group.is_empty() {
-            continue;
-        }
-        let zone_rect = zones.zone_rect(rect, zone);
-        let mut zone_ui = ui.new_child(egui::UiBuilder::new().max_rect(zone_rect));
-        zone_ui.shrink_clip_rect(zone_rect);
-        header(&mut zone_ui, id.with(("zone", zone)), &group, state, opts, choices);
-        for c in &group {
-            if c.movable {
-                hits.push((c.key.clone(), c.rect.intersect(zone_rect)));
-            }
+pub(crate) fn set_filters(state: &mut ColumnsState, filters: &Bound<'_, PyDict>) -> PyResult<()> {
+    let mut new = BTreeMap::new();
+    for (key, value) in filters.iter() {
+        let filter = filter_from_py(&value)?;
+        if !filter.is_empty() {
+            new.insert(key.extract::<String>()?, filter);
         }
     }
-    // the limits of the zones, once something scrolls under the pinned columns
-    if zones.max_scroll() > 0.0 {
-        let line = Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color);
-        if zones.left > 0.0 {
-            ui.painter().vline(rect.left() + zones.left, rect.y_range(), line);
-        }
-        if zones.right > 0.0 {
-            ui.painter().vline(rect.right() - zones.right, rect.y_range(), line);
-        }
-    }
-    pin_menu(ui, id, state, opts, &hits);
+    state.filters = new;
+    Ok(())
 }
 
-/// The menu of a title: pin the column at the left or at the right, or unpin it
-fn pin_menu(ui: &mut egui::Ui, id: Id, state: &mut ColumnsState, opts: HeaderOptions, hits: &[(String, Rect)]) {
-    if !opts.pinnable {
-        return;
-    }
-    let right_click = ui.input(|i| i.pointer.secondary_clicked());
-    if right_click {
-        if let Some(p) = ui.input(|i| i.pointer.interact_pos()) {
-            if let Some((key, _)) = hits.iter().find(|(_, r)| r.contains(p)) {
-                state.menu = Some((key.clone(), p));
-            }
-        }
-    }
-    let Some((key, at)) = state.menu.clone() else { return };
-    let mut close = false;
-    let area = egui::Area::new(id.with("pin_menu"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(at)
-        .show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_min_width(140.0);
-                let pinned = state.pinned_left.contains(&key) || state.pinned_right.contains(&key);
-                let unpin = |state: &mut ColumnsState| {
-                    state.pinned_left.retain(|k| *k != key);
-                    state.pinned_right.retain(|k| *k != key);
-                };
-                if ui.button("Épingler à gauche").clicked() {
-                    unpin(state);
-                    state.pinned_left.push(key.clone());
-                    close = true;
-                }
-                if ui.button("Épingler à droite").clicked() {
-                    unpin(state);
-                    state.pinned_right.push(key.clone());
-                    close = true;
-                }
-                if ui.add_enabled(pinned, egui::Button::new("Détacher")).clicked() {
-                    unpin(state);
-                    close = true;
-                }
-            });
-        });
-    if close || (!right_click && area.response.clicked_elsewhere()) {
-        state.menu = None;
-    }
-}
-
-/// The columns that are not pinned scroll with the wheel (or Shift and the wheel) over `area`
-pub(crate) fn hscroll_wheel(ui: &egui::Ui, state: &mut ColumnsState, zones: &Zones, area: Rect) {
-    let wheel = ui.input(|i| i.smooth_scroll_delta.x);
-    if wheel != 0.0 && ui.rect_contains_pointer(area) {
-        state.scroll -= wheel;
-    }
-    state.scroll = state.scroll.clamp(0.0, zones.max_scroll());
-}
-
-/// A thin scroll bar at the bottom of `area`, under the columns that scroll
-pub(crate) fn hscroll_bar(ui: &mut egui::Ui, id: Id, state: &mut ColumnsState, zones: &Zones, area: Rect) {
-    let max = zones.max_scroll();
-    if max <= 0.0 || zones.room < 40.0 {
-        return;
-    }
-    let track = Rect::from_min_size(pos2(area.left() + zones.left, area.bottom() - 9.0), vec2(zones.room, 6.0));
-    let thumb_width = (track.width() * track.width() / zones.scrolling).clamp(24.0, track.width());
-    let travel = (track.width() - thumb_width).max(1.0);
-    let thumb = Rect::from_min_size(pos2(track.left() + state.scroll / max * travel, track.top()), vec2(thumb_width, track.height()));
-    let drag = ui.interact(thumb.expand(3.0), id.with("hbar"), Sense::drag());
-    if drag.dragged() {
-        state.scroll = (state.scroll + drag.drag_delta().x * max / travel).clamp(0.0, max);
-    }
-    let text = ui.visuals().text_color();
-    let color = text.gamma_multiply(if drag.hovered() || drag.dragged() { 0.5 } else { 0.3 });
-    let painter = ui.painter().with_clip_rect(area);
-    painter.rect_filled(track, 3.0, text.gamma_multiply(0.08));
-    painter.rect_filled(thumb, 3.0, color);
+pub(crate) fn header_options(kwargs: Option<&Bound<'_, PyDict>>, grow_left: bool) -> PyResult<HeaderOptions> {
+    let flag = |name: &str| crate::kwarg::<bool>(kwargs, name).map(|v| v.unwrap_or(true));
+    Ok(HeaderOptions {
+        resizable: flag("resizable")?,
+        pinnable: flag("pinnable")?,
+        reorderable: flag("reorderable")?,
+        filterable: flag("filterable")?,
+        drag_out: flag("drag_out")?,
+        grow_left,
+    })
 }

@@ -3961,6 +3961,7 @@ dependencies = [
  "egui",
  "egui_commonmark",
  "egui_extras",
+ "egui_ltreeview",
  "image",
  "kurbo 0.13.1",
  "mermaid-svg",

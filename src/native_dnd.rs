@@ -830,6 +830,8 @@ fn start_drag(_paths: &[PathBuf]) -> bool {
 }
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // the file views of the core take part in the drag and drop of the system through these
+    pyegui_core::files::set_native_dnd(pyegui_core::files::NativeDnd { pointer: native_pointer, start_drag });
     m.add_function(wrap_pyfunction!(start_file_drag, m)?)?;
     m.add_function(wrap_pyfunction!(dropped_files, m)?)?;
     m.add_function(wrap_pyfunction!(dragged_files, m)?)?;

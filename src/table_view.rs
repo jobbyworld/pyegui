@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use crate::columns::{
-    hscroll_bar, hscroll_wheel, parse_date, parse_number, zoned_header, Cell, ColumnsState, DataType, HeaderOptions,
+    hscroll_bar, hscroll_wheel, parse_date, parse_number, zoned_header, Cell, ColumnsState, DataType,
     Value, Zones, WIDTH_RANGE,
 };
 use crate::{kwarg, Int};
@@ -76,7 +76,7 @@ impl TableView {
 
     #[getter]
     fn get_column_widths<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        self.columns.widths_py(py)
+        crate::columns::widths_py(&self.columns, py)
     }
 
     #[setter]
@@ -96,12 +96,12 @@ impl TableView {
 
     #[getter]
     fn get_column_filters<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        self.columns.filters_py(py)
+        crate::columns::filters_py(&self.columns, py)
     }
 
     #[setter]
     fn set_column_filters(&mut self, filters: &Bound<'_, PyDict>) -> PyResult<()> {
-        self.columns.set_filters(filters)
+        crate::columns::set_filters(&mut self.columns, filters)
     }
 
     #[getter]
@@ -210,7 +210,7 @@ pub(crate) fn draw(
     let mut types = vec![DataType::Text; num_columns];
     if let Some(names) = kwarg::<Vec<String>>(kwargs, "types")? {
         for (c, name) in names.iter().enumerate().take(num_columns) {
-            types[c] = DataType::parse(name)?;
+            types[c] = crate::columns::parse_type(name)?;
         }
     }
     let mut defaults = vec![DEFAULT_WIDTH; num_columns];
@@ -221,7 +221,7 @@ pub(crate) fn draw(
             }
         }
     }
-    let opts = HeaderOptions::read(kwargs, false)?;
+    let opts = crate::columns::header_options(kwargs, false)?;
     let sortable = kwarg::<bool>(kwargs, "sortable")?.unwrap_or(true);
     let striped = kwarg::<bool>(kwargs, "striped")?.unwrap_or(true);
     let max_height = kwarg::<f32>(kwargs, "max_height")?;

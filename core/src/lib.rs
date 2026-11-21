@@ -14,6 +14,8 @@ pub mod style;
 pub mod window;
 pub mod icons;
 pub mod path;
+pub mod columns;
+pub mod files;
 pub mod terminal;
 pub mod markdown;
 #[cfg(feature = "pdf")]

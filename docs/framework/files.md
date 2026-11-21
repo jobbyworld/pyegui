@@ -585,6 +585,7 @@ Choosing one returns its path.
 - `root` (str): the last ancestor of the list. Default is the root of the disk
 - `id` (str): id of the combo, needed if there are several in the same ui
 - `max_width` (float): the widest the title may be: a longer name ends with an ellipsis (the whole name is in the tooltip). Default is the room left in the row
+- `always_icon` (bool): shows the icon of the folder and the arrow of the menu all the time, not only under the mouse. Default is False
 - `on_right_click` (callable): called with the path of the folder when the title is right-clicked
 - `on_middle_click` (callable): called with the path of the folder when the title is clicked with the middle button
 - `context_menu` (callable): called with the path of the folder on a right click on the title, inside a menu: build the menu in it. A left click opens the list of the ancestors
