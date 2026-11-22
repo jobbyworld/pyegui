@@ -150,6 +150,8 @@ pub struct FinderApp {
     pasted_cut: bool,
     rename: Option<(PathBuf, String)>,
     confirm_delete: Option<Vec<PathBuf>>,
+    /// the action palette: (query, highlighted row)
+    palette: Option<(String, usize)>,
     pub notice: Option<String>,
     dock: Option<egui_tiles::Tree<Pane>>,
     /// what the system told about the disk, newest last
@@ -249,6 +251,7 @@ impl FinderApp {
             pasted_cut: false,
             rename: None,
             confirm_delete: None,
+            palette: None,
             notice: None,
             dock: Some(dock::restore(saved.dock.as_deref())),
             activity: Default::default(),
@@ -608,6 +611,7 @@ impl FinderApp {
                 self.confirm_delete = Some(paths);
             }
         }
+        self.palette_modal(ctx);
         if let Some(text) = self.notice.clone() {
             let mut close = false;
             egui::Modal::new(egui::Id::new("notice")).show(ctx, |ui| {
@@ -623,8 +627,82 @@ impl FinderApp {
         }
     }
 
+    /// The palette: a search field over the enabled actions (case and accents ignored), the arrows
+    /// choose, Enter runs on the current selection, Escape closes
+    fn palette_modal(&mut self, ctx: &egui::Context) {
+        let Some((mut query, mut index)) = self.palette.take() else { return };
+        let needle = crate::search::fold(query.trim());
+        let shown: Vec<usize> = actions::ACTIONS.iter().enumerate().filter(|(_, a)| (a.enabled)(self) && crate::search::fold(a.label).contains(&needle)).map(|(i, _)| i).collect();
+        let (down, up, enter, escape) = ctx.input_mut(|i| {
+            (i.consume_key(Modifiers::NONE, Key::ArrowDown), i.consume_key(Modifiers::NONE, Key::ArrowUp), i.consume_key(Modifiers::NONE, Key::Enter), i.consume_key(Modifiers::NONE, Key::Escape))
+        });
+        index = index.min(shown.len().saturating_sub(1));
+        if down {
+            index = (index + 1).min(shown.len().saturating_sub(1));
+        }
+        if up {
+            index = index.saturating_sub(1);
+        }
+        let mut chosen = if enter { shown.get(index).copied() } else { None };
+        let mut close = escape;
+        let shortcuts: Vec<String> = shown.iter().map(|&i| actions::ACTIONS[i].shortcut.as_ref().map(|s| ctx.format_shortcut(s)).unwrap_or_default()).collect();
+        let response = egui::Modal::new(egui::Id::new("palette")).show(ctx, |ui| {
+            ui.set_width(460.0);
+            let edit = ui.add(egui::TextEdit::singleline(&mut query).hint_text("Rechercher une action…").desired_width(f32::INFINITY));
+            if !edit.has_focus() {
+                edit.request_focus();
+            }
+            if edit.changed() {
+                index = 0;
+            }
+            ui.add_space(4.0);
+            if shown.is_empty() {
+                ui.weak("Aucune action");
+            }
+            egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                for (row, &i) in shown.iter().enumerate() {
+                    let action = &actions::ACTIONS[i];
+                    let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
+                    if row == index {
+                        ui.painter().rect_filled(rect, 6.0, ui.visuals().selection.bg_fill.gamma_multiply(0.6));
+                        if down || up {
+                            ui.scroll_to_rect(rect, None);
+                        }
+                    } else if r.hovered() {
+                        ui.painter().rect_filled(rect, 6.0, Color32::from_rgba_unmultiplied(127, 127, 127, 30));
+                    }
+                    let color = ui.visuals().text_color();
+                    ui.painter().text(rect.left_center() + egui::vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, format!("{}  {}", action.icon, action.label), egui::FontId::proportional(14.0), color);
+                    ui.painter().text(rect.right_center() - egui::vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, &shortcuts[row], egui::FontId::proportional(12.0), ui.visuals().weak_text_color());
+                    if r.hovered() && ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO) {
+                        index = row;
+                    }
+                    if r.clicked() {
+                        chosen = Some(i);
+                    }
+                }
+            });
+        });
+        if response.should_close() {
+            close = true;
+        }
+        if let Some(i) = chosen {
+            (actions::ACTIONS[i].run)(self, ctx);
+        } else if !close {
+            self.palette = Some((query, index));
+        }
+    }
+
     fn keyboard(&mut self, ctx: &egui::Context) {
-        if ctx.egui_wants_keyboard_input() || pyegui_core::terminal::terminal_focused(ctx) || self.rename.is_some() || self.confirm_delete.is_some() {
+        if self.palette.is_none() && self.rename.is_none() && self.confirm_delete.is_none() && ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::P)) {
+            self.palette = Some((String::new(), 0));
+            return;
+        }
+        if ctx.egui_wants_keyboard_input() || pyegui_core::terminal::terminal_focused(ctx) || self.rename.is_some() || self.confirm_delete.is_some() || self.palette.is_some() {
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Space)) {
+            self.palette = Some((String::new(), 0));
             return;
         }
         actions::run_shortcuts(self, ctx);
