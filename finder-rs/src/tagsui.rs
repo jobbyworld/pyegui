@@ -76,81 +76,101 @@ pub fn dots(ui: &mut egui::Ui, tags: &[(Color32, String, How)]) {
     }
 }
 
+/// The pane of the tags, like the one of examples/finder.py: a field to search or create a tag, then
+/// the tree of tags, each with the state for the selected items: on (all of them have it), off
+/// (none) or mixed (some have it)
 pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
     if app.tags.is_none() {
         ui.weak("Base des étiquettes indisponible");
         return;
     }
-    ui.horizontal(|ui| {
-        if ui.button("Gérer…").clicked() {
-            app.tag_manager = Some(TagManager::default());
-        }
-        if ui.add_enabled(!app.selected.is_empty(), egui::Button::new("Étiqueter…")).clicked() {
-            app.tag_picker = Some(TagPicker::new());
-        }
-        if app.tag_filter.is_some() && ui.button("Tout afficher").clicked() {
-            app.set_tag_filter(None);
-        }
+    let selection = app.selected_paths();
+    let edit = ui.add(egui::TextEdit::singleline(&mut app.tags_query).hint_text("Chercher ou créer un tag").desired_width(f32::INFINITY));
+    let parts = TagStore::split_path(&app.tags_query);
+    let searching = !parts.is_empty();
+    let (shown, creating, own, inherited) = {
+        let store = app.tags.as_ref().unwrap();
+        let shown: Vec<Tag> = if searching { store.matching(&parts) } else { store.all() };
+        let own: Vec<std::collections::HashSet<i64>> = selection.iter().map(|p| store.own(p)).collect();
+        // the tags a single selected item has through its folders or its parents
+        let inherited: std::collections::HashSet<i64> = if selection.len() == 1 {
+            store.effective(&selection[0]).into_iter().filter(|(_, how)| *how != How::Own).map(|(id, _)| id).collect()
+        } else {
+            Default::default()
+        };
+        (shown, store.can_create(&parts), own, inherited)
+    };
+    ui.weak(match selection.len() {
+        0 => "Sélectionne des éléments pour les taguer".to_string(),
+        1 => selection[0].file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        n => format!("{n} éléments sélectionnés"),
     });
     ui.add_space(4.0);
-    let tags: Vec<Tag> = app.tags.as_ref().map(|t| t.all()).unwrap_or_default();
-    if tags.is_empty() {
-        ui.weak("Aucune étiquette. Créez-en une, puis cochez-la sur la sélection.");
+
+    let mut toggle: Option<i64> = None;
+    let mut create = false;
+    // Enter in the field: the first tag found goes on the selection, or the tag is created
+    if searching && edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        if let Some(first) = shown.first() {
+            if !selection.is_empty() {
+                toggle = Some(first.id);
+            }
+        } else if creating {
+            create = true;
+        }
+        edit.request_focus();
     }
-    let selection = app.selected_paths();
-    // for each tag: how many of the selected items carry it themselves
-    let own: Vec<std::collections::HashSet<i64>> = app.tags.as_ref().map(|t| selection.iter().map(|p| t.own(p)).collect()).unwrap_or_default();
-    let mut toggle: Option<(i64, bool)> = None;
-    let mut filter: Option<i64> = None;
-    let mut manage: Option<Option<i64>> = None;
-    let mut delete: Option<i64> = None;
-    for tag in &tags {
+    let accent = ui.visuals().selection.bg_fill;
+    let text = ui.visuals().text_color();
+    for tag in &shown {
         let on = own.iter().filter(|set| set.contains(&tag.id)).count();
+        let state = if selection.is_empty() || on == 0 { "off" } else if on == selection.len() { "on" } else { "mixed" };
         ui.horizontal(|ui| {
-            ui.add_space(tag.depth as f32 * 14.0);
-            let state = if selection.is_empty() { "○" } else if on == selection.len() { "●" } else if on > 0 { "◐" } else { "○" };
-            let check = ui.add_enabled(!selection.is_empty(), egui::Button::new(RichText::new(state).color(parse_color(&tag.color))).frame(false));
-            if check.on_hover_text("Mettre sur la sélection / retirer").clicked() {
-                toggle = Some((tag.id, on != selection.len()));
+            ui.add_space(if searching { 0.0 } else { tag.depth as f32 * 14.0 });
+            let tint = if state == "off" { text } else { accent };
+            let check = ui.add(egui::Button::image(crate::glyphs::image(crate::glyphs::by_name(&format!("checkbox-{state}")), 16.0, tint)).frame(false));
+            if !selection.is_empty() && check.clicked() {
+                toggle = Some(tag.id);
             }
-            let current = app.tag_filter == Some(tag.id);
-            let label = ui.selectable_label(current, RichText::new(&tag.name));
-            if label.clicked() {
-                filter = Some(tag.id);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+            ui.painter().circle_filled(rect.center(), 5.0, parse_color(&tag.color));
+            let name = if searching { app.tags.as_ref().map(|s| s.tag_path(tag.id).join(" / ")).unwrap_or_default() } else { tag.name.clone() };
+            if ui.selectable_label(false, name).clicked() && !selection.is_empty() {
+                toggle = Some(tag.id);
             }
-            label.context_menu(|ui| {
-                if ui.button("Modifier…").clicked() {
-                    manage = Some(Some(tag.id));
-                    ui.close();
-                }
-                if ui.button("Supprimer").clicked() {
-                    delete = Some(tag.id);
-                    ui.close();
-                }
-            });
+            if inherited.contains(&tag.id) {
+                ui.weak("hérité");
+            }
         });
     }
-    if let Some((id, add)) = toggle {
+    if shown.is_empty() && !creating {
+        ui.weak(if searching { "Aucun tag trouvé" } else { "Aucun tag : tape un nom pour en créer un" });
+    }
+    if creating && ui.button(format!("+ Créer le tag « {} »", parts.join(" / "))).clicked() {
+        create = true;
+    }
+    ui.add_space(8.0);
+    if ui.button("Gérer les tags…").clicked() {
+        app.tag_manager = Some(TagManager::default());
+    }
+
+    if let Some(id) = toggle {
+        let all_have = !selection.is_empty() && own.iter().all(|set| set.contains(&id));
         if let Some(store) = app.tags.as_mut() {
             for path in &selection {
-                if add { store.tag(path, id) } else { store.untag(path, id) }
+                if all_have { store.untag(path, id) } else { store.tag(path, id) }
             }
         }
     }
-    if let Some(id) = filter {
-        let next = if app.tag_filter == Some(id) { None } else { Some(id) };
-        app.set_tag_filter(next);
-    }
-    if let Some(selected) = manage {
-        app.tag_manager = Some(TagManager { selected, ..Default::default() });
-    }
-    if let Some(id) = delete {
+    if create {
         if let Some(store) = app.tags.as_mut() {
-            store.delete(id);
+            if let Some(leaf) = store.create_path(&parts) {
+                for path in &selection {
+                    store.tag(path, leaf);
+                }
+            }
         }
-        if app.tag_filter == Some(id) {
-            app.set_tag_filter(None);
-        }
+        app.tags_query.clear();
     }
 }
 

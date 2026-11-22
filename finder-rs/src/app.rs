@@ -160,6 +160,8 @@ pub struct FinderApp {
     pub tags: Option<TagStore>,
     pub search_state: crate::search::Search,
     pub tag_filter: Option<i64>,
+    /// the search or creation field of the tags pane
+    pub tags_query: String,
     /// the tags folded in the tree of the sidebar
     tag_folded: HashSet<i64>,
     pub tag_manager: Option<TagManager>,
@@ -260,6 +262,7 @@ impl FinderApp {
             tags: TagStore::open(None).ok(),
             search_state: Default::default(),
             tag_filter: None,
+            tags_query: String::new(),
             tag_folded: HashSet::new(),
             tag_manager: None,
             tag_picker: None,
