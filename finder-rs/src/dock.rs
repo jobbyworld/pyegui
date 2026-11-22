@@ -77,6 +77,11 @@ struct Behavior<'a> {
 }
 
 impl egui_tiles::Behavior<Pane> for Behavior<'_> {
+    // a pane alone keeps its tab: without it there is nothing to grab to move the pane
+    fn simplification_options(&self) -> egui_tiles::SimplificationOptions {
+        egui_tiles::SimplificationOptions { all_panes_must_have_tabs: true, ..Default::default() }
+    }
+
     // the title of a pane like the title bar of a dock of pyfinder: small, semi bold, muted
     // (the active one in the color of the text), on the color of the panel, a thin line below
     fn tab_title_for_pane(&mut self, pane: &Pane) -> egui::WidgetText {
