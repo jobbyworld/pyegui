@@ -36,6 +36,17 @@ fn can_paste(app: &FinderApp) -> bool {
     app.clipboard.as_ref().is_some_and(|(paths, _)| !paths.is_empty())
 }
 
+/// Ctrl+Cmd+N on macOS, Cmd+Alt+N elsewhere
+#[cfg(target_os = "macos")]
+const GROUP_MODIFIERS: Modifiers = Modifiers { ctrl: true, mac_cmd: true, command: true, ..Modifiers::NONE };
+#[cfg(not(target_os = "macos"))]
+const GROUP_MODIFIERS: Modifiers = Modifiers::COMMAND.plus(Modifiers::ALT);
+
+/// a selection, all of it in the current folder
+fn can_group(app: &FinderApp) -> bool {
+    !app.selected.is_empty() && app.selected.iter().all(|p| p.parent() == Some(app.folder()))
+}
+
 pub static ACTIONS: &[Action] = &[
     Action { category: "Fichier", label: "Ouvrir", icon: "↗", shortcut: cmd(Key::ArrowDown), enabled: has_selection, in_menu: true, run: |app, _| {
         for path in app.selected_paths() { app.open(&path); }
@@ -45,6 +56,7 @@ pub static ACTIONS: &[Action] = &[
         if let Some(p) = app.selected_paths().first() { app.new_window = Some(p.clone()); }
     }},
     Action { category: "Fichier", label: "Nouveau dossier", icon: "＋", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::N)), enabled: always, in_menu: false, run: |app, _| app.new_folder() },
+    Action { category: "Fichier", label: "Regrouper dans un dossier", icon: "▤", shortcut: Some(KeyboardShortcut::new(GROUP_MODIFIERS, Key::N)), enabled: can_group, in_menu: true, run: |app, _| app.group_selection() },
     Action { category: "Fichier", label: "Renommer", icon: "✎", shortcut: Some(KeyboardShortcut::new(Modifiers::NONE, Key::F2)), enabled: one_selected, in_menu: true, run: |app, _| {
         if let Some(p) = app.selected_paths().first() { app.start_rename(p.clone()); }
     }},
@@ -144,11 +156,16 @@ pub fn trash(path: &Path) -> Result<(), String> {
 
 /// "untitled folder", "untitled folder 2"... the first that does not exist
 pub fn unique_folder(parent: &Path) -> PathBuf {
-    let base = parent.join("dossier sans titre");
+    unique_named(parent, "dossier sans titre")
+}
+
+/// `name`, `name 2`, `name 3`... the first that does not exist in `parent`
+pub fn unique_named(parent: &Path, name: &str) -> PathBuf {
+    let base = parent.join(name);
     if !base.exists() {
         return base;
     }
-    (2..).map(|n| parent.join(format!("dossier sans titre {n}"))).find(|p| !p.exists()).unwrap()
+    (2..).map(|n| parent.join(format!("{name} {n}"))).find(|p| !p.exists()).unwrap()
 }
 
 #[cfg(test)]
