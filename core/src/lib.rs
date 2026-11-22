@@ -10,6 +10,7 @@ pub mod pdf_nav;
 pub mod pdf_text;
 pub mod watcher;
 pub mod transfer;
+pub mod clipboard;
 pub mod style;
 pub mod window;
 pub mod icons;
