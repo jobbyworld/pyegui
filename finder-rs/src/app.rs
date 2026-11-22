@@ -546,8 +546,24 @@ impl FinderApp {
         self.selected.clear();
     }
 
+    /// Copy or cut of the selection: in the clipboard of the system (the files can be pasted in the
+    /// Finder or the Explorer), and kept here too, for the systems that have none for files
+    pub fn copy_files(&mut self, cut: bool) {
+        let paths = self.selected_paths();
+        pyegui_core::clipboard::write_files(&paths, cut);
+        self.clipboard = Some((paths, cut));
+    }
+
+    /// Paste: the files of the clipboard of the system (copied here or by another program), else the
+    /// list kept here. A cut moves them
     pub fn paste(&mut self) {
-        let Some((paths, cut)) = self.clipboard.clone() else { return };
+        let (system, system_cut) = pyegui_core::clipboard::read_files();
+        let (paths, cut) = if system.is_empty() {
+            let Some(held) = self.clipboard.clone() else { return };
+            held
+        } else {
+            (system, system_cut)
+        };
         let folder = self.folder().to_path_buf();
         self.transfer.start(paths, folder, cut);
         if cut {
@@ -559,6 +575,11 @@ impl FinderApp {
     fn poll_transfer(&mut self) {
         let done = self.transfer.finished();
         if !done.is_empty() {
+            if self.pasted_cut && self.transfer.running() == 0 {
+                // the moved files are now at their new place: the clipboard keeps them as a copy
+                let moved: Vec<PathBuf> = done.iter().map(|(_, target)| target.clone()).collect();
+                pyegui_core::clipboard::write_files(&moved, false);
+            }
             self.select_after = done.into_iter().filter(|(folder, _)| folder == self.folder()).map(|(_, target)| target).collect();
             if self.pasted_cut && self.transfer.running() == 0 {
                 self.clipboard = None;

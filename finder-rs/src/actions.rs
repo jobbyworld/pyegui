@@ -34,7 +34,7 @@ fn one_selected(app: &FinderApp) -> bool {
     app.selected.len() == 1
 }
 fn can_paste(app: &FinderApp) -> bool {
-    app.clipboard.as_ref().is_some_and(|(paths, _)| !paths.is_empty())
+    app.clipboard.as_ref().is_some_and(|(paths, _)| !paths.is_empty()) || pyegui_core::clipboard::has_files()
 }
 
 /// Ctrl+Cmd+N on macOS, Cmd+Alt+N elsewhere
@@ -117,10 +117,10 @@ pub static ACTIONS: &[Action] = &[
     }},
     Action { category: "Fichier", label: "Mettre à la corbeille", icon: "🗑", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::Backspace)), enabled: has_selection, in_menu: true, run: |app, _| app.ask_delete() },
     Action { category: "Édition", label: "Copier", icon: "⎘", shortcut: cmd(Key::C), enabled: has_selection, in_menu: true, run: |app, _| {
-        app.clipboard = Some((app.selected_paths(), false));
+        app.copy_files(false);
     }},
     Action { category: "Édition", label: "Couper", icon: "✂", shortcut: cmd(Key::X), enabled: has_selection, in_menu: true, run: |app, _| {
-        app.clipboard = Some((app.selected_paths(), true));
+        app.copy_files(true);
     }},
     Action { category: "Édition", label: "Coller", icon: "📋", shortcut: cmd(Key::V), enabled: can_paste, in_menu: true, run: |app, _| app.paste() },
     Action { category: "Édition", label: "Tout sélectionner", icon: "▣", shortcut: cmd(Key::A), enabled: always, in_menu: false, run: |app, _| app.select_all() },
