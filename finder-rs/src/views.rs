@@ -45,7 +45,7 @@ impl Views {
         };
         let mut icons = make("icons");
         icons.icon_size = ICON_SIZE;
-        let mut tree = TreeState::new("tree".into(), folder.to_path_buf(), core.clone(), show_hidden, true, false, true, false);
+        let mut tree = TreeState::new("tree".into(), folder.to_path_buf(), core.clone(), show_hidden, true, false, true, true);
         tree.keep_focus = true;
         Views { list: Some(make("list")), icons: Some(icons), tree: Shared::new(tree), tagged: None, shown_key: None }
     }
@@ -146,6 +146,8 @@ fn feed_folder(view: &mut FolderView, app: &FinderApp, paths: &Option<Vec<PathBu
         view.go(app.folder());
     }
     view.show_hidden = app.show_hidden;
+    // a field being typed in keeps the focus
+    view.keep_focus = app.path_text.is_none();
     view.columns.set_name_text(app.search.clone());
     view.columns.sort_key = sort_name(app.sort_key).into();
     view.columns.ascending = app.ascending;
@@ -216,6 +218,7 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
                 t.root = root;
             }
             t.show_hidden = app.show_hidden;
+            t.keep_focus = app.path_text.is_none();
             t.columns.set_name_text(app.search.clone());
             t.columns.sort_key = sort_name(app.sort_key).into();
             t.columns.ascending = app.ascending;
@@ -250,7 +253,9 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
                     o.tag = Some(change);
                 }
             };
-            draw_tree(ui, &shared, &hooks, &params, Some(&menu));
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                draw_tree(ui, &shared, &hooks, &params, Some(&menu));
+            });
             out = menu_out.into_inner();
         }
         let t = shared.borrow();

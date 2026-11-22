@@ -1326,6 +1326,9 @@ pub struct TreeState {
     pub focus: Option<bool>,
     pub keep_focus: bool,
     pub scroll_to: Option<String>,
+    /// what was typed to find a row by its name, and when
+    pub typed: String,
+    pub typed_at: Option<Instant>,
     pub activatable_dirs: bool,
     /// the items at the top instead of the items of the root
     pub paths: Option<Vec<PathBuf>>,
@@ -1747,7 +1750,7 @@ pub fn draw_tree(
         layout.scroll = v.columns.scroll;
     }
 
-    let (mut state, mut nodes, multi_select, show_root, activatable_dirs, scroll_to, rules, given) = {
+    let (mut state, mut nodes, multi_select, show_root, activatable_dirs, mut scroll_to, rules, given) = {
         let mut v = view.borrow_mut();
         let mut state = std::mem::take(&mut v.state);
         for (path, open) in std::mem::take(&mut v.pending_open) {
@@ -1808,6 +1811,29 @@ pub fn draw_tree(
             vec![]
         });
         v.values = std::mem::take(&mut values);
+    }
+
+    // typing the start of a name selects the first row that begins with it
+    if ui.memory(|m| m.has_focus(id)) {
+        let keys = read_keys(ui);
+        if !keys.text.trim().is_empty() {
+            let mut v = view.borrow_mut();
+            if v.typed_at.is_none_or(|t| t.elapsed() > Duration::from_secs(1)) {
+                v.typed.clear();
+            }
+            let typed = format!("{}{}", v.typed, keys.text.to_lowercase());
+            v.typed = typed.clone();
+            v.typed_at = Some(Instant::now());
+            let found = v
+                .shown
+                .iter()
+                .find(|p| Path::new(p).file_name().is_some_and(|n| n.to_string_lossy().to_lowercase().starts_with(&typed)))
+                .cloned();
+            if let Some(path) = found {
+                state.set_selected(vec![path.clone()]);
+                scroll_to = Some(path);
+            }
+        }
     }
 
     if let Some(target) = &scroll_to {
@@ -1950,6 +1976,8 @@ impl TreeState {
             focus: None,
             keep_focus: false,
             scroll_to: None,
+            typed: String::new(),
+            typed_at: None,
             activatable_dirs,
             paths: None,
         }

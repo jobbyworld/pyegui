@@ -48,13 +48,125 @@ fn present(tiles: &Tiles<Pane>) -> Vec<Pane> {
     tiles.iter().filter_map(|(_, t)| if let Tile::Pane(p) = t { Some(*p) } else { None }).collect()
 }
 
+/// The sheet of the dock: what the panes and their active tab are filled with
+fn sheet(visuals: &egui::Visuals) -> egui::Color32 {
+    // the fill of the panel of the dock, so the active tab and its pane are one piece
+    visuals.panel_fill
+}
+
+/// The outline of a tab, open at the bottom so it joins its pane
+fn tab_outline(rect: egui::Rect, radius: f32) -> Vec<egui::Pos2> {
+    use std::f32::consts::FRAC_PI_2;
+    let radius = radius.min(rect.width() / 2.0).min(rect.height());
+    let steps = (radius.ceil() as usize).clamp(1, 8);
+    let mut points = vec![rect.left_bottom()];
+    let mut corner = |center: egui::Pos2, start: f32| {
+        for i in 0..=steps {
+            let angle = start + FRAC_PI_2 * i as f32 / steps as f32;
+            points.push(center + radius * egui::vec2(angle.cos(), angle.sin()));
+        }
+    };
+    corner(rect.left_top() + egui::vec2(radius, radius), 2.0 * FRAC_PI_2);
+    corner(rect.right_top() + egui::vec2(-radius, radius), 3.0 * FRAC_PI_2);
+    points.push(rect.right_bottom());
+    points
+}
+
 struct Behavior<'a> {
     app: &'a mut FinderApp,
 }
 
 impl egui_tiles::Behavior<Pane> for Behavior<'_> {
+    // the title of a pane like the title bar of a dock of pyfinder: small, semi bold, muted
+    // (the active one in the color of the text), on the color of the panel, a thin line below
     fn tab_title_for_pane(&mut self, pane: &Pane) -> egui::WidgetText {
-        pane.title().into()
+        RichText::new(pane.title()).small().strong().into()
+    }
+
+    fn tab_bar_height(&self, _style: &egui::Style) -> f32 {
+        28.0
+    }
+
+    fn tab_title_spacing(&self, _visuals: &egui::Visuals) -> f32 {
+        10.0
+    }
+
+    fn gap_width(&self, _style: &egui::Style) -> f32 {
+        1.0
+    }
+
+    // the bar behind the tabs is darkened: the active tab, in the fill of its pane, stands out of it
+    fn tab_bar_color(&self, visuals: &egui::Visuals) -> egui::Color32 {
+        if visuals.dark_mode {
+            egui::Color32::from_white_alpha(18) // lighter in the dark theme: black would vanish
+        } else {
+            egui::Color32::from_black_alpha(70)
+        }
+    }
+
+    fn tab_bg_color(&self, visuals: &egui::Visuals, _tiles: &Tiles<Pane>, _tile_id: TileId, state: &egui_tiles::TabState) -> egui::Color32 {
+        // the sheet of the dock for the active tab, a fainter one for the others, like finder.py
+        let sheet = sheet(visuals);
+        if state.active {
+            sheet
+        } else {
+            egui::Color32::TRANSPARENT // the darkened bar shows through
+        }
+    }
+
+    fn tab_outline_stroke(&self, visuals: &egui::Visuals, _tiles: &Tiles<Pane>, _tile_id: TileId, state: &egui_tiles::TabState) -> egui::Stroke {
+        let line = visuals.widgets.noninteractive.bg_stroke.color;
+        egui::Stroke::new(1.0, if state.active { line } else { line.gamma_multiply(0.5) })
+    }
+
+    fn tab_ui(&mut self, tiles: &mut Tiles<Pane>, ui: &mut egui::Ui, id: egui::Id, tile_id: TileId, state: &egui_tiles::TabState) -> egui::Response {
+        use egui::{CornerRadius, Sense};
+        let text = self.tab_title_for_tile(tiles, tile_id);
+        let close = egui::Vec2::splat(self.close_button_outer_size());
+        let font_id = egui::TextStyle::Button.resolve(ui.style());
+        let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, font_id);
+        let radius = f32::from(ui.visuals().widgets.inactive.corner_radius.nw).max(6.0);
+        let x_margin = self.tab_title_spacing(ui.visuals()).max(radius * 0.6);
+        let width = galley.size().x + 2.0 * x_margin + if state.closable { 4.0 + close.x } else { 0.0 };
+        let (_, outer) = ui.allocate_space(egui::vec2(width + 2.0, ui.available_height()));
+        let rect = egui::Rect::from_min_size(outer.min, egui::vec2(width, outer.height()));
+        let draggable = self.is_tile_draggable(tiles, tile_id);
+        let response = ui.interact(rect, id, if draggable { Sense::click_and_drag() } else { Sense::click() });
+        let response = if draggable { response.on_hover_cursor(self.tab_hover_cursor_icon()) } else { response };
+        if ui.is_rect_visible(rect) && !state.is_being_dragged {
+            let mut fill = self.tab_bg_color(ui.visuals(), tiles, tile_id, state);
+            if !state.active && response.hovered() {
+                fill = if ui.visuals().dark_mode { egui::Color32::from_white_alpha(14) } else { sheet(ui.visuals()).gamma_multiply(0.4) };
+            }
+            let r = radius.min(rect.width() / 2.0).min(rect.height() / 2.0).floor() as u8;
+            ui.painter().rect_filled(rect, CornerRadius { nw: r, ne: r, sw: 0, se: 0 }, fill);
+            let stroke = self.tab_outline_stroke(ui.visuals(), tiles, tile_id, state);
+            ui.painter().add(egui::Shape::line(tab_outline(rect.shrink(stroke.width / 2.0), (f32::from(r) - stroke.width / 2.0).max(0.0)), stroke));
+            let color = self.tab_text_color(ui.visuals(), tiles, tile_id, state);
+            let at = egui::Align2::LEFT_CENTER.align_size_within_rect(galley.size(), rect.shrink(x_margin)).min;
+            ui.painter().galley(at, galley, color);
+            if state.closable {
+                let button = egui::Align2::RIGHT_CENTER.align_size_within_rect(close, rect.shrink(x_margin));
+                let click = ui.interact(button, ui.auto_id_with("tab_close_btn"), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::Default);
+                let visuals = ui.style().interact(&click);
+                let cross = button.shrink(self.close_button_inner_margin()).expand(visuals.expansion);
+                ui.painter().line_segment([cross.left_top(), cross.right_bottom()], visuals.fg_stroke);
+                ui.painter().line_segment([cross.right_top(), cross.left_bottom()], visuals.fg_stroke);
+                if (click.clicked() || response.clicked_by(egui::PointerButton::Middle)) && self.on_tab_close(tiles, tile_id) {
+                    tiles.remove(tile_id);
+                }
+            }
+        }
+        self.on_tab_button(tiles, tile_id, response)
+    }
+
+    fn tab_text_color(&self, visuals: &egui::Visuals, _tiles: &Tiles<Pane>, _tile_id: TileId, state: &egui_tiles::TabState) -> egui::Color32 {
+        if state.active {
+            visuals.text_color()
+        } else {
+            // the titles of the other tabs are darkened
+            visuals.weak_text_color().gamma_multiply(if visuals.dark_mode { 1.0 } else { 0.7 })
+        }
     }
 
     fn pane_ui(&mut self, ui: &mut egui::Ui, _tile: TileId, pane: &mut Pane) -> UiResponse {
@@ -76,19 +188,6 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
 }
 
 pub fn show(app: &mut FinderApp, tree: &mut Tree<Pane>, ui: &mut egui::Ui) {
-    let missing: Vec<Pane> = PANES.into_iter().filter(|p| !present(&tree.tiles).contains(p)).collect();
-    if !missing.is_empty() || tree.root().is_none() {
-        ui.horizontal(|ui| {
-            ui.menu_button("＋ Volets", |ui| {
-                for pane in &missing {
-                    if ui.button(pane.title()).clicked() {
-                        add(tree, *pane);
-                        ui.close();
-                    }
-                }
-            });
-        });
-    }
     if tree.root().is_some() {
         tree.ui(&mut Behavior { app }, ui);
     }

@@ -141,7 +141,7 @@ pub struct FinderApp {
     pub views: Views,
     pub open_folders: std::collections::BTreeSet<PathBuf>,
     pub selected: HashSet<PathBuf>,
-    path_text: Option<String>,
+    pub path_text: Option<String>,
     pub preview_text: Option<(PathBuf, String)>,
     /// copied or cut paths (true: cut)
     pub clipboard: Option<(Vec<PathBuf>, bool)>,
@@ -843,13 +843,22 @@ impl FinderApp {
     /// parents shortened when room is missing; "…" turns it into a field to type a path
     fn path_bar(&mut self, ui: &mut egui::Ui) {
         if let Some(mut text) = self.path_text.take() {
-            let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width().max(100.0)));
-            edit.request_focus();
-            if edit.lost_focus() {
-                if ui.input(|i| i.key_pressed(Key::Enter)) {
-                    self.go(expand(Path::new(text.trim())));
-                }
-            } else if ui.input(|i| i.key_pressed(Key::Escape)) {
+            let id = egui::Id::new("path-field");
+            let fresh = !ui.memory(|m| m.has_focus(id));
+            let mut output = egui::TextEdit::singleline(&mut text).id(id).desired_width(ui.available_width().max(100.0)).show(ui);
+            if fresh {
+                // the whole path is selected: typing replaces it
+                output.response.request_focus();
+                output.state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(text.chars().count()),
+                )));
+                output.state.store(ui.ctx(), id);
+            }
+            let enter = ui.input(|i| i.key_pressed(Key::Enter));
+            if enter && (output.response.has_focus() || output.response.lost_focus()) {
+                self.go(expand(Path::new(text.trim())));
+            } else if ui.input(|i| i.key_pressed(Key::Escape)) || (output.response.lost_focus() && !fresh) {
                 // abandoned
             } else {
                 self.path_text = Some(text);
