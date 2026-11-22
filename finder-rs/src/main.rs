@@ -5,6 +5,7 @@ mod app;
 mod dock;
 mod glyphs;
 mod model;
+mod openapps;
 mod tagsui;
 mod tagstore;
 mod search;
