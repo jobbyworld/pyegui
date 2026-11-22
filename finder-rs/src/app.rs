@@ -807,7 +807,8 @@ impl FinderApp {
 
     /// The toggle of the sidebar, just on the right of the window buttons
     fn sidebar_button(&mut self, ui: &mut egui::Ui) {
-        if glyphs::button(ui, glyphs::SIDEBAR, 16.0, self.show_sidebar, "Afficher / masquer la sidebar").clicked() {
+        let glyph = glyphs::by_name(if self.show_sidebar { "sidebar-open" } else { "sidebar-closed" });
+        if glyphs::button(ui, glyph, 18.0, false, "Afficher / masquer la sidebar (⌘B)").clicked() {
             self.show_sidebar = !self.show_sidebar;
         }
     }
@@ -873,7 +874,7 @@ impl FinderApp {
                 ui.add_space(4.0);
                 let toggles = glyphs::segmented(ui, "panes", 18.0, &[
                     glyphs::cell(glyphs::TERMINAL, self.show_terminal, "Terminal (⌘T)"),
-                    glyphs::cell(glyphs::PANES, self.show_dock, "Afficher / masquer les volets (clic droit : gérer)"),
+                    glyphs::cell(glyphs::by_name(if self.show_dock { "dock-open" } else { "dock-closed" }), false, "Afficher / masquer les volets (⌘J, clic droit : gérer)"),
                 ]);
                 match toggles.clicked {
                     Some(0) => self.show_terminal = !self.show_terminal,
@@ -1154,7 +1155,11 @@ impl FinderApp {
             if MAC_TITLEBAR {
                 ui.add_space(64.0);
             }
-            self.sidebar_button(ui);
+            // open, the toggle is at the right of the sidebar; closed, it is next to the window buttons
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(6.0);
+                self.sidebar_button(ui);
+            });
         });
         let folder = self.folder().to_path_buf();
         egui::Panel::bottom("sidebar_bottom").exact_size(BOTTOM_H).frame(egui::Frame::NONE).show(ui, |ui| {
