@@ -132,7 +132,7 @@ fn headers() -> [String; 4] {
 }
 
 fn options() -> HeaderOptions {
-    HeaderOptions { resizable: true, pinnable: true, reorderable: true, filterable: true, drag_out: true, grow_left: false }
+    HeaderOptions { resizable: true, pinnable: true, reorderable: true, filterable: true, drag_out: true, grow_left: false, tinted: true }
 }
 
 /// The paths of the tag view, read again only when the tag or the store changes

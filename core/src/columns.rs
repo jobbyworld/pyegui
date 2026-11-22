@@ -271,10 +271,23 @@ pub struct HeaderOptions {
     pub drag_out: bool,
     /// the columns are at the right end and grow to the left (the tree)
     pub grow_left: bool,
+    /// the cells of the header are filled with the tint of the bars (the one of the inactive tabs)
+    pub tinted: bool,
 }
 
+/// The height of the header of the columns: the one of the tab bars of the docks
+pub const HEADER_H: f32 = 40.0;
+
+/// The gap above the tabs of a bar of tabs, which the titles of a tinted header keep too
+pub const TAB_TOP_GAP: f32 = 6.0;
+
+/// Where a tinted header leaves the rectangle of the last one drawn (read by the pane that holds it)
+pub const HEADER_BAND: &str = "pyegui-header-band";
+/// Told by the file views (a `bool` in the temp data of the context): rows go under the pinned header.
+pub const HEADER_SCROLLED: &str = "pyegui-header-scrolled";
+
 fn galley(ui: &egui::Ui, text: &str, width: f32, color: Color32) -> std::sync::Arc<egui::Galley> {
-    egui::WidgetText::from(egui::RichText::new(text).color(color)).into_galley(
+    egui::WidgetText::from(egui::RichText::new(text).small().strong().color(color)).into_galley(
         ui,
         Some(TextWrapMode::Truncate),
         width.max(1.0),
@@ -313,6 +326,17 @@ pub fn header(
     let accent = ui.visuals().selection.bg_fill;
     let pointer = ui.input(|i| i.pointer.interact_pos());
 
+    if opts.tinted {
+        // the band of the header is told to the pane that holds it, which leaves its sheet out of it
+        let band = cells.iter().map(|c| c.rect).reduce(|a, b| a.union(b));
+        if let Some(band) = band {
+            ui.ctx().data_mut(|d| {
+                let key = Id::new(HEADER_BAND);
+                let all = d.get_temp::<Rect>(key).map_or(band, |old| old.union(band));
+                d.insert_temp(key, all);
+            });
+        }
+    }
     for (i, cell) in cells.iter().enumerate() {
         let rect = cell.rect;
         let movable = opts.reorderable && cell.movable;
@@ -324,6 +348,11 @@ pub fn header(
             Sense::hover()
         };
         let body = ui.interact(rect, id.with(("cell", &cell.key)), sense);
+        if opts.tinted && ui.rect_contains_pointer(rect) {
+            // like an inactive tab: no fill, a light one under the pointer
+            let fill = if ui.visuals().dark_mode { Color32::from_white_alpha(14) } else { Color32::from_white_alpha(110) };
+            ui.painter().rect_filled(Rect::from_min_max(rect.min + vec2(0.0, TAB_TOP_GAP), rect.max), egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, fill);
+        }
         if body.clicked() && cell.sortable {
             state.toggle_sort(&cell.key);
         }
@@ -339,18 +368,25 @@ pub fn header(
         let hovered = ui.rect_contains_pointer(rect);
 
         // the title and the arrow of the sort
-        let color = if active_sort || (body.hovered() && cell.sortable) {
+        let color = if opts.tinted {
+            // the color of the title of an inactive tab, whatever the sort (the arrow tells it)
+            let v = ui.visuals();
+            v.weak_text_color().gamma_multiply(if v.dark_mode { 1.0 } else { 0.7 })
+        } else if active_sort || (body.hovered() && cell.sortable) {
             ui.visuals().strong_text_color()
         } else {
             ui.visuals().weak_text_color()
         };
         let reserved = 26.0 + if filterable { 18.0 } else { 0.0 };
         let text = galley(ui, &cell.title, rect.width() - reserved, color);
-        let pos = pos2(rect.left() + 8.0, rect.center().y - text.size().y / 2.0);
+        // a tinted header is read like a bar of tabs: its titles sit where the titles of the tabs do,
+        // under the gap above the tabs
+        let middle = if opts.tinted { rect.center().y + TAB_TOP_GAP / 2.0 } else { rect.center().y };
+        let pos = pos2(rect.left() + 8.0, middle - text.size().y / 2.0);
         let text_right = pos.x + text.size().x;
         ui.painter().with_clip_rect(rect).galley(pos, text, color);
         if active_sort {
-            paint_sort_arrow(ui, pos2(text_right + 9.0, rect.center().y), state.ascending, color);
+            paint_sort_arrow(ui, pos2(text_right + 9.0, middle), state.ascending, color);
         }
         if i > 0 {
             ui.painter().vline(rect.left(), rect.y_range().shrink(4.0), line);
@@ -358,7 +394,7 @@ pub fn header(
 
         // the funnel of the filter
         if filterable {
-            let spot = Rect::from_center_size(pos2(rect.right() - 14.0, rect.center().y), vec2(18.0, 18.0));
+            let spot = Rect::from_center_size(pos2(rect.right() - 14.0, if opts.tinted { rect.center().y + TAB_TOP_GAP / 2.0 } else { rect.center().y }), vec2(18.0, 18.0));
             let funnel = ui.interact(spot, id.with(("funnel", &cell.key)), Sense::click());
             if hovered || filter_active || popup_open {
                 if funnel.hovered() || popup_open {

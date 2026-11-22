@@ -883,7 +883,8 @@ pub fn resolve_columns(state: &ColumnsState, wanted: &[Column], hooks: &Hooks<'_
 /// drag on a title moves the column, a drag on its border resizes it, the funnel filters it
 pub fn list_header(ui: &mut egui::Ui, view: &mut FolderView, shape: &Shape, hooks: &Hooks<'_>, id: Id, opts: HeaderOptions) {
     let Shape::List { columns, headers, row_height, .. } = shape else { return };
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), *row_height), Sense::hover());
+    let _ = row_height;
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), columns::HEADER_H), Sense::hover());
     let zones = list_zones(&view.columns, columns, hooks, rect.width());
     hscroll_wheel(ui, &mut view.columns, &zones, Rect::from_min_max(rect.min, ui.max_rect().max));
     let cells: Vec<Cell> = columns
@@ -1233,6 +1234,7 @@ pub fn draw_folder_in(
             rubber_band(ui, view, &background, &shape, &entries, origin, width, seen, mods);
         });
     ctx.data_mut(|d| d.insert_temp(scroll_key, (parent, seen_offset)));
+    ctx.data_mut(|d| d.insert_temp(Id::new(columns::HEADER_SCROLLED), seen_offset > 0.5));
     hscroll_bar(ui, id, &mut view.columns, &zones, output.inner_rect);
     menus
 }
@@ -1543,7 +1545,7 @@ pub fn tree_header(
 ) {
     let shift = (ui.clip_rect().top() - slot.top()).max(0.0);
     let rect = slot.translate(vec2(0.0, shift));
-    if shift > 0.5 {
+    if shift > 0.5 && !opts.tinted {
         ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
     }
     let mut cells: Vec<Cell> = vec![Cell {
@@ -1702,7 +1704,7 @@ pub struct TreeParams {
 impl Default for TreeParams {
     fn default() -> Self {
         TreeParams {
-            opts: HeaderOptions { resizable: true, pinnable: true, reorderable: true, filterable: true, drag_out: true, grow_left: false },
+            opts: HeaderOptions { resizable: true, pinnable: true, reorderable: true, filterable: true, drag_out: true, grow_left: false, tinted: false },
             headers: default_headers(),
             date_format: DATE_FORMAT.into(),
             builtin: vec![],
@@ -1738,7 +1740,7 @@ pub fn draw_tree(
     let origin_x = ui.cursor().min.x;
     // the room of the header, which is drawn once the rows are, over them
     let slot = match (&layout, *header) {
-        (Some(layout), true) if layout.finite && !columns.is_empty() => Some(ui.allocate_exact_size(vec2(layout.width, 24.0), Sense::hover()).0),
+        (Some(layout), true) if layout.finite && !columns.is_empty() => Some(ui.allocate_exact_size(vec2(layout.width, columns::HEADER_H), Sense::hover()).0),
         _ => None,
     };
     // the columns that are not pinned scroll with the wheel over the tree
@@ -1858,6 +1860,7 @@ pub fn draw_tree(
     let full_clip = ui.clip_rect();
     if let Some(slot) = &slot {
         let shift = (full_clip.top() - slot.top()).max(0.0);
+        ctx.data_mut(|d| d.insert_temp(Id::new(columns::HEADER_SCROLLED), shift > 0.5));
         let below = (slot.bottom() + shift).clamp(full_clip.top(), full_clip.bottom());
         ui.shrink_clip_rect(Rect::from_min_max(pos2(full_clip.left(), below), full_clip.max));
     }

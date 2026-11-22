@@ -500,3 +500,50 @@ pub fn glass_style(style: &mut Style, tint: Option<Color32>) {
     style.spacing.menu_margin = egui::Margin::symmetric(10, 8);
 }
 
+
+/// The three glasses of a window: the sidebar, the content that is inactive (bands, bars of tabs,
+/// inactive tabs, headers of columns) and the content that is active (the active tab and its pane)
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Layer {
+    Sidebar = 0,
+    Inactive = 1,
+    Active = 2,
+}
+
+/// What the user chose for each layer: a tint and an opacity, None for the default ones
+/// (the light theme, then the dark one): the two themes have their own settings
+pub static LAYERS: Mutex<[[(Option<Color32>, Option<f32>); 3]; 2]> = Mutex::new([[(None, None); 3]; 2]);
+
+pub fn set_layer(dark: bool, layer: Layer, tint: Option<Color32>, opacity: Option<f32>) {
+    if let Ok(mut layers) = LAYERS.lock() {
+        layers[dark as usize][layer as usize] = (tint, opacity);
+    }
+}
+
+/// The tint and the opacity of a layer: the chosen ones, or the defaults of the theme
+pub fn layer_values(layer: Layer, dark: bool) -> (Color32, f32) {
+    let (tint, opacity) = LAYERS.lock().map(|l| l[dark as usize][layer as usize]).unwrap_or((None, None));
+    let (default_tint, default_opacity) = match (layer, dark) {
+        (Layer::Sidebar, false) => (Color32::from_rgb(240, 240, 246), 0.55),
+        (Layer::Sidebar, true) => (Color32::from_rgb(24, 26, 34), 0.55),
+        (Layer::Inactive, false) => (Color32::from_rgb(232, 232, 238), 0.5),
+        (Layer::Inactive, true) => (Color32::from_rgb(28, 30, 38), 0.5),
+        (Layer::Active, false) => (Color32::from_rgb(251, 251, 253), 0.9),
+        (Layer::Active, true) => (Color32::from_rgb(36, 38, 46), 0.9),
+    };
+    (tint.unwrap_or(default_tint), opacity.unwrap_or(default_opacity))
+}
+
+/// The fill of a layer: its tint and its opacity, opaque when the window has no glass
+pub fn layer_fill(layer: Layer, visuals: &egui::Visuals) -> Color32 {
+    let (tint, opacity) = layer_values(layer, visuals.dark_mode);
+    let glass = theme_state().glass.is_some() && !reduce_transparency();
+    let alpha = if glass { (opacity.clamp(0.0, 1.0) * 255.0).round() as u8 } else { 255 };
+    Color32::from_rgba_unmultiplied(tint.r(), tint.g(), tint.b(), alpha)
+}
+
+/// The tint of the bands, of the tab bars of the docks and of the headers of columns: the glass of
+/// the inactive content
+pub fn bar_tint(visuals: &egui::Visuals) -> Color32 {
+    layer_fill(Layer::Inactive, visuals)
+}

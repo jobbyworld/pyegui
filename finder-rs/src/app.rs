@@ -44,17 +44,63 @@ pub enum ThemeChoice {
     Dark,
 }
 
-/// The glass of the window: what is seen behind it through the panels
+/// What is behind the glasses of the window
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum GlassChoice {
-    None,
-    Partial,
-    Full,
+pub enum Background {
+    /// the native glass of the system (what is behind the window, blurred)
+    Glass,
+    /// a picture, blurred
+    Image,
+    /// a plain color
+    Color,
 }
 
-impl GlassChoice {
+impl Background {
     fn default_for_system() -> Self {
-        if cfg!(any(target_os = "macos", target_os = "windows")) { GlassChoice::Full } else { GlassChoice::None }
+        if backdrop_name().is_some() { Background::Glass } else { Background::Color }
+    }
+}
+
+/// The look of one theme (light or dark): the background and the three glasses
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Look {
+    pub background: Background,
+    pub color: Option<[u8; 3]>,
+    pub image: Option<PathBuf>,
+    /// the blur of the glass or of the picture
+    pub blur: u32,
+    pub layers: [LayerSetting; 3],
+    /// the outline of the tabs and of the panes: thickness and color with its alpha (None: the one of the theme)
+    /// [active tabs and panes, inactive tabs]
+    pub outline_width: [f32; 2],
+    pub outline: [Option<[u8; 4]>; 2],
+    /// the color of the text (None: the one of the theme)
+    pub text: Option<[u8; 3]>,
+}
+
+impl Default for Look {
+    fn default() -> Self {
+        Look { background: Background::default_for_system(), color: None, image: None, blur: 0, layers: Default::default(), outline_width: [1.0; 2], outline: [None; 2], text: None }
+    }
+}
+
+fn is_image(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"))
+}
+
+/// The menu of the appearance stays open while a click lands in it or in a popup of a color picker;
+/// a click elsewhere (but on its button) closes it
+fn close_on_click_outside(ui: &egui::Ui) {
+    let ctx = ui.ctx();
+    if !ctx.input(|i| i.pointer.any_pressed()) {
+        return;
+    }
+    let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) else { return };
+    let on_button = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("gear-rect"))).is_some_and(|r| r.contains(pos));
+    let inside = ctx.layer_id_at(pos).is_some_and(|l| matches!(l.order, egui::Order::Foreground | egui::Order::Tooltip));
+    if !inside && !on_button {
+        ui.close();
     }
 }
 
@@ -68,6 +114,15 @@ fn backdrop_name() -> Option<&'static str> {
         None
     }
 }
+
+/// The tint and the opacity chosen for one glass, None for the default ones
+#[derive(Serialize, Deserialize, Clone, Copy, Default, PartialEq)]
+pub struct LayerSetting {
+    pub tint: Option<[u8; 3]>,
+    pub opacity: Option<f32>,
+}
+
+const LAYERS: [(style::Layer, &str); 3] = [(style::Layer::Sidebar, "Barre latérale"), (style::Layer::Inactive, "Contenu inactif"), (style::Layer::Active, "Contenu actif")];
 
 /// What is kept between two runs
 #[derive(Serialize, Deserialize)]
@@ -83,7 +138,10 @@ struct Saved {
     show_dock: bool,
     show_terminal: bool,
     terminal_opacity: f32,
-    glass: GlassChoice,
+    /// the look of the light theme and of the dark theme, kept apart
+    looks: [Look; 2],
+    /// an accent chosen with the color picker
+    accent_custom: Option<[u8; 3]>,
     show_hidden: bool,
     dock: Option<String>,
     open_folders: Vec<PathBuf>,
@@ -102,7 +160,8 @@ impl Default for Saved {
             show_dock: true,
             show_terminal: true,
             terminal_opacity: 0.2,
-            glass: GlassChoice::default_for_system(),
+            looks: Default::default(),
+            accent_custom: None,
             show_hidden: false,
             dock: None,
             open_folders: Vec::new(),
@@ -122,7 +181,11 @@ pub struct FinderApp {
     show_dock: bool,
     show_terminal: bool,
     pub terminal_opacity: f32,
-    pub glass: GlassChoice,
+    pub looks: [Look; 2],
+    pub accent_custom: Option<[u8; 3]>,
+    /// the picture behind the glasses, blurred: the file, the blur and its texture
+    bg_texture: Option<(PathBuf, u32, egui::TextureHandle)>,
+    applied_blur: u32,
     title: String,
     /// a window opened by the first one: it has no native backdrop and closes on its own
     secondary: bool,
@@ -309,7 +372,8 @@ impl FinderApp {
             view: self.view,
             theme: self.theme,
             accent: self.accent,
-            glass: self.glass,
+            looks: self.looks.clone(),
+            accent_custom: self.accent_custom,
             show_hidden: self.show_hidden,
             show_dock: false,
             show_terminal: false,
@@ -345,7 +409,10 @@ impl FinderApp {
             show_dock: saved.show_dock,
             show_terminal: saved.show_terminal,
             terminal_opacity: saved.terminal_opacity.clamp(0.0, 1.0),
-            glass: saved.glass,
+            looks: saved.looks,
+            accent_custom: saved.accent_custom,
+            bg_texture: None,
+            applied_blur: 0,
             title: String::new(),
             secondary: false,
             windows: Vec::new(),
@@ -464,18 +531,42 @@ impl FinderApp {
         }
     }
 
+    /// The tint and the opacity of the three glasses are read at each frame by the drawing
+    pub fn apply_layers(&self) {
+        for (d, look) in self.looks.iter().enumerate() {
+            for (i, (layer, _)) in LAYERS.iter().enumerate() {
+                let s = look.layers[i];
+                style::set_layer(d == 1, *layer, s.tint.map(|[r, g, b]| egui::Color32::from_rgb(r, g, b)), s.opacity);
+            }
+        }
+    }
+
+    /// The accent: the one of the color picker, or one of the four first
+    /// The outline of the tabs and panes for a theme: its thickness and its color
+    pub fn outline(&self, visuals: &egui::Visuals, active: bool) -> (f32, egui::Color32) {
+        let k = usize::from(!active);
+        let look = &self.looks[usize::from(visuals.dark_mode)];
+        let base = visuals.widgets.noninteractive.bg_stroke.color;
+        let color = look.outline[k]
+            .map(|[r, g, b, a]| egui::Color32::from_rgba_unmultiplied(r, g, b, a))
+            .unwrap_or(if active { base } else { base.gamma_multiply(0.5) });
+        (look.outline_width[k], color)
+    }
+
+    pub fn accent_color(&self) -> egui::Color32 {
+        self.accent_custom.map(|[r, g, b]| egui::Color32::from_rgb(r, g, b)).unwrap_or(ACCENTS[self.accent].1)
+    }
+
     pub fn apply_theme(&self, ctx: &egui::Context) {
         ctx.set_theme(match self.theme {
             ThemeChoice::System => egui::ThemePreference::System,
             ThemeChoice::Light => egui::ThemePreference::Light,
             ThemeChoice::Dark => egui::ThemePreference::Dark,
         });
-        let accent = ACCENTS[self.accent].1;
-        let mode = match self.glass {
-            GlassChoice::None => None,
-            GlassChoice::Partial => Some(style::GlassMode::Partial),
-            GlassChoice::Full => Some(style::GlassMode::Full),
-        };
+        self.apply_layers();
+        let accent = self.accent_color();
+        // the opacity of each glass is its own setting, whatever is behind
+        let mode = Some(style::GlassMode::Full);
         // the clear glass of the content and of the docks, like examples/finder.py
         let levels = style::GlassLevels { scale: 1.2, central: Some(0.3), dock: Some(0.3), ..style::GlassLevels::DEFAULT };
         if let Ok(mut state) = style::THEME.lock() {
@@ -483,9 +574,16 @@ impl FinderApp {
         }
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
             let mut s = style::default_style(theme);
+            let look = &self.looks[usize::from(theme == egui::Theme::Dark)];
             match mode {
                 Some(mode) => style::modern_glass_style(&mut s, None, accent, mode, levels),
                 None => style::accent_style(&mut s, accent),
+            }
+            // the text of the widgets, not an override of every text: what is selected keeps its own color
+            if let Some([r, g, b]) = look.text {
+                let c = egui::Color32::from_rgb(r, g, b);
+                s.visuals.widgets.noninteractive.fg_stroke.color = c;
+                s.visuals.widgets.inactive.fg_stroke.color = c;
             }
             ctx.set_style_of(theme, s);
         }
@@ -980,6 +1078,7 @@ impl FinderApp {
         // what the right part takes, to keep the name of the folder out of it
         let right_part = 2.0 * 34.0 + 12.0 + if show_search { search_width + 8.0 } else { 0.0 } + if show_view { 3.0 * 32.0 + 8.0 } else { 0.0 };
         let height = band.height();
+        ui.spacing_mut().interact_size.y = glyphs::CONTROL_H;
         ui.allocate_ui_with_layout(egui::vec2(row, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             if MAC_TITLEBAR && !self.show_sidebar {
                 ui.add_space(76.0); // the window buttons are over the toolbar when the sidebar is hidden
@@ -1044,7 +1143,7 @@ impl FinderApp {
                 });
                 ui.add_space(8.0);
                 if show_search {
-                    ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("Rechercher").desired_width(search_width));
+                    ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("Rechercher").vertical_align(egui::Align::Center).desired_width(search_width));
                     ui.add_space(8.0);
                 }
                 if show_view {
@@ -1097,6 +1196,7 @@ impl FinderApp {
     fn bottom_bar(&mut self, ui: &mut egui::Ui) {
         let row = ui.max_rect();
         let height = BOTTOM_H;
+        ui.spacing_mut().interact_size.y = glyphs::CONTROL_H;
         let right_width = 380.0_f32.min(row.width() * 0.5);
         ui.allocate_ui_with_layout(egui::vec2(row.width(), height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             let left = egui::vec2((row.width() - right_width).max(60.0), height);
@@ -1115,7 +1215,14 @@ impl FinderApp {
     /// Light, dark or the system theme (a segmented control), and the menu of the look
     fn theme_control(&mut self, ui: &mut egui::Ui) {
         let before = self.theme;
-        let (response, _) = egui::containers::menu::MenuButton::from_button(glyphs::button_of(ui, glyphs::GEAR, 14.0, false)).ui(ui, |ui| self.appearance_menu(ui));
+        let (response, _) = egui::containers::menu::MenuButton::from_button(glyphs::button_of(ui, glyphs::GEAR, 14.0, false))
+            // a click in the color popup of a glass must not close the menu that holds it
+            .config(egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::IgnoreClicks))
+            .ui(ui, |ui| {
+                self.appearance_menu(ui);
+                close_on_click_outside(ui);
+            });
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("gear-rect"), response.rect));
         response.on_hover_text("Apparence");
         ui.add_space(4.0);
         let choice = glyphs::segmented(ui, "theme", 14.0, &[
@@ -1138,6 +1245,7 @@ impl FinderApp {
         ui.set_min_width(180.0);
         ui.label(RichText::new("Thème").strong());
         let before = (self.theme, self.accent);
+        let mut changed_accent = false;
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.theme, ThemeChoice::System, "Système");
             ui.selectable_value(&mut self.theme, ThemeChoice::Light, "Clair");
@@ -1146,26 +1254,106 @@ impl FinderApp {
         ui.label(RichText::new("Accent").strong());
         ui.horizontal(|ui| {
             for (i, (name, color)) in ACCENTS.iter().enumerate() {
-                let text = RichText::new(if self.accent == i { "●" } else { "○" }).color(*color).size(18.0);
+                let on = self.accent_custom.is_none() && self.accent == i;
+                let text = RichText::new(if on { "●" } else { "○" }).color(*color).size(18.0);
                 if ui.add(egui::Button::new(text).frame(false)).on_hover_text(*name).clicked() {
                     self.accent = i;
+                    self.accent_custom = None;
+                    changed_accent = true;
                 }
             }
+            let mut color = self.accent_color();
+            if egui::color_picker::color_edit_button_srgba(ui, &mut color, egui::color_picker::Alpha::Opaque).on_hover_text("Autre couleur").changed() {
+                self.accent_custom = Some([color.r(), color.g(), color.b()]);
+                changed_accent = true;
+            }
         });
-        if before != (self.theme, self.accent) {
+        if before != (self.theme, self.accent) || changed_accent {
             self.apply_theme(ui.ctx());
         }
-        if backdrop_name().is_some() {
-            ui.label(RichText::new("Verre").strong());
-            let before = self.glass;
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.glass, GlassChoice::None, "Aucun");
-                ui.selectable_value(&mut self.glass, GlassChoice::Partial, "Partiel");
-                ui.selectable_value(&mut self.glass, GlassChoice::Full, "Complet");
-            });
-            if before != self.glass {
-                self.apply_theme(ui.ctx());
+        // the settings below are those of the theme shown: the light and the dark ones are kept apart
+        let dark = ui.visuals().dark_mode;
+        let d = dark as usize;
+        ui.separator();
+        ui.label(RichText::new(if dark { "Thème sombre" } else { "Thème clair" }).strong());
+        ui.label(RichText::new("Fond").strong());
+        let mut look = self.looks[d].clone();
+        ui.horizontal(|ui| {
+            if backdrop_name().is_some() {
+                ui.selectable_value(&mut look.background, Background::Glass, "Vitre");
             }
+            ui.selectable_value(&mut look.background, Background::Image, "Image");
+            ui.selectable_value(&mut look.background, Background::Color, "Couleur");
+        });
+        if look.background != Background::Color {
+            ui.add(egui::Slider::new(&mut look.blur, 0..=40).text("Flou"));
+        }
+        match look.background {
+            Background::Image => {
+                let mut path = look.image.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
+                if ui.add(egui::TextEdit::singleline(&mut path).hint_text("Chemin de l'image").desired_width(f32::INFINITY)).changed() {
+                    look.image = if path.trim().is_empty() { None } else { Some(expand(Path::new(path.trim()))) };
+                }
+                let selection = self.selected.iter().next().filter(|p| is_image(p)).cloned();
+                if ui.add_enabled(selection.is_some(), egui::Button::new("Utiliser la sélection")).clicked() {
+                    look.image = selection;
+                }
+            }
+            Background::Color => {
+                let (_, default) = (0, if dark { egui::Color32::from_rgb(22, 24, 30) } else { egui::Color32::from_rgb(235, 235, 240) });
+                let mut color = look.color.map(|[r, g, b]| egui::Color32::from_rgb(r, g, b)).unwrap_or(default);
+                ui.horizontal(|ui| {
+                    if egui::color_picker::color_edit_button_srgba(ui, &mut color, egui::color_picker::Alpha::Opaque).changed() {
+                        look.color = Some([color.r(), color.g(), color.b()]);
+                    }
+                    ui.label("Couleur du fond");
+                });
+            }
+            Background::Glass => {}
+        }
+        ui.add_space(4.0);
+        ui.label(RichText::new("Vitres").strong());
+        for (i, (layer, name)) in LAYERS.iter().enumerate() {
+            let (tint, opacity) = style::layer_values(*layer, dark);
+            let (mut color, mut alpha) = (tint, opacity);
+            ui.horizontal(|ui| {
+                if egui::color_picker::color_edit_button_srgba(ui, &mut color, egui::color_picker::Alpha::Opaque).changed() {
+                    look.layers[i].tint = Some([color.r(), color.g(), color.b()]);
+                }
+                ui.label(*name);
+            });
+            if ui.add(egui::Slider::new(&mut alpha, 0.0..=1.0).text("Opacité")).changed() {
+                look.layers[i].opacity = Some(alpha);
+            }
+        }
+        ui.add_space(4.0);
+        ui.label(RichText::new("Contours et texte").strong());
+        for (k, name) in ["actifs", "inactifs"].into_iter().enumerate() {
+            ui.add(egui::Slider::new(&mut look.outline_width[k], 0.0..=6.0).text(format!("Épaisseur {name}")));
+            let (_, current) = self.outline(&ui.visuals().clone(), k == 0);
+            let mut color = look.outline[k].map(|[r, g, b, a]| egui::Color32::from_rgba_unmultiplied(r, g, b, a)).unwrap_or(current);
+            ui.horizontal(|ui| {
+                if egui::color_picker::color_edit_button_srgba(ui, &mut color, egui::color_picker::Alpha::OnlyBlend).changed() {
+                    let [r, g, b, a] = color.to_srgba_unmultiplied();
+                    look.outline[k] = Some([r, g, b, a]);
+                }
+                ui.label(format!("Contour {name}"));
+            });
+        }
+        let mut text = look.text.map(|[r, g, b]| egui::Color32::from_rgb(r, g, b)).unwrap_or(ui.visuals().text_color());
+        ui.horizontal(|ui| {
+            if egui::color_picker::color_edit_button_srgba(ui, &mut text, egui::color_picker::Alpha::Opaque).changed() {
+                look.text = Some([text.r(), text.g(), text.b()]);
+            }
+            ui.label("Couleur du texte");
+        });
+        if ui.button("Valeurs par défaut").on_hover_text("Remet le fond, les vitres, les contours et le texte de ce thème").clicked() {
+            look = Look::default();
+        }
+        if look != self.looks[d] {
+            self.looks[d] = look;
+            self.apply_layers();
+            self.apply_theme(ui.ctx());
         }
         ui.add_space(4.0);
         ui.label(RichText::new("Terminal").strong());
@@ -1280,7 +1468,7 @@ impl FinderApp {
     /// One row of the sidebar: the icon in the accent color (white when selected) and the name
     fn place_row(&self, ui: &mut egui::Ui, glyph: glyphs::Glyph, name: &str, on: bool) -> egui::Response {
         let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), egui::Sense::click());
-        let accent = ACCENTS[self.accent].1;
+        let accent = self.accent_color();
         if on {
             ui.painter().rect_filled(rect, 7.0, ui.visuals().selection.bg_fill);
         } else if response.hovered() {
@@ -1314,7 +1502,7 @@ impl FinderApp {
             });
         });
         let folder = self.folder().to_path_buf();
-        egui::Panel::bottom("sidebar_bottom").exact_size(BOTTOM_H).frame(egui::Frame::NONE).show(ui, |ui| {
+        egui::Panel::bottom("sidebar_bottom").show_separator_line(false).exact_size(BOTTOM_H).frame(egui::Frame::NONE).show(ui, |ui| {
             let anchor = folder.ancestors().last().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("/"));
             if let Some(free) = free_space(&anchor) {
                 ui.horizontal_centered(|ui| {
@@ -1324,6 +1512,7 @@ impl FinderApp {
                 });
             }
         });
+        ui.style_mut().spacing.scroll.fade.strength = 0.0; // no light band at the edge of the list
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.label(RichText::new("Favoris").weak().small());
             let home = home();
@@ -1527,7 +1716,8 @@ impl eframe::App for FinderApp {
             show_dock: self.show_dock,
             show_terminal: self.show_terminal,
             terminal_opacity: self.terminal_opacity,
-            glass: self.glass,
+            looks: self.looks.clone(),
+            accent_custom: self.accent_custom,
             show_hidden: self.show_hidden,
             dock: self.dock.as_ref().and_then(|d| serde_json::to_string(d).ok()),
             open_folders: self.open_folders.iter().cloned().collect(),
@@ -1537,12 +1727,8 @@ impl eframe::App for FinderApp {
         }
     }
 
-    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
-        if self.glass == GlassChoice::None {
-            visuals.panel_fill.to_normalized_gamma_f32()
-        } else {
-            [0.0; 4]
-        }
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0; 4] // the background is painted by the app (or is the native glass)
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
@@ -1550,16 +1736,31 @@ impl eframe::App for FinderApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        screenshot_for_checks(ui.ctx());
+        if std::env::var_os("FINDER_TAB2").is_some() && ui.ctx().cumulative_frame_nr() == 20 {
+            self.open_in_new_tab(self.folder().to_path_buf()); // for the checks with two tabs of folder
+        }
         pyegui_core::native_dnd::set_window(&*frame);
         // the window buttons centered in the top band
         #[cfg(target_os = "macos")]
         pyegui_core::window::place_window_buttons(&*frame, 20.0, TOP_H as f64 / 2.0, 20.0);
-        if self.glass != GlassChoice::None && !self.backdrop_applied {
+        let dark = ui.visuals().dark_mode as usize;
+        let background = self.looks[dark].background;
+        if background == Background::Glass && !self.backdrop_applied {
             self.backdrop_applied = true;
             if let Some(name) = backdrop_name() {
                 if let Err(err) = pyegui_core::window::apply_backdrop(&*frame, name) {
                     self.notice = Some(format!("Verre : {err}"));
                 }
+            }
+        }
+        // the blur of the glass: the one of the window server
+        #[cfg(target_os = "macos")]
+        {
+            let blur = if background == Background::Glass { self.looks[dark].blur } else { 0 };
+            if blur != self.applied_blur {
+                self.applied_blur = blur;
+                let _ = pyegui_core::window::set_window_blur(&*frame, blur);
             }
         }
         self.draw(ui);
@@ -1568,6 +1769,44 @@ impl eframe::App for FinderApp {
 }
 
 impl FinderApp {
+    /// Under everything: a plain color or the blurred picture (nothing for the glass of the system)
+    fn paint_background(&mut self, ctx: &egui::Context, dark: bool) {
+        let look = self.looks[dark as usize].clone();
+        let screen = ctx.content_rect();
+        let painter = ctx.layer_painter(egui::LayerId::background());
+        match look.background {
+            Background::Glass => {}
+            Background::Color => {
+                let default = if dark { egui::Color32::from_rgb(22, 24, 30) } else { egui::Color32::from_rgb(235, 235, 240) };
+                let color = look.color.map(|[r, g, b]| egui::Color32::from_rgb(r, g, b)).unwrap_or(default);
+                painter.rect_filled(screen, 0.0, color);
+            }
+            Background::Image => {
+                let Some(path) = look.image.clone() else {
+                    painter.rect_filled(screen, 0.0, if dark { egui::Color32::from_rgb(22, 24, 30) } else { egui::Color32::from_rgb(235, 235, 240) });
+                    return;
+                };
+                if self.bg_texture.as_ref().is_none_or(|(p, b, _)| *p != path || *b != look.blur) {
+                    self.bg_texture = blurred_texture(ctx, &path, look.blur).map(|t| (path.clone(), look.blur, t));
+                }
+                match &self.bg_texture {
+                    Some((_, _, texture)) => {
+                        // the picture covers the window
+                        let size = texture.size_vec2();
+                        let scale = (screen.width() / size.x).max(screen.height() / size.y);
+                        let shown = size * scale;
+                        let uv = egui::Rect::from_min_max(
+                            egui::pos2((1.0 - screen.width() / shown.x) / 2.0, (1.0 - screen.height() / shown.y) / 2.0),
+                            egui::pos2((1.0 + screen.width() / shown.x) / 2.0, (1.0 + screen.height() / shown.y) / 2.0),
+                        );
+                        painter.image(texture.id(), screen, uv, egui::Color32::WHITE)
+;                     }
+                    None => { painter.rect_filled(screen, 0.0, egui::Color32::from_gray(if dark { 22 } else { 235 })); }
+                }
+            }
+        }
+    }
+
     /// Opens the windows asked for and draws them; the closed ones are dropped
     fn other_windows(&mut self, ctx: &egui::Context) {
         if let Some(folder) = self.new_window.take() {
@@ -1613,6 +1852,7 @@ impl FinderApp {
     /// The window: its panels and its views
     fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        self.paint_background(&ctx, ui.visuals().dark_mode);
         let prof = std::env::var_os("FINDER_PROF").is_some();
         let t0 = std::time::Instant::now();
         self.poll_transfer();
@@ -1631,11 +1871,11 @@ impl FinderApp {
         }
         if self.show_sidebar {
             // no top margin: the top band of the sidebar is as high as the toolbar
-            let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 0 });
-            egui::Panel::left("sidebar").default_size(170.0).min_size(130.0).frame(frame).show(ui, |ui| self.sidebar(ui));
+            let frame = egui::Frame::side_top_panel(ui.style()).fill(style::layer_fill(style::Layer::Sidebar, ui.visuals())).stroke(egui::Stroke::NONE).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 0 });
+            egui::Panel::left("sidebar").show_separator_line(false).default_size(170.0).min_size(130.0).frame(frame).show(ui, |ui| self.sidebar(ui));
         }
         // the top and bottom bands: no vertical margin, so what they hold is centered in their height
-        let band = |ui: &egui::Ui| egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 0 });
+        let band = |ui: &egui::Ui| egui::Frame::side_top_panel(ui.style()).fill(bar_tint(ui.visuals())).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 0 });
         if let Some(folder) = self.new_tab.take() {
             self.make_new_tab(folder);
         }
@@ -1647,8 +1887,8 @@ impl FinderApp {
         if let Some(n) = shown {
             self.swap_tab(n);
         }
-        egui::Panel::top("toolbar").exact_size(TOP_H).frame(band(ui)).show(ui, |ui| self.toolbar(ui));
-        egui::Panel::bottom("status").exact_size(BOTTOM_H).frame(band(ui)).show(ui, |ui| self.bottom_bar(ui));
+        egui::Panel::top("toolbar").show_separator_line(false).exact_size(TOP_H).frame(band(ui).stroke(egui::Stroke::NONE)).show(ui, |ui| self.toolbar(ui));
+        egui::Panel::bottom("status").show_separator_line(false).exact_size(BOTTOM_H).frame(band(ui).stroke(egui::Stroke::NONE)).show(ui, |ui| self.bottom_bar(ui));
         if self.show_terminal {
             let folder = self.folder().to_path_buf();
             self.terminals.follow(&folder);
@@ -1656,9 +1896,7 @@ impl FinderApp {
         let t_panels = t0.elapsed();
         // content_body: the dock of the panes around the central pane (no title)
         let mut central = egui::Frame::central_panel(ui.style()).inner_margin(0);
-        if let Some(fill) = style::surface_fill(ui.visuals(), style::Surface::Central) {
-            central = central.fill(fill);
-        }
+        central = central.fill(egui::Color32::TRANSPARENT); // the dock lays the glass of the bands itself
         egui::CentralPanel::default().frame(central).show(ui, |ui| {
             if let Some(mut tree) = self.dock.take() {
                 dock::show(self, &mut tree, ui);
@@ -1717,7 +1955,9 @@ fn free_space(path: &Path) -> Option<u64> {
 }
 
 /// The heights of the top and bottom bands, in the sidebar and in the body
-const TOP_H: f32 = 40.0;
+pub const TOP_H: f32 = 40.0;
+
+pub use pyegui_core::style::bar_tint;
 const BOTTOM_H: f32 = 30.0;
 /// What the "…" button that ends the path takes, with its spacing
 const EDIT_BUTTON: f32 = 40.0;
@@ -1812,4 +2052,38 @@ fn fonts(nerd: Option<&Path>) -> egui::FontDefinitions {
         fonts.families.insert(FontFamily::Name("nerd".into()), family);
     }
     fonts
+}
+
+/// `FINDER_SHOT=/path/file.png finder`: saves the window to a PNG after a second and quits, to look at the
+/// result without the screen (the checks of the look)
+fn screenshot_for_checks(ctx: &egui::Context) {
+    let Some(path) = std::env::var_os("FINDER_SHOT").map(std::path::PathBuf::from) else { return };
+    thread_local! { static FRAMES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
+    let n = FRAMES.with(|f| {
+        f.set(f.get() + 1);
+        f.get()
+    });
+    ctx.request_repaint();
+    if n == 90 {
+        let ctx2 = ctx.clone();
+        ctx.request_screenshot(move |image| {
+            let [w, h] = image.size;
+            let bytes: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
+            if let Some(buffer) = image::RgbaImage::from_raw(w as u32, h as u32, bytes) {
+                let _ = buffer.save(&path);
+            }
+            ctx2.send_viewport_cmd(egui::ViewportCommand::Close);
+            ctx2.request_repaint();
+        });
+    }
+}
+
+/// The picture, made smaller and blurred (a radius in points of the window), as a texture
+fn blurred_texture(ctx: &egui::Context, path: &Path, blur: u32) -> Option<egui::TextureHandle> {
+    let img = image::open(path).ok()?;
+    let img = img.thumbnail(1280, 1280).to_rgba8();
+    let img = if blur > 0 { image::imageops::blur(&img, blur as f32 / 2.0) } else { img };
+    let size = [img.width() as usize, img.height() as usize];
+    let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
+    Some(ctx.load_texture("finder-background", color, egui::TextureOptions::LINEAR))
 }

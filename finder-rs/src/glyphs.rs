@@ -148,10 +148,13 @@ pub struct Segments {
     pub responses: Vec<Response>,
 }
 
+/// The height of every control of the bands (buttons, fields, segmented controls)
+pub const CONTROL_H: f32 = 28.0;
+
 /// A row of icons in one rounded frame, the cells that are on drawn on the accent color: the
 /// segmented control of examples/finder.py
 pub fn segmented(ui: &mut egui::Ui, id: &str, size: f32, cells: &[Cell]) -> Segments {
-    let cell_size = egui::vec2(size + 16.0, size + 10.0);
+    let cell_size = egui::vec2(size + 16.0, CONTROL_H);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(cell_size.x * cells.len() as f32, cell_size.y), egui::Sense::hover());
     let visuals = ui.visuals().clone();
     ui.painter().rect_filled(rect, 8.0, visuals.widgets.inactive.weak_bg_fill.gamma_multiply(0.9));
