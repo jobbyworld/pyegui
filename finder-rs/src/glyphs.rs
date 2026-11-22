@@ -105,6 +105,7 @@ pub fn by_name(name: &str) -> Glyph {
         "zoom-fit" => glyph!("zoom-fit"),
         "zoom-in" => glyph!("zoom-in"),
         "zoom-out" => glyph!("zoom-out"),
+        "bookmark" => glyph!("bookmark"),
         _ => glyph!("dot"),
     }
 }
