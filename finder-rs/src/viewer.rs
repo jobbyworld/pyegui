@@ -235,8 +235,12 @@ fn pdf_bar(ui: &mut egui::Ui, p: &mut PdfBody) {
         return;
     }
     ui.separator();
-    ui.toggle_value(grid, "▦").on_hover_text(if *grid { "Pages" } else { "Miniatures" });
-    ui.toggle_value(outline_open, "☰").on_hover_text("Signets");
+    if crate::glyphs::button(ui, crate::glyphs::GRID, 15.0, *grid, if *grid { "Pages" } else { "Miniatures" }).clicked() {
+        *grid = !*grid;
+    }
+    if crate::glyphs::button(ui, crate::glyphs::by_name("bookmark"), 15.0, *outline_open, "Signets").clicked() {
+        *outline_open = !*outline_open;
+    }
     if *grid {
         let pages = doc.lock().unwrap_or_else(|e| e.into_inner()).pages();
         ui.label(RichText::new(format!("{pages} pages")).weak());
@@ -259,34 +263,35 @@ fn pdf_bar(ui: &mut egui::Ui, p: &mut PdfBody) {
     if crate::glyphs::small(ui, crate::glyphs::ZOOM_IN, "Agrandir").clicked() {
         view.set_zoom(view.zoom() * 1.25);
     }
-    if ui.selectable_label(view.fit() == "width", "Largeur").on_hover_text("Ajuster à la largeur").clicked() {
+    if crate::glyphs::button(ui, crate::glyphs::by_name("fit-width"), 15.0, view.fit() == "width", "Ajuster à la largeur").clicked() {
         let _ = view.set_fit("width");
     }
-    if ui.selectable_label(view.fit() == "page", "Page").on_hover_text("Ajuster à la page").clicked() {
+    if crate::glyphs::button(ui, crate::glyphs::by_name("zoom-fit"), 15.0, view.fit() == "page", "Ajuster à la page").clicked() {
         let _ = view.set_fit("page");
     }
     if crate::glyphs::small(ui, crate::glyphs::ROTATE, "Pivoter de 90°").clicked() {
         view.rotate(90);
     }
     let hand = view.tool() == "hand";
-    if ui.selectable_label(!hand, "Ⓘ").on_hover_text("Sélectionner du texte").clicked() {
+    if crate::glyphs::button(ui, crate::glyphs::by_name("text-select"), 15.0, !hand, "Sélectionner du texte").clicked() {
         let _ = view.set_tool("select");
     }
-    if ui.selectable_label(hand, "✋").on_hover_text("Déplacer la page").clicked() {
+    if crate::glyphs::button(ui, crate::glyphs::by_name("hand"), 15.0, hand, "Déplacer la page").clicked() {
         let _ = view.set_tool("hand");
     }
-    let mut continuous = view.continuous();
-    if ui.toggle_value(&mut continuous, "↕").on_hover_text("Défilement continu").changed() {
-        view.set_continuous(continuous);
+    let continuous = view.continuous();
+    if crate::glyphs::button(ui, crate::glyphs::by_name("continuous"), 15.0, continuous, "Défilement continu").clicked() {
+        view.set_continuous(!continuous);
     }
-    let mut dark = view.dark();
-    if ui.toggle_value(&mut dark, "☾").on_hover_text("Pages sombres").changed() {
-        view.set_dark(dark);
+    let dark = view.dark();
+    if crate::glyphs::button(ui, crate::glyphs::MOON, 15.0, dark, "Pages sombres").clicked() {
+        view.set_dark(!dark);
     }
     if view.busy() {
         ui.label(RichText::new("…").weak());
     }
     ui.separator();
+    ui.add(crate::glyphs::image(crate::glyphs::SEARCH, 15.0, ui.visuals().text_color()));
     let edit = ui.add(egui::TextEdit::singleline(query).hint_text("Rechercher dans le PDF").desired_width(160.0));
     if edit.changed() {
         view.search(query, false);
