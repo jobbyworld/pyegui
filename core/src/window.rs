@@ -231,3 +231,50 @@ pub fn set_dark_mode(_window: &impl raw_window_handle::HasWindowHandle, _dark: b
     Err("not supported on this platform".to_string())
 }
 
+
+/// Puts the three buttons of the window (close, minimize, zoom) at a place of the title bar:
+/// the centre of the close button is `left` points from the left edge of the window and `top`
+/// points from its top, the next ones follow every `spacing` points. Without a toolbar the system
+/// puts them higher and closer to the edge than a window with a unified toolbar (Claude,
+/// Finder); the title bar view is moved when AppKit lays it out again, so call it at every frame
+/// (it does nothing when they are already there).
+#[cfg(target_os = "macos")]
+pub fn place_window_buttons(
+    window: &impl raw_window_handle::HasWindowHandle,
+    left: f64,
+    top: f64,
+    spacing: f64,
+) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use objc2_foundation::{NSPoint, NSRect};
+
+    let Ok(handle) = window.window_handle() else { return };
+    let raw_window_handle::RawWindowHandle::AppKit(handle) = handle.as_raw() else { return };
+    unsafe {
+        let view = handle.ns_view.as_ptr().cast::<AnyObject>();
+        let ns_window: *mut AnyObject = msg_send![&*view, window];
+        if ns_window.is_null() {
+            return;
+        }
+        // NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton
+        for (index, kind) in [0isize, 1, 2].into_iter().enumerate() {
+            let button: *mut AnyObject = msg_send![&*ns_window, standardWindowButton: kind];
+            if button.is_null() {
+                continue;
+            }
+            let parent: *mut AnyObject = msg_send![&*button, superview];
+            if parent.is_null() {
+                continue;
+            }
+            let frame: NSRect = msg_send![&*button, frame];
+            let bounds: NSRect = msg_send![&*parent, frame];
+            let x = left + spacing * index as f64 - frame.size.width / 2.0;
+            // the title bar view is at the top of the window, its origin is at the bottom
+            let y = bounds.size.height - top - frame.size.height / 2.0;
+            if (frame.origin.x - x).abs() > 0.1 || (frame.origin.y - y).abs() > 0.1 {
+                let _: () = msg_send![&*button, setFrameOrigin: NSPoint { x, y }];
+            }
+        }
+    }
+}

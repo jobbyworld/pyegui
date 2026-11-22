@@ -1,4 +1,4 @@
-//! The terminals of the bottom dock: a shell that follows the folder of the Finder, and a Python prompt
+//! The terminals, two panes of the dock: a shell that follows the folder of the Finder, and a Python prompt
 //! (the newest Python found: since 3.13 its prompt has colors, since 3.14 it colors the code).
 
 use std::path::{Path, PathBuf};
@@ -6,16 +6,9 @@ use std::path::{Path, PathBuf};
 use eframe::egui::{self, Color32, FontFamily};
 use pyegui_core::terminal::{self, Scheme, Terminal, TerminalOptions};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Which {
-    Shell,
-    Python,
-}
-
 pub struct Terminals {
     pub shell: Terminal,
     pub python: Terminal,
-    pub which: Which,
     pub follow: bool,
     shell_folder: PathBuf,
     /// the family of the Nerd Font installed, if any
@@ -116,7 +109,6 @@ impl Terminals {
         Terminals {
             shell: make(None, vec![]),
             python: make(newest_python(), vec!["-q".to_owned()]),
-            which: Which::Shell,
             follow: true,
             shell_folder: start.to_path_buf(),
             font_family: font_path.map(|_| FontFamily::Name("nerd".into())),
@@ -131,30 +123,41 @@ impl Terminals {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, folder: &Path, opacity: f32) {
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.which, Which::Shell, "Shell");
-            ui.selectable_value(&mut self.which, Which::Python, "Python");
-            ui.separator();
-            if self.which == Which::Shell {
-                ui.checkbox(&mut self.follow, "Suivre le dossier");
-                if ui.small_button("cd ici").clicked() {
-                    self.shell.run(&cd_command(folder));
-                    self.shell_folder = folder.to_path_buf();
-                }
-                if ui.small_button("Redémarrer").clicked() {
-                    self.shell.restart(Some(folder.to_path_buf()));
-                    self.shell_folder = folder.to_path_buf();
-                }
-            } else if ui.small_button("Redémarrer").clicked() {
-                self.python.restart(None);
-            }
-        });
+    fn options(&self, opacity: f32) -> TerminalOptions {
         let mut options = TerminalOptions::new();
         options.opacity = Some(opacity);
         options.font_family = self.font_family.clone();
-        let term = if self.which == Which::Shell { &mut self.shell } else { &mut self.python };
-        if let Err(error) = terminal::show(ui, term, options) {
+        options
+    }
+
+    /// The pane of the shell: its buttons, then the terminal
+    pub fn shell_ui(&mut self, ui: &mut egui::Ui, folder: &Path, opacity: f32) {
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.follow, "Suivre le dossier");
+            if ui.small_button("cd ici").clicked() {
+                self.shell.run(&cd_command(folder));
+                self.shell_folder = folder.to_path_buf();
+            }
+            if ui.small_button("Redémarrer").clicked() {
+                self.shell.restart(Some(folder.to_path_buf()));
+                self.shell_folder = folder.to_path_buf();
+            }
+        });
+        let options = self.options(opacity);
+        if let Err(error) = terminal::show(ui, &mut self.shell, options) {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
+    }
+
+    /// The pane of the Python prompt
+    pub fn python_ui(&mut self, ui: &mut egui::Ui, opacity: f32) {
+        ui.horizontal(|ui| {
+            if ui.small_button("Redémarrer").clicked() {
+                self.python.restart(None);
+            }
+        });
+        let options = self.options(opacity);
+        if let Err(error) = terminal::show(ui, &mut self.python, options) {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
     }

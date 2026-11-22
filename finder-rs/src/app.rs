@@ -173,10 +173,123 @@ pub struct FinderApp {
     /// every tag, read once per version of the store (not once per row)
     all_tags: std::cell::RefCell<(u64, Vec<crate::tagstore::Tag>)>,
     viewer: Option<Viewer>,
+    /// the tabs of folders that are not shown: their state, by number of tab
+    parked_tabs: std::collections::HashMap<u64, TabState>,
+    /// the number of the tab whose state is in the fields above
+    current_tab: u64,
+    next_tab: u64,
+    /// a folder asked to open in a new tab while the dock was drawn (the dock is taken out then)
+    new_tab: Option<PathBuf>,
     preview_pdf: Option<(PathBuf, pyegui_core::pdf_view::PdfDocument)>,
 }
 
+/// What belongs to a tab of folder: the folder and its history, the views, the selection, the search
+/// and the file open instead of the folder. The state of the tab shown is in the fields of the app, the
+/// others are parked here and swapped in when their tab is shown
+pub struct TabState {
+    history: History,
+    view: ViewMode,
+    sort_key: SortKey,
+    ascending: bool,
+    search: String,
+    items: Vec<Entry>,
+    views: Views,
+    open_folders: std::collections::BTreeSet<PathBuf>,
+    selected: HashSet<PathBuf>,
+    path_text: Option<String>,
+    tag_filter: Option<i64>,
+    viewer: Option<Viewer>,
+}
+
 impl FinderApp {
+    /// The state of a new tab on a folder
+    fn new_tab_state(&self, folder: PathBuf) -> TabState {
+        TabState {
+            views: Views::new(&self.core, &folder, self.show_hidden),
+            history: History::new(folder),
+            view: self.view,
+            sort_key: self.sort_key,
+            ascending: self.ascending,
+            search: String::new(),
+            items: Vec::new(),
+            open_folders: Default::default(),
+            selected: HashSet::new(),
+            path_text: None,
+            tag_filter: None,
+            viewer: None,
+        }
+    }
+
+    /// Asks for a folder in a new tab, next to the one shown: it opens at the start of the next frame
+    pub fn open_in_new_tab(&mut self, folder: PathBuf) {
+        self.new_tab = Some(folder);
+    }
+
+    fn make_new_tab(&mut self, folder: PathBuf) {
+        let id = self.next_tab;
+        self.next_tab += 1;
+        let state = self.new_tab_state(folder);
+        self.parked_tabs.insert(id, state);
+        let after = self.current_tab;
+        if let Some(tree) = self.dock.as_mut() {
+            dock::add_central(tree, id, after);
+        }
+        self.show_dock = true;
+    }
+
+    /// Puts the state of the tab `id` in the fields of the app, the state that was there is parked
+    pub fn swap_tab(&mut self, id: u64) {
+        if id == self.current_tab {
+            return;
+        }
+        let Some(mut state) = self.parked_tabs.remove(&id) else { return };
+        std::mem::swap(&mut self.history, &mut state.history);
+        std::mem::swap(&mut self.view, &mut state.view);
+        std::mem::swap(&mut self.sort_key, &mut state.sort_key);
+        std::mem::swap(&mut self.ascending, &mut state.ascending);
+        std::mem::swap(&mut self.search, &mut state.search);
+        std::mem::swap(&mut self.items, &mut state.items);
+        std::mem::swap(&mut self.views, &mut state.views);
+        std::mem::swap(&mut self.open_folders, &mut state.open_folders);
+        std::mem::swap(&mut self.selected, &mut state.selected);
+        std::mem::swap(&mut self.path_text, &mut state.path_text);
+        std::mem::swap(&mut self.tag_filter, &mut state.tag_filter);
+        std::mem::swap(&mut self.viewer, &mut state.viewer);
+        self.parked_tabs.insert(self.current_tab, state);
+        self.current_tab = id;
+    }
+
+    /// A tab is closed: its state is dropped (the one shown is replaced by another tab first)
+    pub fn close_tab(&mut self, id: u64) {
+        if id == self.current_tab {
+            if let Some(&other) = self.parked_tabs.keys().min() {
+                self.swap_tab(other);
+            }
+        }
+        self.parked_tabs.remove(&id);
+    }
+
+    /// The tab shows a file (in the viewer) and not its folder
+    pub fn tab_has_file(&self, id: u64) -> bool {
+        if id == self.current_tab {
+            self.viewer.is_some()
+        } else {
+            self.parked_tabs.get(&id).is_some_and(|t| t.viewer.is_some())
+        }
+    }
+
+    /// The title of a tab: its folder, or its file
+    pub fn tab_title(&self, id: u64) -> String {
+        let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Finder".into());
+        if id == self.current_tab {
+            return self.viewer_path().map(name).unwrap_or_else(|| name(self.folder()));
+        }
+        match self.parked_tabs.get(&id) {
+            Some(t) => t.viewer.as_ref().map(|v| name(&v.path)).unwrap_or_else(|| name(t.history.current())),
+            None => String::new(),
+        }
+    }
+
     pub fn new(cc: &eframe::CreationContext<'_>, start: Option<PathBuf>, custom_titlebar: bool) -> Self {
         egui_extras::install_image_loaders(&cc.egui_ctx);
         let font_path = terminals::nerd_font();
@@ -271,6 +384,10 @@ impl FinderApp {
             opened_loaded: Default::default(),
             all_tags: Default::default(),
             viewer: None,
+            parked_tabs: Default::default(),
+            current_tab: 0,
+            next_tab: 1,
+            new_tab: None,
             preview_pdf: None,
         };
         app.apply_theme(ctx);
@@ -809,6 +926,37 @@ impl FinderApp {
         }
     }
 
+    pub fn dock_shown(&self) -> bool {
+        self.show_dock
+    }
+
+    pub fn terminals_shown(&self) -> bool {
+        self.show_terminal
+    }
+
+    /// A terminal pane of the dock
+    pub fn terminal_pane(&mut self, ui: &mut egui::Ui, shell: bool) {
+        let folder = self.folder().to_path_buf();
+        let opacity = self.terminal_opacity;
+        if shell {
+            self.terminals.shell_ui(ui, &folder, opacity);
+        } else {
+            self.terminals.python_ui(ui, opacity);
+        }
+    }
+
+    /// The central pane of the dock, with no title: the file open in the viewer, else the folder
+    pub fn central_pane(&mut self, ui: &mut egui::Ui) {
+        if let Some(mut viewer) = self.viewer.take() {
+            if !viewer::show(&mut viewer, ui, &self.core) {
+                self.viewer = Some(viewer);
+            }
+            return;
+        }
+        self.tag_header(ui);
+        views::show(self, ui);
+    }
+
     /// The toggle of the sidebar, just on the right of the window buttons
     fn sidebar_button(&mut self, ui: &mut egui::Ui) {
         let glyph = glyphs::by_name(if self.show_sidebar { "sidebar-open" } else { "sidebar-closed" });
@@ -834,7 +982,7 @@ impl FinderApp {
         let height = band.height();
         ui.allocate_ui_with_layout(egui::vec2(row, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             if MAC_TITLEBAR && !self.show_sidebar {
-                ui.add_space(64.0); // the window buttons are over the toolbar when the sidebar is hidden
+                ui.add_space(76.0); // the window buttons are over the toolbar when the sidebar is hidden
             }
             if !self.show_sidebar {
                 self.sidebar_button(ui);
@@ -1157,7 +1305,7 @@ impl FinderApp {
         ui.horizontal(|ui| {
             ui.set_height(TOP_H);
             if MAC_TITLEBAR {
-                ui.add_space(64.0);
+                ui.add_space(76.0);
             }
             // open, the toggle is at the right of the sidebar; closed, it is next to the window buttons
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1403,6 +1551,9 @@ impl eframe::App for FinderApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         pyegui_core::native_dnd::set_window(&*frame);
+        // the window buttons centered in the top band
+        #[cfg(target_os = "macos")]
+        pyegui_core::window::place_window_buttons(&*frame, 20.0, TOP_H as f64 / 2.0, 20.0);
         if self.glass != GlassChoice::None && !self.backdrop_applied {
             self.backdrop_applied = true;
             if let Some(name) = backdrop_name() {
@@ -1480,41 +1631,39 @@ impl FinderApp {
         }
         if self.show_sidebar {
             // no top margin: the top band of the sidebar is as high as the toolbar
-            let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 8 });
+            let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 0 });
             egui::Panel::left("sidebar").default_size(170.0).min_size(130.0).frame(frame).show(ui, |ui| self.sidebar(ui));
         }
-        egui::Panel::top("toolbar").exact_size(TOP_H).show(ui, |ui| self.toolbar(ui));
-        egui::Panel::bottom("status").exact_size(BOTTOM_H).show(ui, |ui| self.bottom_bar(ui));
+        // the top and bottom bands: no vertical margin, so what they hold is centered in their height
+        let band = |ui: &egui::Ui| egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 0 });
+        if let Some(folder) = self.new_tab.take() {
+            self.make_new_tab(folder);
+        }
+        // the tab of folder shown is the one of the toolbar
+        let shown = self.dock.as_ref().and_then(|tree| tree.active_tiles().into_iter().find_map(|id| match tree.tiles.get(id) {
+            Some(egui_tiles::Tile::Pane(Pane::Central(n))) => Some(*n),
+            _ => None,
+        }));
+        if let Some(n) = shown {
+            self.swap_tab(n);
+        }
+        egui::Panel::top("toolbar").exact_size(TOP_H).frame(band(ui)).show(ui, |ui| self.toolbar(ui));
+        egui::Panel::bottom("status").exact_size(BOTTOM_H).frame(band(ui)).show(ui, |ui| self.bottom_bar(ui));
         if self.show_terminal {
             let folder = self.folder().to_path_buf();
             self.terminals.follow(&folder);
-            let opacity = self.terminal_opacity;
-            egui::Panel::bottom("terminal").resizable(true).default_size(220.0).min_size(80.0).show(ui, |ui| {
-                self.terminals.ui(ui, &folder, opacity);
-            });
-        }
-        if self.show_dock {
-            egui::Panel::right("dock").default_size(300.0).min_size(200.0).show(ui, |ui| {
-                if let Some(mut tree) = self.dock.take() {
-                    dock::show(self, &mut tree, ui);
-                    self.dock = Some(tree);
-                }
-            });
         }
         let t_panels = t0.elapsed();
-        let mut central = egui::Frame::central_panel(ui.style());
+        // content_body: the dock of the panes around the central pane (no title)
+        let mut central = egui::Frame::central_panel(ui.style()).inner_margin(0);
         if let Some(fill) = style::surface_fill(ui.visuals(), style::Surface::Central) {
             central = central.fill(fill);
         }
         egui::CentralPanel::default().frame(central).show(ui, |ui| {
-            if let Some(mut viewer) = self.viewer.take() {
-                if !viewer::show(&mut viewer, ui, &self.core) {
-                    self.viewer = Some(viewer);
-                }
-                return;
+            if let Some(mut tree) = self.dock.take() {
+                dock::show(self, &mut tree, ui);
+                self.dock = Some(tree);
             }
-            self.tag_header(ui);
-            views::show(self, ui);
         });
         let t_central = t0.elapsed();
         self.drops(&ctx);
@@ -1568,8 +1717,8 @@ fn free_space(path: &Path) -> Option<u64> {
 }
 
 /// The heights of the top and bottom bands, in the sidebar and in the body
-const TOP_H: f32 = 52.0;
-const BOTTOM_H: f32 = 44.0;
+const TOP_H: f32 = 40.0;
+const BOTTOM_H: f32 = 30.0;
 /// What the "…" button that ends the path takes, with its spacing
 const EDIT_BUTTON: f32 = 40.0;
 /// What the toolbar keeps for the navigation, the name, the view and the panes

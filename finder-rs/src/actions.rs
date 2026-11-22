@@ -106,6 +106,10 @@ pub static ACTIONS: &[Action] = &[
     Action { category: "Fichier", label: "Ouvrir dans une nouvelle fenêtre", icon: "dock", shortcut: None, enabled: |a| a.selected.len() == 1 && a.selected.iter().all(|p| p.is_dir()), in_menu: true, run: |app, _| {
         if let Some(p) = app.selected_paths().first() { app.new_window = Some(p.clone()); }
     }},
+    Action { category: "Fichier", label: "Nouvel onglet", icon: "dock", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::T)), enabled: always, in_menu: false, run: |app, _| app.open_in_new_tab(app.folder().to_path_buf()) },
+    Action { category: "Fichier", label: "Ouvrir dans un nouvel onglet", icon: "dock", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::T)), enabled: |a| a.selected.len() == 1 && a.selected.iter().all(|p| p.is_dir()), in_menu: true, run: |app, _| {
+        if let Some(p) = app.selected_paths().first() { app.open_in_new_tab(p.clone()); }
+    }},
     Action { category: "Fichier", label: "Nouveau dossier", icon: "folder-plus", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::N)), enabled: always, in_menu: true, run: |app, _| app.new_folder() },
     Action { category: "Fichier", label: "Regrouper dans un dossier", icon: "group", shortcut: Some(KeyboardShortcut::new(GROUP_MODIFIERS, Key::N)), enabled: can_group, in_menu: true, run: |app, _| app.group_selection() },
     Action { category: "Fichier", label: "Renommer", icon: "rename", shortcut: Some(KeyboardShortcut::new(Modifiers::NONE, Key::F2)), enabled: one_selected, in_menu: true, run: |app, _| {
