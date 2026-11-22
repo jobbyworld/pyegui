@@ -17,7 +17,7 @@ use crate::glyphs;
 use pyegui_core::path::{breadcrumb, combo, BreadcrumbOptions, ComboOptions};
 use crate::model::{self, History, SortKey};
 use crate::tagstore::{How, TagStore};
-use crate::tagsui::{self, TagEdit};
+use crate::tagsui::{self, TagManager, TagPicker};
 use crate::terminals::{self, Terminals};
 use crate::viewer::{self, Viewer};
 use crate::views::{self, Views};
@@ -160,7 +160,8 @@ pub struct FinderApp {
     pub tag_filter: Option<i64>,
     /// the tags folded in the tree of the sidebar
     tag_folded: HashSet<i64>,
-    pub tag_edit: Option<TagEdit>,
+    pub tag_manager: Option<TagManager>,
+    pub tag_picker: Option<TagPicker>,
     /// the tags of the rows shown, by path, until the store changes
     tag_cache: std::cell::RefCell<(u64, std::collections::HashMap<PathBuf, std::rc::Rc<Vec<(Color32, String, How)>>>)>,
     opened_cache: std::cell::RefCell<(u64, std::collections::HashMap<String, f64>)>,
@@ -257,7 +258,8 @@ impl FinderApp {
             search_state: Default::default(),
             tag_filter: None,
             tag_folded: HashSet::new(),
-            tag_edit: None,
+            tag_manager: None,
+            tag_picker: None,
             tag_cache: Default::default(),
             opened_cache: Default::default(),
             opened_loaded: Default::default(),
