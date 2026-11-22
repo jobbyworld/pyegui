@@ -3,6 +3,8 @@
 
 pub mod gherkin;
 #[cfg(feature = "pdf")]
+pub mod markdown_pdf;
+#[cfg(feature = "pdf")]
 pub mod pdf;
 #[cfg(feature = "pdf")]
 pub mod pdf_nav;

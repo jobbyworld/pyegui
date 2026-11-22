@@ -124,6 +124,9 @@ pub static ACTIONS: &[Action] = &[
     }},
     Action { category: "Édition", label: "Coller", icon: "📋", shortcut: cmd(Key::V), enabled: can_paste, in_menu: true, run: |app, _| app.paste() },
     Action { category: "Édition", label: "Tout sélectionner", icon: "▣", shortcut: cmd(Key::A), enabled: always, in_menu: false, run: |app, _| app.select_all() },
+    Action { category: "Outils", label: "Exporter en PDF", icon: "⇩", shortcut: None, enabled: |a| a.markdown_target().is_some(), in_menu: true, run: |app, _| {
+        if let Some(source) = app.markdown_target() { export_markdown_pdf(source); }
+    }},
     Action { category: "Chemin", label: "Copier le chemin", icon: "⌘", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::C)), enabled: has_selection, in_menu: true, run: |app, ctx| {
         let text = app.selected_paths().iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>().join("\n");
         ctx.copy_text(text);
@@ -205,6 +208,49 @@ pub fn trash(path: &Path) -> Result<(), String> {
     }
 }
 
+/// "name.pdf", or "name copy.pdf", "name copy 2.pdf"... when it exists: a file is never overwritten
+fn unique_pdf(source: &Path) -> PathBuf {
+    let base = source.with_extension("pdf");
+    if !base.exists() {
+        return base;
+    }
+    let stem = base.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    (1..)
+        .map(|n| base.with_file_name(if n == 1 { format!("{stem} copy.pdf") } else { format!("{stem} copy {n}.pdf") }))
+        .find(|p| !p.exists())
+        .unwrap()
+}
+
+/// Writes the PDF of a markdown file next to it, in a thread (the window never waits). The watcher of the
+/// folder shows the new file.
+fn export_markdown_pdf(source: PathBuf) {
+    use pyegui_core::markdown_pdf::{build, Bar, Cover, Geo, Options, Theme};
+    let out = unique_pdf(&source);
+    std::thread::spawn(move || {
+        let run = || -> Result<(), String> {
+            let text = std::fs::read_to_string(&source).map_err(|e| e.to_string())?;
+            let mm = 72.0 / 25.4;
+            let options = Options {
+                theme: Theme::parse("light").unwrap(),
+                geo: Geo { w: 210.0 * mm, h: 297.0 * mm, margin: 20.0 * mm },
+                title: None,
+                author: None,
+                cover: Some(Cover::default()),
+                toc: Some(("Table des matières".to_string(), 3)),
+                bookmarks: true,
+                header: None,
+                footer: Some(Bar { center: "{page} / {pages}".into(), ..Default::default() }),
+                base_dir: source.parent().map(Path::to_path_buf),
+            };
+            let (bytes, _, _) = build(&text, &options)?;
+            std::fs::write(&out, bytes).map_err(|e| e.to_string())
+        };
+        if let Err(error) = run() {
+            eprintln!("markdown_to_pdf: {}: {error}", source.display());
+        }
+    });
+}
+
 /// "untitled folder", "untitled folder 2"... the first that does not exist
 pub fn unique_folder(parent: &Path) -> PathBuf {
     unique_named(parent, "dossier sans titre")
@@ -232,6 +278,17 @@ mod tests {
         let second = unique_folder(&dir);
         assert_ne!(first, second);
         assert!(second.to_string_lossy().ends_with("dossier sans titre 2"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_exported_pdf_never_takes_an_existing_name() {
+        let dir = std::env::temp_dir().join(format!("finder-rs-pdf-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let md = dir.join("a.md");
+        assert_eq!(unique_pdf(&md), dir.join("a.pdf"));
+        std::fs::write(dir.join("a.pdf"), b"").unwrap();
+        assert_eq!(unique_pdf(&md), dir.join("a copy.pdf"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

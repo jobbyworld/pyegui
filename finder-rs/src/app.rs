@@ -299,6 +299,17 @@ impl FinderApp {
         self.path_text = None;
     }
 
+    /// The markdown file to export: the one selected, else the one open in the central view
+    pub fn markdown_target(&self) -> Option<PathBuf> {
+        let is_md = |p: &Path| p.extension().is_some_and(|e| matches!(e.to_string_lossy().to_lowercase().as_str(), "md" | "markdown"));
+        if self.selected.len() == 1 {
+            if let Some(p) = self.selected_paths().into_iter().next().filter(|p| is_md(p)) {
+                return Some(p);
+            }
+        }
+        self.viewer.as_ref().map(|v| v.path.clone()).filter(|p| is_md(p))
+    }
+
     /// Opens a folder here, a file with the application of the system
     pub fn open(&mut self, path: &Path) {
         if let Some(store) = self.tags.as_mut() {

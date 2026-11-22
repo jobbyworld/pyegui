@@ -24,12 +24,14 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 chrono = "0.4.45"
 craft-pdf = { workspace = true, optional = true }
 kurbo = { version = "0.13", optional = true }
+ttf-parser = { version = "0.25", optional = true }
+harfrust = { version = "0.12", optional = true }
 window-vibrancy = "0.8.1"
 raw-window-handle = "0.6.2"
 
 [features]
 default = ["pdf"]
-pdf = ["dep:craft-pdf", "dep:kurbo"]
+pdf = ["dep:craft-pdf", "dep:kurbo", "dep:ttf-parser", "dep:harfrust"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
