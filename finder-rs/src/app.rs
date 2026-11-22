@@ -308,6 +308,22 @@ impl FinderApp {
         }
     }
 
+    /// What "Ouvrir avec l'app système" opens: the selected item (a file with its default
+    /// application, a folder in the file manager), else the current folder
+    pub fn system_target(&self) -> Option<PathBuf> {
+        let target = self.selected_paths().into_iter().next().unwrap_or_else(|| self.folder().to_path_buf());
+        target.exists().then_some(target)
+    }
+
+    pub fn open_in_system(&self) {
+        for path in self.selected_paths() {
+            open_with_system(&path);
+        }
+        if self.selected.is_empty() {
+            open_with_system(self.folder());
+        }
+    }
+
     pub fn apply_theme(&self, ctx: &egui::Context) {
         ctx.set_theme(match self.theme {
             ThemeChoice::System => egui::ThemePreference::System,
@@ -684,6 +700,13 @@ impl FinderApp {
                     }
                 }
                 _ => {}
+            }
+            ui.add_space(8.0);
+            let system = glyphs::segmented(ui, "system", 16.0, &[
+                glyphs::Cell { glyph: glyphs::OPEN, on: false, enabled: self.system_target().is_some(), tip: "Ouvrir avec l'app système (fichier : app par défaut ; dossier : Finder, Explorer…)" },
+            ]);
+            if system.clicked.is_some() {
+                self.open_in_system();
             }
             ui.add_space(8.0);
             let room = (ui.available_width() - right_part).max(60.0);

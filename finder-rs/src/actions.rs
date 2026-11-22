@@ -40,6 +40,7 @@ pub static ACTIONS: &[Action] = &[
     Action { category: "Fichier", label: "Ouvrir", icon: "↗", shortcut: cmd(Key::ArrowDown), enabled: has_selection, in_menu: true, run: |app, _| {
         for path in app.selected_paths() { app.open(&path); }
     }},
+    Action { category: "Fichier", label: "Ouvrir avec l'app système", icon: "⇱", shortcut: None, enabled: |a| a.system_target().is_some(), in_menu: true, run: |app, _| app.open_in_system() },
     Action { category: "Fichier", label: "Nouvelle fenêtre", icon: "◫", shortcut: cmd(Key::N), enabled: always, in_menu: false, run: |app, _| app.new_window = Some(app.folder().to_path_buf()) },
     Action { category: "Fichier", label: "Ouvrir dans une nouvelle fenêtre", icon: "◫", shortcut: None, enabled: |a| a.selected.len() == 1 && a.selected.iter().all(|p| p.is_dir()), in_menu: true, run: |app, _| {
         if let Some(p) = app.selected_paths().first() { app.new_window = Some(p.clone()); }

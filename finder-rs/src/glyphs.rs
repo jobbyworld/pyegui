@@ -33,6 +33,7 @@ pub const DOWNLOAD: Glyph = glyph!("download");
 pub const DOCUMENT: Glyph = glyph!("document");
 pub const DESKTOP: Glyph = glyph!("desktop");
 pub const HOME: Glyph = glyph!("home");
+pub const OPEN: Glyph = glyph!("open");
 
 pub fn image(glyph: Glyph, size: f32, tint: Color32) -> egui::Image<'static> {
     egui::Image::from_bytes(format!("bytes://glyph/{}.svg", glyph.0), glyph.1).tint(tint).fit_to_exact_size(egui::vec2(size, size))
