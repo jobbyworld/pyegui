@@ -186,6 +186,8 @@ pub struct FinderApp {
     /// the picture behind the glasses, blurred: the file, the blur and its texture
     bg_texture: Option<(PathBuf, u32, egui::TextureHandle)>,
     applied_blur: u32,
+    /// the blur once the slider is let go (while it is dragged the window server and the picture are not asked again at each frame)
+    settled_blur: Option<[u32; 2]>,
     title: String,
     /// a window opened by the first one: it has no native backdrop and closes on its own
     secondary: bool,
@@ -413,6 +415,7 @@ impl FinderApp {
             accent_custom: saved.accent_custom,
             bg_texture: None,
             applied_blur: 0,
+            settled_blur: None,
             title: String::new(),
             secondary: false,
             windows: Vec::new(),
@@ -551,6 +554,19 @@ impl FinderApp {
             .map(|[r, g, b, a]| egui::Color32::from_rgba_unmultiplied(r, g, b, a))
             .unwrap_or(if active { base } else { base.gamma_multiply(0.5) });
         (look.outline_width[k], color)
+    }
+
+    /// The blur of both looks, kept as it was while the pointer is down (a slider being dragged)
+    fn settled_blur(&mut self, ctx: &egui::Context) -> [u32; 2] {
+        let wanted = [self.looks[0].blur, self.looks[1].blur];
+        let dragging = ctx.input(|i| i.pointer.any_down());
+        match self.settled_blur {
+            Some(old) if dragging => old,
+            _ => {
+                self.settled_blur = Some(wanted);
+                wanted
+            }
+        }
     }
 
     pub fn accent_color(&self) -> egui::Color32 {
@@ -1757,7 +1773,7 @@ impl eframe::App for FinderApp {
         // the blur of the glass: the one of the window server
         #[cfg(target_os = "macos")]
         {
-            let blur = if background == Background::Glass { self.looks[dark].blur } else { 0 };
+            let blur = if background == Background::Glass { self.settled_blur(ui.ctx())[dark] } else { 0 };
             if blur != self.applied_blur {
                 self.applied_blur = blur;
                 let _ = pyegui_core::window::set_window_blur(&*frame, blur);
@@ -1786,8 +1802,9 @@ impl FinderApp {
                     painter.rect_filled(screen, 0.0, if dark { egui::Color32::from_rgb(22, 24, 30) } else { egui::Color32::from_rgb(235, 235, 240) });
                     return;
                 };
-                if self.bg_texture.as_ref().is_none_or(|(p, b, _)| *p != path || *b != look.blur) {
-                    self.bg_texture = blurred_texture(ctx, &path, look.blur).map(|t| (path.clone(), look.blur, t));
+                let blur = self.settled_blur(ctx)[usize::from(dark)];
+                if self.bg_texture.as_ref().is_none_or(|(p, b, _)| *p != path || *b != blur) {
+                    self.bg_texture = blurred_texture(ctx, &path, blur).map(|t| (path.clone(), blur, t));
                 }
                 match &self.bg_texture {
                     Some((_, _, texture)) => {

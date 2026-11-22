@@ -647,7 +647,7 @@ pub fn zoned_header(
     for p in &zones.placed {
         cells[p.index].rect = zones.cell_rect(rect, p, scroll);
     }
-    let mut hits: Vec<(String, Rect)> = vec![];
+    let mut hits: Vec<(String, Rect, bool)> = vec![];
     for zone in 0..3u8 {
         let group: Vec<Cell> = zones.placed.iter().filter(|p| p.zone == zone).map(|p| cells[p.index].clone()).collect();
         if group.is_empty() {
@@ -658,8 +658,9 @@ pub fn zoned_header(
         zone_ui.shrink_clip_rect(zone_rect);
         header(&mut zone_ui, id.with(("zone", zone)), &group, state, opts, choices);
         for c in &group {
+            // a column that cannot move (the name of a tree, always at the left) has no menu
             if c.movable {
-                hits.push((c.key.clone(), c.rect.intersect(zone_rect)));
+                hits.push((c.key.clone(), c.rect.intersect(zone_rect), true));
             }
         }
     }
@@ -677,14 +678,14 @@ pub fn zoned_header(
 }
 
 /// The menu of a title: pin the column at the left or at the right, or unpin it
-fn pin_menu(ui: &mut egui::Ui, id: Id, state: &mut ColumnsState, opts: HeaderOptions, hits: &[(String, Rect)]) {
+fn pin_menu(ui: &mut egui::Ui, id: Id, state: &mut ColumnsState, opts: HeaderOptions, hits: &[(String, Rect, bool)]) {
     if !opts.pinnable {
         return;
     }
     let right_click = ui.input(|i| i.pointer.secondary_clicked());
     if right_click {
         if let Some(p) = ui.input(|i| i.pointer.interact_pos()) {
-            if let Some((key, _)) = hits.iter().find(|(_, r)| r.contains(p)) {
+            if let Some((key, _, _)) = hits.iter().find(|(_, r, _)| r.contains(p)) {
                 state.menu = Some((key.clone(), p));
             }
         }

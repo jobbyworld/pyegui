@@ -486,16 +486,16 @@ pub fn distinct_values<'a>(
     values: &mut Values,
 ) -> Vec<String> {
     let Some(column) = Column::of_key(key, hooks) else { return vec![] };
-    let mut found: Vec<String> = entries
-        .filter_map(|e| match value_of(e, column, hooks, values) {
-            Value::Text(t) => Some(t),
-            _ => None,
-        })
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
-    found.sort_by(|a, b| natural_cmp(a, b));
-    found
+    // a value that some folder has comes first (the folders of the Type column), then the others
+    let mut found: HashMap<String, bool> = HashMap::new();
+    for e in entries {
+        if let Value::Text(t) = value_of(e, column, hooks, values) {
+            *found.entry(t).or_insert(false) |= e.is_dir;
+        }
+    }
+    let mut found: Vec<(String, bool)> = found.into_iter().collect();
+    found.sort_by(|(a, da), (b, db)| db.cmp(da).then_with(|| natural_cmp(a, b)));
+    found.into_iter().map(|(v, _)| v).collect()
 }
 
 /// The state of a list or icon view
@@ -1800,18 +1800,20 @@ pub fn draw_tree(
         }
         (state, nodes, v.multi_select, v.show_root, v.activatable_dirs, v.scroll_to.take(), rules, given)
     };
-    // the folders are read and free: the functions of Python of the columns can run
+    // the folders are read and free: the functions of Python of the columns can run. The choices of a
+    // filter are the ones of what is loaded, before the filters (none kept still leaves them all to pick)
+    let all_entries = if columns.iter().any(|(c, _)| c.data_type(hooks) == DataType::Choice) {
+        let mut all = vec![];
+        collect_entries(&nodes, &mut all);
+        all
+    } else {
+        vec![]
+    };
     nodes = arrange_nodes(nodes, &rules, hooks, &mut values, !given);
     fill_badges(&mut nodes, hooks);
     {
         let mut v = view.borrow_mut();
-        v.listing = Arc::new(if columns.iter().any(|(c, _)| c.data_type(hooks) == DataType::Choice) {
-            let mut all = vec![];
-            collect_entries(&nodes, &mut all);
-            all
-        } else {
-            vec![]
-        });
+        v.listing = Arc::new(all_entries);
         v.values = std::mem::take(&mut values);
     }
 
