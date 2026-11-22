@@ -474,6 +474,31 @@ impl FinderApp {
         }
     }
 
+    /// A new folder in the current folder holding the selected items, then its renaming starts
+    pub fn group_selection(&mut self) {
+        let paths = self.selected_paths();
+        if paths.is_empty() {
+            return;
+        }
+        let folder = actions::unique_named(self.folder(), "dossier avec éléments");
+        if let Err(e) = std::fs::create_dir(&folder) {
+            self.notice = Some(format!("Impossible de créer le dossier: {e}"));
+            return;
+        }
+        let mut failed = Vec::new();
+        for path in &paths {
+            let Some(name) = path.file_name() else { continue };
+            if let Err(e) = std::fs::rename(path, folder.join(name)) {
+                failed.push(format!("{}: {e}", name.to_string_lossy()));
+            }
+        }
+        if !failed.is_empty() {
+            self.notice = Some(format!("Déplacement impossible: {}", failed.join(", ")));
+        }
+        self.select_after = vec![folder.clone()];
+        self.start_rename(folder);
+    }
+
     pub fn start_rename(&mut self, path: PathBuf) {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         self.rename = Some((path, name));
