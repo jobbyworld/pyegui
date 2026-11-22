@@ -31,6 +31,8 @@ fn main() -> eframe::Result {
     if custom {
         viewport = viewport.with_decorations(false);
     }
+    // the views take part in the drag and drop of the system (out to the Finder, onto a folder)
+    pyegui_core::native_dnd::register();
     let options = eframe::NativeOptions {
         viewport,
         persist_window: true,

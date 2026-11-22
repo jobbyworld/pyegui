@@ -601,11 +601,15 @@ impl FinderApp {
     /// Files dropped on the window are copied or moved into the folder shown, by the rules of the file
     /// managers (same disk: move, Option/Ctrl copies; two disks: copy, Cmd/Shift moves)
     fn drops(&mut self, ctx: &egui::Context) {
-        let hovered: Vec<PathBuf> = ctx.input(|i| i.raw.hovered_files.iter().filter_map(|f| f.path.clone()).collect());
-        let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
-        let modifiers = ctx.input(|i| i.modifiers);
-        let held = (modifiers.shift, modifiers.ctrl, modifiers.alt, modifiers.command);
-        let folder = self.folder().to_path_buf();
+        let hovered = pyegui_core::native_dnd::hovered_files(ctx);
+        let dropped = pyegui_core::native_dnd::dropped_files(ctx);
+        // the keys held now, from the system: the window gets no key event while files are dragged
+        let held = pyegui_core::native_dnd::held_modifiers().unwrap_or_else(|| {
+            let m = ctx.input(|i| i.modifiers);
+            (m.shift, m.ctrl, m.alt, m.command)
+        });
+        // a folder of the view under the pointer takes the files, else the folder shown
+        let folder = self.views.drop_target(self.view).unwrap_or_else(|| self.folder().to_path_buf());
         if !hovered.is_empty() {
             let operation = pyegui_core::transfer::drop_operation_for(held, &hovered, &folder);
             let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop-hint")));
@@ -1393,7 +1397,12 @@ impl eframe::App for FinderApp {
         }
     }
 
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        pyegui_core::native_dnd::pump_drop_input(ctx, raw_input);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        pyegui_core::native_dnd::set_window(&*frame);
         if self.glass != GlassChoice::None && !self.backdrop_applied {
             self.backdrop_applied = true;
             if let Some(name) = backdrop_name() {

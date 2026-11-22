@@ -58,6 +58,16 @@ impl Views {
         }
     }
 
+    /// The folder of the view of the mode under the pointer while files are dragged over it or dropped
+    /// on it (the value of the last frame), if there is one
+    pub fn drop_target(&self, mode: ViewMode) -> Option<PathBuf> {
+        match mode {
+            ViewMode::Tree => self.tree.borrow().drop_target.as_ref().map(PathBuf::from),
+            ViewMode::Icons => self.icons.as_ref().and_then(|v| v.drop_target.clone()),
+            ViewMode::List => self.list.as_ref().and_then(|v| v.drop_target.clone()),
+        }
+    }
+
     /// Scrolls the views to an item
     pub fn scroll_to(&mut self, path: &Path) {
         self.tree.borrow_mut().scroll_to = Some(path.to_string_lossy().into_owned());
@@ -122,7 +132,7 @@ fn headers() -> [String; 4] {
 }
 
 fn options() -> HeaderOptions {
-    HeaderOptions { resizable: true, pinnable: true, reorderable: true, filterable: true, drag_out: false, grow_left: false }
+    HeaderOptions { resizable: true, pinnable: true, reorderable: true, filterable: true, drag_out: true, grow_left: false }
 }
 
 /// The paths of the tag view, read again only when the tag or the store changes

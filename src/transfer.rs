@@ -47,7 +47,7 @@ fn py_same_volume(a: PathBuf, b: PathBuf) -> bool {
 ///         label(f"Drop to {drop_operation(hovered_files(), for_folder)} here")
 #[pyfunction]
 unsafe fn drop_operation(sources: Vec<PathBuf>, folder: PathBuf) -> PyResult<&'static str> {
-    let held = match crate::native_dnd::held_modifiers() {
+    let held = match pyegui_core::native_dnd::held_modifiers() {
         Some(held) => held,
         None => {
             let held = panel_parent_ui(&UI)?.ctx().input(|i| i.modifiers);
