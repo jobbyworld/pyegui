@@ -242,7 +242,7 @@ fn actions_pane(app: &mut FinderApp, ui: &mut egui::Ui) {
             ui.label(RichText::new(category).strong().small());
         }
         ui.horizontal(|ui| {
-            let button = egui::Button::new(format!("{}  {}", action.icon, action.label)).min_size(egui::vec2(ui.available_width() - 90.0, 0.0));
+            let button = crate::glyphs::action_button(ui, action.icon, action.label).min_size(egui::vec2(ui.available_width() - 90.0, 0.0));
             if ui.add_enabled(enabled[index], button).clicked() {
                 run = Some(index);
             }

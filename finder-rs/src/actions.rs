@@ -83,67 +83,67 @@ fn claude_available(_: &FinderApp) -> bool {
 }
 
 pub static ACTIONS: &[Action] = &[
-    Action { category: "Fichier", label: "Ouvrir", icon: "↗", shortcut: cmd(Key::ArrowDown), enabled: has_selection, in_menu: true, run: |app, _| {
+    Action { category: "Fichier", label: "Ouvrir", icon: "open", shortcut: cmd(Key::ArrowDown), enabled: has_selection, in_menu: true, run: |app, _| {
         for path in app.selected_paths() { app.open(&path); }
     }},
-    Action { category: "Fichier", label: "Ouvrir avec l'app système", icon: "⇱", shortcut: None, enabled: |a| a.system_target().is_some(), in_menu: true, run: |app, _| app.open_in_system() },
-    Action { category: "Fichier", label: "Ouvrir avec Zed", icon: "Z", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Z)), enabled: zed_available, in_menu: true, run: |app, _| {
+    Action { category: "Fichier", label: "Ouvrir avec l'app système", icon: "open", shortcut: None, enabled: |a| a.system_target().is_some(), in_menu: true, run: |app, _| app.open_in_system() },
+    Action { category: "Fichier", label: "Ouvrir avec Zed", icon: "zed", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Z)), enabled: zed_available, in_menu: true, run: |app, _| {
         if let Some(command) = openapps::zed_command() {
             let targets = if app.selected.is_empty() { vec![app.folder().to_path_buf()] } else { app.selected_paths() };
             openapps::launch(command, &targets);
         }
     }},
-    Action { category: "Fichier", label: "Ouvrir avec Typora", icon: "T", shortcut: None, enabled: typora_available, in_menu: true, run: |app, _| {
+    Action { category: "Fichier", label: "Ouvrir avec Typora", icon: "document", shortcut: None, enabled: typora_available, in_menu: true, run: |app, _| {
         if let Some(command) = openapps::typora_command() { openapps::launch(command, &typora_targets(app)); }
     }},
-    Action { category: "Fichier", label: "Ouvrir avec Claude (Code)", icon: "✺", shortcut: None, enabled: claude_available, in_menu: true, run: |app, ctx| {
+    Action { category: "Fichier", label: "Ouvrir avec Claude (Code)", icon: "claude", shortcut: None, enabled: claude_available, in_menu: true, run: |app, ctx| {
         ctx.open_url(egui::OpenUrl::same_tab(openapps::claude_url("code", &target_directory(app))));
     }},
-    Action { category: "Fichier", label: "Ouvrir avec Claude (Cowork)", icon: "✺", shortcut: None, enabled: claude_available, in_menu: true, run: |app, ctx| {
+    Action { category: "Fichier", label: "Ouvrir avec Claude (Cowork)", icon: "claude", shortcut: None, enabled: claude_available, in_menu: true, run: |app, ctx| {
         ctx.open_url(egui::OpenUrl::same_tab(openapps::claude_url("cowork", &target_directory(app))));
     }},
-    Action { category: "Fichier", label: "Nouvelle fenêtre", icon: "◫", shortcut: cmd(Key::N), enabled: always, in_menu: false, run: |app, _| app.new_window = Some(app.folder().to_path_buf()) },
-    Action { category: "Fichier", label: "Ouvrir dans une nouvelle fenêtre", icon: "◫", shortcut: None, enabled: |a| a.selected.len() == 1 && a.selected.iter().all(|p| p.is_dir()), in_menu: true, run: |app, _| {
+    Action { category: "Fichier", label: "Nouvelle fenêtre", icon: "dock", shortcut: cmd(Key::N), enabled: always, in_menu: false, run: |app, _| app.new_window = Some(app.folder().to_path_buf()) },
+    Action { category: "Fichier", label: "Ouvrir dans une nouvelle fenêtre", icon: "dock", shortcut: None, enabled: |a| a.selected.len() == 1 && a.selected.iter().all(|p| p.is_dir()), in_menu: true, run: |app, _| {
         if let Some(p) = app.selected_paths().first() { app.new_window = Some(p.clone()); }
     }},
-    Action { category: "Fichier", label: "Nouveau dossier", icon: "＋", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::N)), enabled: always, in_menu: false, run: |app, _| app.new_folder() },
-    Action { category: "Fichier", label: "Regrouper dans un dossier", icon: "▤", shortcut: Some(KeyboardShortcut::new(GROUP_MODIFIERS, Key::N)), enabled: can_group, in_menu: true, run: |app, _| app.group_selection() },
-    Action { category: "Fichier", label: "Renommer", icon: "✎", shortcut: Some(KeyboardShortcut::new(Modifiers::NONE, Key::F2)), enabled: one_selected, in_menu: true, run: |app, _| {
+    Action { category: "Fichier", label: "Nouveau dossier", icon: "folder-plus", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::N)), enabled: always, in_menu: false, run: |app, _| app.new_folder() },
+    Action { category: "Fichier", label: "Regrouper dans un dossier", icon: "group", shortcut: Some(KeyboardShortcut::new(GROUP_MODIFIERS, Key::N)), enabled: can_group, in_menu: true, run: |app, _| app.group_selection() },
+    Action { category: "Fichier", label: "Renommer", icon: "rename", shortcut: Some(KeyboardShortcut::new(Modifiers::NONE, Key::F2)), enabled: one_selected, in_menu: true, run: |app, _| {
         if let Some(p) = app.selected_paths().first() { app.start_rename(p.clone()); }
     }},
-    Action { category: "Fichier", label: "Dupliquer", icon: "⧉", shortcut: cmd(Key::D), enabled: has_selection, in_menu: true, run: |app, _| {
+    Action { category: "Fichier", label: "Dupliquer", icon: "duplicate", shortcut: cmd(Key::D), enabled: has_selection, in_menu: true, run: |app, _| {
         let folder = app.folder().to_path_buf();
         app.transfer.start(app.selected_paths(), folder, false);
     }},
-    Action { category: "Fichier", label: "Mettre à la corbeille", icon: "🗑", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::Backspace)), enabled: has_selection, in_menu: true, run: |app, _| app.ask_delete() },
-    Action { category: "Édition", label: "Copier", icon: "⎘", shortcut: cmd(Key::C), enabled: has_selection, in_menu: true, run: |app, _| {
+    Action { category: "Fichier", label: "Mettre à la corbeille", icon: "trash", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::Backspace)), enabled: has_selection, in_menu: true, run: |app, _| app.ask_delete() },
+    Action { category: "Édition", label: "Copier", icon: "copy", shortcut: cmd(Key::C), enabled: has_selection, in_menu: true, run: |app, _| {
         app.copy_files(false);
     }},
-    Action { category: "Édition", label: "Couper", icon: "✂", shortcut: cmd(Key::X), enabled: has_selection, in_menu: true, run: |app, _| {
+    Action { category: "Édition", label: "Couper", icon: "cut", shortcut: cmd(Key::X), enabled: has_selection, in_menu: true, run: |app, _| {
         app.copy_files(true);
     }},
-    Action { category: "Édition", label: "Coller", icon: "📋", shortcut: cmd(Key::V), enabled: can_paste, in_menu: true, run: |app, _| app.paste() },
-    Action { category: "Édition", label: "Tout sélectionner", icon: "▣", shortcut: cmd(Key::A), enabled: always, in_menu: false, run: |app, _| app.select_all() },
-    Action { category: "Outils", label: "Exporter en PDF", icon: "⇩", shortcut: None, enabled: |a| a.markdown_target().is_some(), in_menu: true, run: |app, _| {
+    Action { category: "Édition", label: "Coller", icon: "paste", shortcut: cmd(Key::V), enabled: can_paste, in_menu: true, run: |app, _| app.paste() },
+    Action { category: "Édition", label: "Tout sélectionner", icon: "checkbox-on", shortcut: cmd(Key::A), enabled: always, in_menu: false, run: |app, _| app.select_all() },
+    Action { category: "Outils", label: "Exporter en PDF", icon: "page", shortcut: None, enabled: |a| a.markdown_target().is_some(), in_menu: true, run: |app, _| {
         if let Some(source) = app.markdown_target() { export_markdown_pdf(source); }
     }},
-    Action { category: "Chemin", label: "Copier le chemin", icon: "⌘", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::C)), enabled: has_selection, in_menu: true, run: |app, ctx| {
+    Action { category: "Chemin", label: "Copier le chemin", icon: "copy", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::C)), enabled: has_selection, in_menu: true, run: |app, ctx| {
         let text = app.selected_paths().iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>().join("\n");
         ctx.copy_text(text);
     }},
-    Action { category: "Chemin", label: "Afficher dans le gestionnaire", icon: "⌕", shortcut: None, enabled: has_selection, in_menu: true, run: |app, _| {
+    Action { category: "Chemin", label: "Afficher dans le gestionnaire", icon: "reveal", shortcut: None, enabled: has_selection, in_menu: true, run: |app, _| {
         if let Some(p) = app.selected_paths().first() { reveal(p); }
     }},
-    Action { category: "Navigation", label: "Précédent", icon: "◀", shortcut: cmd(Key::OpenBracket), enabled: |a| a.history.can_back(), in_menu: false, run: |app, _| app.back() },
-    Action { category: "Navigation", label: "Suivant", icon: "▶", shortcut: cmd(Key::CloseBracket), enabled: |a| a.history.can_forward(), in_menu: false, run: |app, _| app.forward() },
-    Action { category: "Navigation", label: "Dossier parent", icon: "▲", shortcut: cmd(Key::ArrowUp), enabled: |a| a.folder().parent().is_some(), in_menu: false, run: |app, _| app.parent() },
-    Action { category: "Affichage", label: "Liste", icon: "☰", shortcut: cmd(Key::Num1), enabled: always, in_menu: false, run: |app, _| app.view = ViewMode::List },
-    Action { category: "Affichage", label: "Icônes", icon: "▦", shortcut: cmd(Key::Num2), enabled: always, in_menu: false, run: |app, _| app.view = ViewMode::Icons },
-    Action { category: "Affichage", label: "Arbre", icon: "🗂", shortcut: cmd(Key::Num3), enabled: always, in_menu: false, run: |app, _| app.view = ViewMode::Tree },
-    Action { category: "Affichage", label: "Fichiers cachés", icon: "◌", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Period)), enabled: always, in_menu: false, run: |app, _| app.show_hidden = !app.show_hidden },
-    Action { category: "Affichage", label: "Barre latérale", icon: "◧", shortcut: cmd(Key::B), enabled: always, in_menu: false, run: |app, _| app.toggle_sidebar() },
-    Action { category: "Affichage", label: "Terminal", icon: ">_", shortcut: cmd(Key::T), enabled: always, in_menu: false, run: |app, _| app.toggle_terminal() },
-    Action { category: "Affichage", label: "Volets", icon: "◨", shortcut: cmd(Key::J), enabled: always, in_menu: false, run: |app, _| app.toggle_dock() },
+    Action { category: "Navigation", label: "Précédent", icon: "chevron-left", shortcut: cmd(Key::OpenBracket), enabled: |a| a.history.can_back(), in_menu: false, run: |app, _| app.back() },
+    Action { category: "Navigation", label: "Suivant", icon: "chevron-right", shortcut: cmd(Key::CloseBracket), enabled: |a| a.history.can_forward(), in_menu: false, run: |app, _| app.forward() },
+    Action { category: "Navigation", label: "Dossier parent", icon: "folder-up", shortcut: cmd(Key::ArrowUp), enabled: |a| a.folder().parent().is_some(), in_menu: false, run: |app, _| app.parent() },
+    Action { category: "Affichage", label: "Liste", icon: "list", shortcut: cmd(Key::Num1), enabled: always, in_menu: false, run: |app, _| app.view = ViewMode::List },
+    Action { category: "Affichage", label: "Icônes", icon: "grid", shortcut: cmd(Key::Num2), enabled: always, in_menu: false, run: |app, _| app.view = ViewMode::Icons },
+    Action { category: "Affichage", label: "Arbre", icon: "tree", shortcut: cmd(Key::Num3), enabled: always, in_menu: false, run: |app, _| app.view = ViewMode::Tree },
+    Action { category: "Affichage", label: "Fichiers cachés", icon: "eye", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Period)), enabled: always, in_menu: false, run: |app, _| app.show_hidden = !app.show_hidden },
+    Action { category: "Affichage", label: "Barre latérale", icon: "sidebar", shortcut: cmd(Key::B), enabled: always, in_menu: false, run: |app, _| app.toggle_sidebar() },
+    Action { category: "Affichage", label: "Terminal", icon: "terminal", shortcut: cmd(Key::T), enabled: always, in_menu: false, run: |app, _| app.toggle_terminal() },
+    Action { category: "Affichage", label: "Volets", icon: "panes", shortcut: cmd(Key::J), enabled: always, in_menu: false, run: |app, _| app.toggle_dock() },
 ];
 
 pub fn enabled_flags(app: &FinderApp) -> Vec<bool> {
@@ -168,7 +168,7 @@ pub fn run_shortcuts(app: &mut FinderApp, ctx: &egui::Context) {
 pub fn menu(ui: &mut egui::Ui, enabled: &[bool]) -> Option<usize> {
     let mut chosen = None;
     for (index, action) in ACTIONS.iter().enumerate().filter(|(_, a)| a.in_menu) {
-        let mut button = egui::Button::new(format!("{}  {}", action.icon, action.label));
+        let mut button = crate::glyphs::action_button(ui, action.icon, action.label);
         if let Some(shortcut) = &action.shortcut {
             button = button.shortcut_text(ui.ctx().format_shortcut(shortcut));
         }

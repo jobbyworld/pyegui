@@ -407,7 +407,7 @@ pub fn menu_tags(app: &FinderApp, ctx: &egui::Context) -> Vec<(Tag, bool)> {
 pub fn menu(ui: &mut egui::Ui, tags: &[(Tag, bool)], enabled: bool) -> Option<(i64, bool)> {
     let mut chosen = None;
     ui.add_enabled_ui(enabled, |ui| {
-        ui.menu_button("🏷  Étiquettes", |ui| {
+        ui.menu_image_text_button(crate::glyphs::image(crate::glyphs::TAG, 16.0, ui.visuals().text_color()), "Étiquettes", |ui| {
             if tags.is_empty() {
                 ui.weak("Aucune étiquette");
             }

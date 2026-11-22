@@ -327,11 +327,15 @@ impl FinderApp {
     /// What "Ouvrir avec l'app système" opens: the selected item (a file with its default
     /// application, a folder in the file manager), else the current folder
     pub fn system_target(&self) -> Option<PathBuf> {
-        let target = self.selected_paths().into_iter().next().unwrap_or_else(|| self.folder().to_path_buf());
+        let target = self.viewer_path().map(Path::to_path_buf).or_else(|| self.selected_paths().into_iter().next()).unwrap_or_else(|| self.folder().to_path_buf());
         target.exists().then_some(target)
     }
 
     pub fn open_in_system(&self) {
+        if let Some(path) = self.viewer_path() {
+            open_with_system(path);
+            return;
+        }
         for path in self.selected_paths() {
             open_with_system(&path);
         }
@@ -744,7 +748,7 @@ impl FinderApp {
                     let action = &actions::ACTIONS[i];
                     let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
                     if row == index {
-                        ui.painter().rect_filled(rect, 6.0, ui.visuals().selection.bg_fill.gamma_multiply(0.6));
+                        ui.painter().rect_filled(rect, 6.0, ui.visuals().selection.bg_fill.gamma_multiply(0.45));
                         if down || up {
                             ui.scroll_to_rect(rect, None);
                         }
@@ -752,7 +756,8 @@ impl FinderApp {
                         ui.painter().rect_filled(rect, 6.0, Color32::from_rgba_unmultiplied(127, 127, 127, 30));
                     }
                     let color = ui.visuals().text_color();
-                    ui.painter().text(rect.left_center() + egui::vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, format!("{}  {}", action.icon, action.label), egui::FontId::proportional(14.0), color);
+                    glyphs::image(glyphs::by_name(action.icon), 16.0, color).paint_at(ui, egui::Rect::from_center_size(rect.left_center() + egui::vec2(18.0, 0.0), egui::vec2(16.0, 16.0)));
+                    ui.painter().text(rect.left_center() + egui::vec2(34.0, 0.0), egui::Align2::LEFT_CENTER, action.label, egui::FontId::proportional(14.0), color);
                     ui.painter().text(rect.right_center() - egui::vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, &shortcuts[row], egui::FontId::proportional(12.0), ui.visuals().weak_text_color());
                     if r.hovered() && ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO) {
                         index = row;
@@ -828,14 +833,21 @@ impl FinderApp {
                 ui.add_space(6.0);
             }
             let parent = self.folder().parent().map(Path::to_path_buf);
+            let reading = self.viewer.is_some();
             let nav = glyphs::segmented(ui, "nav", 16.0, &[
                 glyphs::Cell { glyph: glyphs::CHEVRON_LEFT, on: false, enabled: self.history.can_back(), tip: "Précédent (⌘[)" },
                 glyphs::Cell { glyph: glyphs::CHEVRON_RIGHT, on: false, enabled: self.history.can_forward(), tip: "Suivant (⌘])" },
-                glyphs::Cell { glyph: glyphs::CHEVRON_UP, on: false, enabled: parent.is_some(), tip: "Dossier parent (⌘↑)" },
+                if reading {
+                    // in the viewer the button that goes up a folder closes the file
+                    glyphs::Cell { glyph: glyphs::CLOSE, on: false, enabled: true, tip: "Fermer (Échap)" }
+                } else {
+                    glyphs::Cell { glyph: glyphs::CHEVRON_UP, on: false, enabled: parent.is_some(), tip: "Dossier parent (⌘↑)" }
+                },
             ]);
             match nav.clicked {
                 Some(0) => self.back(),
                 Some(1) => self.forward(),
+                Some(2) if reading => self.viewer = None,
                 Some(2) => {
                     if let Some(p) = parent {
                         self.go(p);
@@ -898,7 +910,8 @@ impl FinderApp {
 
     /// The name of the folder with its icon, in a combo: a click opens the list of its parent folders
     fn folder_name(&mut self, ui: &mut egui::Ui, room: f32) {
-        let folder = self.folder().to_path_buf();
+        // the name of the folder, or of the file in the viewer
+        let folder = self.viewer_path().map(Path::to_path_buf).unwrap_or_else(|| self.folder().to_path_buf());
         let options = ComboOptions { size: 15.0, max_width: Some(room), always_icon: true, ..Default::default() };
         let out = combo(ui, &folder, &options);
         for (path, response) in out.hits {
@@ -1042,7 +1055,7 @@ impl FinderApp {
         if let Some(path) = out.clicked {
             self.reveal_path(Path::new(&path));
         }
-        if ui.add(egui::Button::new("…").small().frame(false)).on_hover_text("Saisir un chemin").clicked() {
+        if glyphs::small(ui, glyphs::by_name("rename"), "Saisir un chemin").clicked() {
             self.path_text = Some(self.folder().to_string_lossy().into_owned());
         }
     }
@@ -1057,13 +1070,13 @@ impl FinderApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let ctx = ui.ctx().clone();
                 let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-                if ui.add(egui::Button::new("✕").frame(false)).on_hover_text("Fermer").clicked() {
+                if glyphs::small(ui, glyphs::CLOSE, "Fermer").clicked() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
-                if ui.add(egui::Button::new(if maximized { "❐" } else { "☐" }).frame(false)).clicked() {
+                if glyphs::small(ui, if maximized { glyphs::RESTORE } else { glyphs::MAXIMIZE }, if maximized { "Restaurer" } else { "Agrandir" }).clicked() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
                 }
-                if ui.add(egui::Button::new("—").frame(false)).on_hover_text("Réduire").clicked() {
+                if glyphs::small(ui, glyphs::MINIMIZE, "Réduire").clicked() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                 }
             });

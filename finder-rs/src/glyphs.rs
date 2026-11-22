@@ -34,6 +34,80 @@ pub const DOCUMENT: Glyph = glyph!("document");
 pub const DESKTOP: Glyph = glyph!("desktop");
 pub const HOME: Glyph = glyph!("home");
 pub const OPEN: Glyph = glyph!("open");
+pub const MINIMIZE: Glyph = glyph!("minimize");
+pub const MAXIMIZE: Glyph = glyph!("maximize");
+pub const RESTORE: Glyph = glyph!("restore");
+pub const SEARCH: Glyph = glyph!("search");
+pub const ROTATE: Glyph = glyph!("rotate");
+pub const ZOOM_IN: Glyph = glyph!("zoom-in");
+pub const ZOOM_OUT: Glyph = glyph!("zoom-out");
+pub const COPY: Glyph = glyph!("copy");
+pub const CHEVRON_DOWN: Glyph = glyph!("chevron-down");
+
+/// An icon by the name of its file in `examples/icons`
+pub fn by_name(name: &str) -> Glyph {
+    match name {
+        "checkbox-mixed" => glyph!("checkbox-mixed"),
+        "checkbox-off" => glyph!("checkbox-off"),
+        "checkbox-on" => glyph!("checkbox-on"),
+        "chevron-down" => glyph!("chevron-down"),
+        "chevron-left" => glyph!("chevron-left"),
+        "chevron-right" => glyph!("chevron-right"),
+        "chevron-up" => glyph!("chevron-up"),
+        "claude" => glyph!("claude"),
+        "close" => glyph!("close"),
+        "continuous" => glyph!("continuous"),
+        "copy" => glyph!("copy"),
+        "cut" => glyph!("cut"),
+        "desktop" => glyph!("desktop"),
+        "dock" => glyph!("dock"),
+        "document" => glyph!("document"),
+        "dot" => glyph!("dot"),
+        "download" => glyph!("download"),
+        "drive" => glyph!("drive"),
+        "duplicate" => glyph!("duplicate"),
+        "eye" => glyph!("eye"),
+        "eye-off" => glyph!("eye-off"),
+        "fit-width" => glyph!("fit-width"),
+        "folder" => glyph!("folder"),
+        "folder-plus" => glyph!("folder-plus"),
+        "folder-up" => glyph!("folder-up"),
+        "gear" => glyph!("gear"),
+        "grid" => glyph!("grid"),
+        "group" => glyph!("group"),
+        "hand" => glyph!("hand"),
+        "home" => glyph!("home"),
+        "image" => glyph!("image"),
+        "list" => glyph!("list"),
+        "maximize" => glyph!("maximize"),
+        "minimize" => glyph!("minimize"),
+        "moon" => glyph!("moon"),
+        "note" => glyph!("note"),
+        "open" => glyph!("open"),
+        "page" => glyph!("page"),
+        "panes" => glyph!("panes"),
+        "paste" => glyph!("paste"),
+        "refresh" => glyph!("refresh"),
+        "rename" => glyph!("rename"),
+        "restore" => glyph!("restore"),
+        "reveal" => glyph!("reveal"),
+        "rotate" => glyph!("rotate"),
+        "search" => glyph!("search"),
+        "sidebar" => glyph!("sidebar"),
+        "sun" => glyph!("sun"),
+        "tag" => glyph!("tag"),
+        "terminal" => glyph!("terminal"),
+        "text-select" => glyph!("text-select"),
+        "theme-system" => glyph!("theme-system"),
+        "trash" => glyph!("trash"),
+        "tree" => glyph!("tree"),
+        "zed" => glyph!("zed"),
+        "zoom-fit" => glyph!("zoom-fit"),
+        "zoom-in" => glyph!("zoom-in"),
+        "zoom-out" => glyph!("zoom-out"),
+        _ => glyph!("dot"),
+    }
+}
 
 pub fn image(glyph: Glyph, size: f32, tint: Color32) -> egui::Image<'static> {
     egui::Image::from_bytes(format!("bytes://glyph/{}.svg", glyph.0), glyph.1).tint(tint).fit_to_exact_size(egui::vec2(size, size))
@@ -104,4 +178,15 @@ pub fn segmented(ui: &mut egui::Ui, id: &str, size: f32, cells: &[Cell]) -> Segm
         out.responses.push(response);
     }
     out
+}
+
+/// A menu or pane button: the icon of an action followed by its label
+pub fn action_button(ui: &egui::Ui, icon: &str, label: &str) -> egui::Button<'static> {
+    egui::Button::image_and_text(image(by_name(icon), 16.0, ui.visuals().text_color()), label.to_string())
+}
+
+/// A small icon button without frame (tooltip on hover)
+pub fn small(ui: &mut egui::Ui, glyph: Glyph, tooltip: &str) -> Response {
+    let tint = ui.visuals().text_color();
+    ui.add(egui::Button::image(image(glyph, 14.0, tint)).frame(false)).on_hover_text(tooltip)
 }

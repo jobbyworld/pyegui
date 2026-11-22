@@ -101,10 +101,7 @@ pub fn show(viewer: &mut Viewer, ui: &mut egui::Ui, core: &Arc<Mutex<Core>>) -> 
     }
     let mut close = false;
     ui.horizontal_wrapped(|ui| {
-        if ui.button("← Dossier").on_hover_text("Fermer (Échap)").clicked() {
-            close = true;
-        }
-        ui.label(RichText::new(viewer.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).strong());
+        // the name of the file and the close button are in the topbar of the window
         match &mut viewer.body {
             Body::Markdown { source, .. } => {
                 ui.separator();
@@ -247,19 +244,19 @@ fn pdf_bar(ui: &mut egui::Ui, p: &mut PdfBody) {
         return;
     }
     ui.separator();
-    if ui.button("◀").on_hover_text("Page précédente").clicked() {
+    if crate::glyphs::small(ui, crate::glyphs::CHEVRON_LEFT, "Page précédente").clicked() {
         view.previous_page();
     }
     ui.label(format!("{} / {}", view.page(), view.pages()));
-    if ui.button("▶").on_hover_text("Page suivante").clicked() {
+    if crate::glyphs::small(ui, crate::glyphs::CHEVRON_RIGHT, "Page suivante").clicked() {
         view.next_page();
     }
     ui.separator();
-    if ui.button("−").on_hover_text("Réduire").clicked() {
+    if crate::glyphs::small(ui, crate::glyphs::ZOOM_OUT, "Réduire").clicked() {
         view.set_zoom(view.zoom() / 1.25);
     }
     ui.label(format!("{:.0} %", view.zoom() * 100.0));
-    if ui.button("+").on_hover_text("Agrandir").clicked() {
+    if crate::glyphs::small(ui, crate::glyphs::ZOOM_IN, "Agrandir").clicked() {
         view.set_zoom(view.zoom() * 1.25);
     }
     if ui.selectable_label(view.fit() == "width", "Largeur").on_hover_text("Ajuster à la largeur").clicked() {
@@ -268,7 +265,7 @@ fn pdf_bar(ui: &mut egui::Ui, p: &mut PdfBody) {
     if ui.selectable_label(view.fit() == "page", "Page").on_hover_text("Ajuster à la page").clicked() {
         let _ = view.set_fit("page");
     }
-    if ui.button("⟳").on_hover_text("Pivoter de 90°").clicked() {
+    if crate::glyphs::small(ui, crate::glyphs::ROTATE, "Pivoter de 90°").clicked() {
         view.rotate(90);
     }
     let hand = view.tool() == "hand";
@@ -304,14 +301,14 @@ fn pdf_bar(ui: &mut egui::Ui, p: &mut PdfBody) {
         } else {
             ui.label(RichText::new(if view.searching() { "recherche…" } else { "aucun résultat" }).weak());
         }
-        if ui.small_button("▲").on_hover_text("Résultat précédent").clicked() {
+        if crate::glyphs::small(ui, crate::glyphs::CHEVRON_UP, "Résultat précédent").clicked() {
             view.previous_match();
         }
-        if ui.small_button("▼").on_hover_text("Résultat suivant").clicked() {
+        if crate::glyphs::small(ui, crate::glyphs::CHEVRON_DOWN, "Résultat suivant").clicked() {
             view.next_match();
         }
     }
-    if !view.selected_text().is_empty() && ui.button("Copier").on_hover_text("Copier la sélection").clicked() {
+    if !view.selected_text().is_empty() && crate::glyphs::small(ui, crate::glyphs::COPY, "Copier la sélection").clicked() {
         view.copy_selection();
     }
 }
