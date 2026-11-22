@@ -411,6 +411,11 @@ impl FinderApp {
         cache.1.get(&crate::tagstore::key(path)).map(|t| std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(*t))
     }
 
+    /// The file shown in the central viewer
+    pub fn viewer_path(&self) -> Option<&Path> {
+        self.viewer.as_ref().map(|v| v.path.as_path())
+    }
+
     pub fn selected_paths(&self) -> Vec<PathBuf> {
         self.items.iter().filter(|e| self.selected.contains(&e.path)).map(|e| e.path.clone()).collect()
     }

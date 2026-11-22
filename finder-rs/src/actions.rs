@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use eframe::egui::{self, Key, KeyboardShortcut, Modifiers};
 
 use crate::app::{FinderApp, ViewMode};
+use crate::openapps;
 
 pub struct Action {
     pub category: &'static str,
@@ -36,9 +37,58 @@ fn can_paste(app: &FinderApp) -> bool {
     app.clipboard.as_ref().is_some_and(|(paths, _)| !paths.is_empty())
 }
 
+/// the selected folder, the folder of the selected file, or the current folder
+fn target_directory(app: &FinderApp) -> PathBuf {
+    match app.selected_paths().first() {
+        Some(p) if p.is_dir() => p.clone(),
+        Some(p) => p.parent().map(Path::to_path_buf).unwrap_or_else(|| app.folder().to_path_buf()),
+        None => app.folder().to_path_buf(),
+    }
+}
+
+/// what Typora opens: the markdown files and folders selected, else the markdown read in the
+/// central view, else the current folder
+fn typora_targets(app: &FinderApp) -> Vec<PathBuf> {
+    let mut items: Vec<PathBuf> = app.selected_paths().into_iter().filter(|p| p.is_dir() || openapps::is_markdown(p)).collect();
+    if items.is_empty() {
+        if let Some(p) = app.viewer_path().filter(|p| openapps::is_markdown(p)) {
+            items.push(p.to_path_buf());
+        }
+    }
+    if items.is_empty() {
+        items.push(app.folder().to_path_buf());
+    }
+    items
+}
+
+fn zed_available(_: &FinderApp) -> bool {
+    openapps::zed_command().is_some()
+}
+fn typora_available(_: &FinderApp) -> bool {
+    openapps::typora_command().is_some()
+}
+fn claude_available(_: &FinderApp) -> bool {
+    openapps::claude_available()
+}
+
 pub static ACTIONS: &[Action] = &[
     Action { category: "Fichier", label: "Ouvrir", icon: "↗", shortcut: cmd(Key::ArrowDown), enabled: has_selection, in_menu: true, run: |app, _| {
         for path in app.selected_paths() { app.open(&path); }
+    }},
+    Action { category: "Fichier", label: "Ouvrir avec Zed", icon: "Z", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Z)), enabled: zed_available, in_menu: true, run: |app, _| {
+        if let Some(command) = openapps::zed_command() {
+            let targets = if app.selected.is_empty() { vec![app.folder().to_path_buf()] } else { app.selected_paths() };
+            openapps::launch(command, &targets);
+        }
+    }},
+    Action { category: "Fichier", label: "Ouvrir avec Typora", icon: "T", shortcut: None, enabled: typora_available, in_menu: true, run: |app, _| {
+        if let Some(command) = openapps::typora_command() { openapps::launch(command, &typora_targets(app)); }
+    }},
+    Action { category: "Fichier", label: "Ouvrir avec Claude (Code)", icon: "✺", shortcut: None, enabled: claude_available, in_menu: true, run: |app, ctx| {
+        ctx.open_url(egui::OpenUrl::same_tab(openapps::claude_url("code", &target_directory(app))));
+    }},
+    Action { category: "Fichier", label: "Ouvrir avec Claude (Cowork)", icon: "✺", shortcut: None, enabled: claude_available, in_menu: true, run: |app, ctx| {
+        ctx.open_url(egui::OpenUrl::same_tab(openapps::claude_url("cowork", &target_directory(app))));
     }},
     Action { category: "Fichier", label: "Nouvelle fenêtre", icon: "◫", shortcut: cmd(Key::N), enabled: always, in_menu: false, run: |app, _| app.new_window = Some(app.folder().to_path_buf()) },
     Action { category: "Fichier", label: "Ouvrir dans une nouvelle fenêtre", icon: "◫", shortcut: None, enabled: |a| a.selected.len() == 1 && a.selected.iter().all(|p| p.is_dir()), in_menu: true, run: |app, _| {
