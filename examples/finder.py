@@ -337,6 +337,7 @@ bg_scrim = {"light": Float(0.55), "dark": Float(0.3)}  # a veil over the picture
 bg_contrast = {"light": Float(0.5), "dark": Float(0.6)}  # less than 1 flattens the picture: the text reads better
 bg_blur = Float(12.0)
 bg_opacity = Float(1.0)
+term_opacity = Float(0.2)  # how opaque the background of the terminals is, 1 is opaque
 bg_fit = Int(0)  # the index of BACKGROUND_FITS
 bg_open = Bool(False)  # the window of the settings of the picture
 bg_applied = [None]  # what was given to pyegui last, it is given again when it changes
@@ -514,8 +515,11 @@ def icon(item, size):
 
 def newest_python():
     """the most recent Python found: since 3.13 its prompt has colors, since 3.14 it colors the code"""
+    # an app started from the Dock has a short PATH: look in the usual folders of Homebrew and python.org too
+    extra = os.pathsep.join(["/opt/homebrew/bin", "/usr/local/bin", "/Library/Frameworks/Python.framework/Versions/Current/bin"])
+    path = os.environ.get("PATH", "") + os.pathsep + extra
     for minor in range(20, sys.version_info.minor, -1):
-        found = shutil.which(f"python3.{minor}")
+        found = shutil.which(f"python3.{minor}", path=path)
         if found:
             return found
     return sys.executable
@@ -556,8 +560,8 @@ TERMINAL_DARK = dict(
     ],
 )
 
-# how opaque the background of the terminals is: below 1 the sheet and the backdrop show through
-TERMINAL_OPACITY = 0.2
+# how opaque the background of the terminals is (`term_opacity`, set in the Apparence window):
+# below 1 the sheet and the backdrop show through
 
 # the terminals of the dock at the bottom: states, created once, outside the update function.
 # They start in the folder the Finder opens
@@ -591,11 +595,11 @@ def shell_pane():
             shell.restart(cwd=str(current()))
 
     horizontal(bar)
-    terminal(shell, opacity=TERMINAL_OPACITY)
+    terminal(shell, opacity=term_opacity.value)
 
 
 def python_pane():
-    terminal(python, opacity=TERMINAL_OPACITY)
+    terminal(python, opacity=term_opacity.value)
 
 
 probe_cache = {}  # what a call that may block (a disconnected network drive) answered last
@@ -891,6 +895,7 @@ def background_window():
         toggle_value(blue_folders, "Dossiers bleus")
         if blue_folders.value != before_blue:
             set_blue(blue_folders.value)
+    slider_float(term_opacity, 0.0, 1.0, "Opacité du terminal")
     if not bg_on.value:
         weak("Le mode Image montre une image de fond derrière la vitre")
         return
@@ -930,6 +935,7 @@ def background_window():
             bg_contrast["light"].value, bg_contrast["dark"].value = 0.5, 0.6
             bg_auto.value = True
             bg_blur.value = 12.0
+            term_opacity.value = 0.2
         if button_clicked("Retirer l'image"):
             bg_image.value = ""
 
@@ -967,6 +973,7 @@ def snapshot():
             "opacity": bg_opacity.value,
             "fit": bg_fit.value,
         },
+        "terminal_opacity": term_opacity.value,
         "folded": sorted(folded),
         "tag_tree_folded": tag_tree.folded,
         "folder": str(current()),
@@ -1016,6 +1023,8 @@ def restore(saved):
                 holder.value = float(background[key])
         if isinstance(background.get("fit"), int) and 0 <= background["fit"] < len(BACKGROUND_FITS):
             bg_fit.value = background["fit"]
+    if isinstance(saved.get("terminal_opacity"), (int, float)):
+        term_opacity.value = float(saved["terminal_opacity"])
     folded.update(saved.get("folded", []))
     tag_tree.folded = [p for p in saved.get("tag_tree_folded", []) if isinstance(p, str)]
     tree.open_folders = [p for p in saved.get("tree_open", []) if isinstance(p, str)]
@@ -2178,7 +2187,7 @@ widths = {
 }
 
 
-TOOLBAR_FIXED = 520  # what the toolbar keeps for the navigation, the name, the view and the panes
+TOOLBAR_FIXED = 550  # what the toolbar keeps for the navigation, the name, the view and the panes
 COUNT_MIN_ROW = 560  # the width of the bottom band from which the count of items is shown
 SEARCH_WIDTH, SEARCH_MIN = (
     240,
@@ -2291,6 +2300,10 @@ def toolbar():
 
             # in the unified layout the field is centered in the band like the other buttons
             horizontal_centered(search_field)
+        # the terminal: shows the Terminal pane of the dock
+        if image_button_clicked(svg("terminal"), size=18, tint=icon_tint(), tooltip="Afficher le terminal"):
+            show_dock.value = True
+            show_pane("Terminal")
         # a click shows or hides the docks, a right click opens the menu of the panes
         if image_button_clicked(
             svg("panes"),

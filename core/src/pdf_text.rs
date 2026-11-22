@@ -14,7 +14,7 @@ use craft_pdf::interpret::{
     BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask, TransformExt,
 };
 use craft_pdf::syntax::Pdf;
-use eframe::egui::{Pos2, Rect};
+use egui::{Pos2, Rect};
 use kurbo::{Affine, BezPath, Point};
 
 /// Most characters kept for a page (a hostile page cannot make the text large).
@@ -24,7 +24,7 @@ const SPACE_GAP: f64 = 0.2;
 
 /// One character of a page and its box.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Ch {
+pub struct Ch {
     pub c: char,
     /// left, top, right, bottom in points
     pub r: [f32; 4],
@@ -40,7 +40,7 @@ impl Ch {
 
 /// The text of a page.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct PageText {
+pub struct PageText {
     pub chars: Vec<Ch>,
     /// the links of the page, read with the text
     pub links: Vec<crate::pdf_nav::Link>,
@@ -143,7 +143,7 @@ impl Device<'_> for TextDevice {
 
 /// Reads the text of a page (from 0). A page that cannot be interpreted gives an empty text: one bad
 /// page does not lose the others.
-pub(crate) fn extract_page(pdf: &Pdf, index: usize) -> PageText {
+pub fn extract_page(pdf: &Pdf, index: usize) -> PageText {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let pages = pdf.pages();
         let page = pages.get(index)?;
@@ -165,7 +165,7 @@ pub(crate) fn extract_page(pdf: &Pdf, index: usize) -> PageText {
 
 /// A character as search compares it: lower case, without the accents of the Latin letters, a
 /// newline as a space.
-pub(crate) fn fold(c: char) -> char {
+pub fn fold(c: char) -> char {
     let c = if c == '\n' || c == '\u{a0}' { ' ' } else { c };
     let lower = c.to_lowercase().next().unwrap_or(c);
     match lower {

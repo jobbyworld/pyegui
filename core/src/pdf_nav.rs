@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use craft_pdf::syntax::object::{Array, Dict, MaybeRef, Name, Object, ObjectIdentifier, String as PdfString};
 use craft_pdf::syntax::{page::Rotation, Pdf};
 use craft_pdf::interpret::TransformExt;
-use eframe::egui::{Pos2, Rect};
+use egui::{Pos2, Rect};
 use kurbo::Point;
 
 /// Most links read from a page, bookmarks read from a document, and the depth of a tree.
@@ -18,7 +18,7 @@ const MAX_DEPTH: usize = 16;
 
 /// Where a link or a bookmark goes.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Target {
+pub enum Target {
     /// A page (from 0) and the height to show at the top of the window when the destination gives it
     /// (points from the top of the page).
     Page { page: usize, y: Option<f32> },
@@ -27,14 +27,14 @@ pub(crate) enum Target {
 
 /// A clickable area of a page.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Link {
+pub struct Link {
     pub rect: Rect,
     pub target: Target,
 }
 
 /// One bookmark of the outline.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Bookmark {
+pub struct Bookmark {
     pub title: String,
     pub level: usize,
     pub target: Option<Target>,
@@ -43,7 +43,7 @@ pub(crate) struct Bookmark {
 type Ids = HashMap<ObjectIdentifier, usize>;
 
 /// The page (from 0) of every page object, to find where a destination goes.
-pub(crate) fn page_ids(pdf: &Pdf) -> Ids {
+pub fn page_ids(pdf: &Pdf) -> Ids {
     pdf.pages().iter().enumerate().filter_map(|(i, p)| p.raw().obj_id().map(|id| (id, i))).collect()
 }
 
@@ -152,7 +152,7 @@ fn target_of(pdf: &Pdf, ids: &Ids, dict: &Dict<'_>) -> Option<Target> {
 }
 
 /// The links of a page (from 0).
-pub(crate) fn links(pdf: &Pdf, ids: &Ids, index: usize) -> Vec<Link> {
+pub fn links(pdf: &Pdf, ids: &Ids, index: usize) -> Vec<Link> {
     let pages = pdf.pages();
     let Some(page) = pages.get(index) else { return Vec::new() };
     let Some(annots) = page.raw().get::<Array<'_>>(b"Annots") else { return Vec::new() };
@@ -178,7 +178,7 @@ pub(crate) fn links(pdf: &Pdf, ids: &Ids, index: usize) -> Vec<Link> {
 }
 
 /// The bookmarks of the document, in the order of the outline, with their level (0 for the top).
-pub(crate) fn outline(pdf: &Pdf, ids: &Ids) -> Vec<Bookmark> {
+pub fn outline(pdf: &Pdf, ids: &Ids) -> Vec<Bookmark> {
     let mut out = Vec::new();
     let Some(root) = pdf.xref().get::<Dict<'_>>(pdf.xref().root_id()) else { return out };
     let Some(first) = root.get::<Dict<'_>>(b"Outlines").and_then(|o| o.get::<Dict<'_>>(b"First")) else { return out };

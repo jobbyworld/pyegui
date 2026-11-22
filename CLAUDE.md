@@ -132,6 +132,30 @@ Index of all files: [docs/framework/README.md](docs/framework/README.md).
 dock of the PyQt app `pyfinder`: one registry (`ACTIONS`: category, label, icon, shortcut, enabled
 predicate, run) read by both the panel and the keyboard, so an action is declared once.
 
+## Workspace, `core/` and `finder-rs/`
+
+The repository is a Cargo workspace of three crates:
+
+- `pyegui` (root, `src/`): the Python extension built by maturin. It keeps the ui stack, the kwargs and the
+  `#[pyfunction]` / `#[pyclass]` wrappers.
+- `pyegui-core` (`core/`): what does not depend on Python, shared with the Rust applications: `watcher`
+  (`Core`), `transfer` (`Transfer`, `drop_operation_for`), `pdf`, `pdf_nav`, `pdf_text`, `pdf_view`
+  (`PdfDocument`, `PdfView`, `pdf_view`, `pdf_thumbnail`), `terminal` (`Terminal`, `show`), `markdown`
+  (`show`, `code_view`), `gherkin`, `style`, `window` (native backdrops, blur, corner radius), `icons`, `path` (breadcrumb, combo), `columns` and `files` (the file views: `FolderView`, `TreeState`, `draw_folder`, `draw_tree`, `Hooks` with Rust closures for badges and extra columns). A module of `src/` that moved to the core keeps only
+  its wrappers (see `src/watcher.rs`, `src/terminal.rs`, `src/pdf_view.rs`); options read from kwargs become
+  a struct of the core (`TerminalOptions`, `MarkdownOptions`, `PdfViewOptions`...). Still in `src/` because
+  they hold Python callbacks: `dock`, `tags`, `table`, `tree`, `widgets`, `containers`; `files` and `columns` keep only the Python classes, the kwargs and the conversion of Python functions to closures.
+  `cargo test -p pyegui-core` runs the tests of the core.
+- `finder-rs` (`finder-rs/`): the Finder in pure Rust (binary `finder`), the equivalent of `examples/finder.py`.
+  `actions.rs` (one registry of actions read by the pane, the context menu and the shortcuts), `app.rs` (window,
+  state, file operations), `dock.rs` (`egui_tiles`), `views.rs` (the file views of the core, fed with the folder, selection and sort of the app), `viewer.rs`
+  (markdown, code, image, PDF), `terminals.rs`, `tagstore.rs` (SQLite, same schema as `finder_tags.py`) and
+  `tagsui.rs`, `search.rs`, `model.rs`. Build `cargo build --profile dist -p finder-rs`; on macOS
+  `python scripts/bundle_finder_macos.py` makes `dist/Finder.app` and `dist/Finder.dmg`. The CI builds
+  and attaches the executables of Windows (x64, ARM64), macOS (x86_64, aarch64) and Linux to the release.
+  Not done compared with `finder.py`: drag of files
+  out of the window, Windows Explorer integration.
+
 ## Source map (`src/`)
 
 | File | Content |
