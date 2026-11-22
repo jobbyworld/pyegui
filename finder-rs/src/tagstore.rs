@@ -40,6 +40,31 @@ CREATE TABLE IF NOT EXISTS notes (
 );
 ";
 
+/// The colors new tags start from, one after the other (the same as `NEW_TAG_COLORS` of finder.py)
+pub const NEW_TAG_COLORS: [&str; 8] = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#3b82f6", "#8b5cf6", "#ec4899"];
+
+fn find_in(all: &[Tag], parts: &[String]) -> Option<i64> {
+    let mut parent = None;
+    for part in parts {
+        parent = Some(all.iter().find(|t| t.parent == parent && t.name.to_lowercase() == part.to_lowercase())?.id);
+    }
+    parent
+}
+
+fn path_of(all: &[Tag], tag: i64) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut at = Some(tag);
+    while let Some(t) = at.and_then(|id| all.iter().find(|t| t.id == id)) {
+        names.push(t.name.clone());
+        at = t.parent;
+        if names.len() > 64 {
+            break;
+        }
+    }
+    names.reverse();
+    names
+}
+
 /// Where a tag of an item comes from, strongest first
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum How {
@@ -209,6 +234,64 @@ impl TagStore {
         statement.query_map(params![tag], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
     }
 
+    // tags by path: "Work/Invoice" is the tag Invoice under the tag Work
+
+    /// "Work/ Invoice" -> ["Work", "Invoice"]: the "/" separate the levels of the tree of tags
+    pub fn split_path(text: &str) -> Vec<String> {
+        text.split('/').map(str::trim).filter(|p| !p.is_empty()).map(String::from).collect()
+    }
+
+    /// The names of a tag and of its parents, from the top level down
+    pub fn tag_path(&self, tag: i64) -> Vec<String> {
+        path_of(&self.all(), tag)
+    }
+
+    /// The tag at this path from the top level (names compared without case), or None
+    pub fn find_path(&self, parts: &[String]) -> Option<i64> {
+        let all = self.all();
+        find_in(&all, parts)
+    }
+
+    /// The tag at this path, made with the levels above it that do not exist yet; a new tag takes the
+    /// next color of `NEW_TAG_COLORS`. None for an empty path
+    pub fn create_path(&mut self, parts: &[String]) -> Option<i64> {
+        let mut parent = None;
+        for i in 0..parts.len() {
+            let existing = match self.find_path(&parts[..=i]) {
+                Some(id) => id,
+                None => {
+                    let color = NEW_TAG_COLORS[self.all().len() % NEW_TAG_COLORS.len()];
+                    self.create(&parts[i], color, parent)?
+                }
+            };
+            parent = Some(existing);
+        }
+        parent
+    }
+
+    /// The tags found by what was typed: each typed level is a part of the name of the matching level,
+    /// the last typed one against the tag itself ("w/inv" finds Work/Invoice)
+    pub fn matching(&self, parts: &[String]) -> Vec<Tag> {
+        let all = self.all();
+        all.iter()
+            .filter(|tag| {
+                let names: Vec<String> = path_of(&all, tag.id).iter().map(|n| n.to_lowercase()).collect();
+                parts.len() <= names.len()
+                    && parts.iter().zip(&names[names.len() - parts.len()..]).all(|(p, n)| n.contains(&p.to_lowercase()))
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// A tag is offered for creation when the typed path does not exist; a single name that already
+    /// exists somewhere in the tree is found, not offered again
+    pub fn can_create(&self, parts: &[String]) -> bool {
+        if parts.is_empty() || self.find_path(parts).is_some() {
+            return false;
+        }
+        parts.len() > 1 || !self.all().iter().any(|t| t.name.to_lowercase() == parts[0].to_lowercase())
+    }
+
     // the items
 
     pub fn tag(&mut self, path: &Path, tag: i64) {
@@ -359,5 +442,54 @@ mod tests {
         assert_eq!(s.noted().len(), 1);
         s.set_note(Path::new("/a"), "  ");
         assert!(s.noted().is_empty());
+    }
+
+    fn p(text: &str) -> Vec<String> {
+        TagStore::split_path(text)
+    }
+
+    #[test]
+    fn a_path_makes_the_missing_levels_and_finds_the_others() {
+        let mut s = store();
+        assert_eq!(p(" Work/ Invoice //"), vec!["Work", "Invoice"]);
+        let invoice = s.create_path(&p("Work/Invoice")).unwrap();
+        assert_eq!(s.all().len(), 2);
+        assert_eq!(s.tag_path(invoice), vec!["Work", "Invoice"]);
+        // again, in another case: nothing new
+        assert_eq!(s.create_path(&p("work/INVOICE")), Some(invoice));
+        assert_eq!(s.all().len(), 2);
+        // a deeper path reuses the levels that exist and takes the next color
+        let march = s.create_path(&p("Work/Invoice/March")).unwrap();
+        assert_eq!(s.all().len(), 3);
+        assert_eq!(s.all().iter().find(|t| t.id == march).unwrap().color, NEW_TAG_COLORS[2]);
+        assert_eq!(s.find_path(&p("Work/Nope")), None);
+        assert_eq!(s.create_path(&[]), None);
+    }
+
+    #[test]
+    fn typing_finds_by_level_and_offers_to_create() {
+        let mut s = store();
+        s.create_path(&p("Work/Invoice"));
+        s.create_path(&p("Home/Invoice"));
+        let found: Vec<String> = s.matching(&p("w/inv")).iter().map(|t| t.name.clone()).collect();
+        assert_eq!(found, vec!["Invoice"]);
+        assert_eq!(s.matching(&p("inv")).len(), 2);
+        assert!(s.matching(&p("a/b/c/d")).is_empty());
+        assert!(!s.can_create(&p("Work/Invoice")));
+        assert!(!s.can_create(&p("invoice")), "a name that exists somewhere is found, not offered");
+        assert!(s.can_create(&p("Work/Tax")));
+        assert!(s.can_create(&p("Tax")));
+        assert!(!s.can_create(&[]));
+    }
+
+    #[test]
+    fn rename_and_recolor_keep_the_same_row() {
+        let mut s = store();
+        let id = s.create_path(&p("A/B")).unwrap();
+        s.rename(id, "C");
+        s.recolor(id, "#123456");
+        let t = s.all().into_iter().find(|t| t.id == id).unwrap();
+        assert_eq!((t.name.as_str(), t.color.as_str()), ("C", "#123456"));
+        assert_eq!(s.find_path(&p("a/c")), Some(id));
     }
 }

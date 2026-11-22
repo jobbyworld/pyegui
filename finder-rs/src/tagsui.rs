@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use eframe::egui::{self, Color32, RichText};
 
 use crate::app::FinderApp;
-use crate::tagstore::{How, Tag};
+use crate::tagstore::{How, Tag, TagStore, NEW_TAG_COLORS};
 
 pub fn parse_color(hex: &str) -> Color32 {
     let t = hex.trim_start_matches('#');
@@ -20,20 +20,42 @@ pub fn to_hex(c: Color32) -> String {
     format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b())
 }
 
-/// The window that creates a tag (`id` None) or edits one
-pub struct TagEdit {
-    pub id: Option<i64>,
-    pub parent: Option<i64>,
-    pub name: String,
-    pub color: Color32,
+/// The window that manages the tags: the tree, and the name, color and parent of the tag chosen
+#[derive(Default)]
+pub struct TagManager {
+    selected: Option<i64>,
+    /// the tag whose values are in the fields
+    loaded: Option<i64>,
+    name: String,
+    color: Color32,
+    parent: Option<i64>,
 }
 
-/// The palette new tags start from, one color after the other
-const PALETTE: [&str; 8] = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#3b82f6", "#8b5cf6", "#ec4899"];
+/// The window that puts tags on the selection: search or type a path (`a/b/c`) to create it
+#[derive(Default)]
+pub struct TagPicker {
+    query: String,
+    shown_query: String,
+    index: usize,
+    first: bool,
+}
 
-pub fn new_edit(app: &FinderApp, parent: Option<i64>) -> TagEdit {
-    let count = app.tags.as_ref().map_or(0, |t| t.all().len());
-    TagEdit { id: None, parent, name: String::new(), color: parse_color(PALETTE[count % PALETTE.len()]) }
+impl TagPicker {
+    pub fn new() -> Self {
+        TagPicker { first: true, ..Default::default() }
+    }
+}
+
+/// What a menu asks for, read by `modals` (the menus have no access to the app)
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum Ask {
+    #[default]
+    Manager,
+    Picker,
+}
+
+pub fn ask(ctx: &egui::Context, what: Ask) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("tag-ask"), what));
 }
 
 /// The dots of an item: the color and the name of each tag, strongest first
@@ -60,8 +82,11 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
         return;
     }
     ui.horizontal(|ui| {
-        if ui.button("＋ Étiquette").clicked() {
-            app.tag_edit = Some(new_edit(app, None));
+        if ui.button("Gérer…").clicked() {
+            app.tag_manager = Some(TagManager::default());
+        }
+        if ui.add_enabled(!app.selected.is_empty(), egui::Button::new("Étiqueter…")).clicked() {
+            app.tag_picker = Some(TagPicker::new());
         }
         if app.tag_filter.is_some() && ui.button("Tout afficher").clicked() {
             app.set_tag_filter(None);
@@ -77,7 +102,7 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
     let own: Vec<std::collections::HashSet<i64>> = app.tags.as_ref().map(|t| selection.iter().map(|p| t.own(p)).collect()).unwrap_or_default();
     let mut toggle: Option<(i64, bool)> = None;
     let mut filter: Option<i64> = None;
-    let mut edit: Option<TagEdit> = None;
+    let mut manage: Option<Option<i64>> = None;
     let mut delete: Option<i64> = None;
     for tag in &tags {
         let on = own.iter().filter(|set| set.contains(&tag.id)).count();
@@ -94,12 +119,8 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
                 filter = Some(tag.id);
             }
             label.context_menu(|ui| {
-                if ui.button("Sous-étiquette…").clicked() {
-                    edit = Some(new_edit(app, Some(tag.id)));
-                    ui.close();
-                }
                 if ui.button("Modifier…").clicked() {
-                    edit = Some(TagEdit { id: Some(tag.id), parent: tag.parent, name: tag.name.clone(), color: parse_color(&tag.color) });
+                    manage = Some(Some(tag.id));
                     ui.close();
                 }
                 if ui.button("Supprimer").clicked() {
@@ -120,8 +141,8 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
         let next = if app.tag_filter == Some(id) { None } else { Some(id) };
         app.set_tag_filter(next);
     }
-    if let Some(e) = edit {
-        app.tag_edit = Some(e);
+    if let Some(selected) = manage {
+        app.tag_manager = Some(TagManager { selected, ..Default::default() });
     }
     if let Some(id) = delete {
         if let Some(store) = app.tags.as_mut() {
@@ -133,52 +154,209 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
     }
 }
 
+/// Draws the windows asked for (manager, picker) and opens those the menus asked for
 pub fn modal(app: &mut FinderApp, ctx: &egui::Context) {
-    let Some(mut e) = app.tag_edit.take() else { return };
-    let mut keep = true;
-    let mut apply = false;
-    egui::Modal::new(egui::Id::new("tag-edit")).show(ctx, |ui| {
-        ui.set_width(300.0);
-        ui.heading(if e.id.is_some() { "Modifier l'étiquette" } else { "Nouvelle étiquette" });
-        let edit = ui.add(egui::TextEdit::singleline(&mut e.name).hint_text("Nom").desired_width(f32::INFINITY));
-        if !edit.has_focus() && !edit.lost_focus() {
-            edit.request_focus();
-        }
-        ui.horizontal(|ui| {
-            ui.label("Couleur");
-            egui::color_picker::color_edit_button_srgba(ui, &mut e.color, egui::color_picker::Alpha::Opaque);
-            for hex in PALETTE {
-                let c = parse_color(hex);
-                if ui.add(egui::Button::new(RichText::new("●").color(c)).frame(false)).clicked() {
-                    e.color = c;
-                }
+    match ctx.data_mut(|d| d.remove_temp::<Ask>(egui::Id::new("tag-ask"))) {
+        Some(Ask::Manager) => app.tag_manager = Some(TagManager::default()),
+        Some(Ask::Picker) if !app.selected.is_empty() => app.tag_picker = Some(TagPicker::new()),
+        _ => {}
+    }
+    manager_modal(app, ctx);
+    picker_modal(app, ctx);
+}
+
+fn manager_modal(app: &mut FinderApp, ctx: &egui::Context) {
+    let Some(mut m) = app.tag_manager.take() else { return };
+    let Some(store) = app.tags.as_mut() else { return };
+    let mut close = false;
+    let mut deleted: Option<i64> = None;
+    egui::Modal::new(egui::Id::new("tag-manager")).show(ctx, |ui| {
+        ui.set_width(380.0);
+        ui.heading("Étiquettes");
+        ui.weak("Une étiquette s'applique à un élément et à son contenu, et ajoute ses étiquettes parentes.");
+        ui.add_space(4.0);
+        let all = store.all();
+        egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
+            for tag in &all {
+                ui.horizontal(|ui| {
+                    ui.add_space(tag.depth as f32 * 14.0);
+                    ui.label(RichText::new("●").color(parse_color(&tag.color)));
+                    if ui.selectable_label(m.selected == Some(tag.id), &tag.name).clicked() {
+                        m.selected = Some(tag.id);
+                    }
+                });
             }
         });
-        ui.horizontal(|ui| {
-            if ui.button("Annuler").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                keep = false;
+        ui.separator();
+        let tag = m.selected.and_then(|id| all.iter().find(|t| t.id == id)).cloned();
+        if tag.is_none() {
+            m.selected = None;
+        }
+        if let Some(tag) = &tag {
+            if m.loaded != Some(tag.id) {
+                m.loaded = Some(tag.id);
+                m.name = tag.name.clone();
+                m.color = parse_color(&tag.color);
+                m.parent = tag.parent;
             }
-            if ui.button("OK").clicked() || (edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
-                apply = true;
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut m.name).hint_text("Nom").desired_width(220.0));
+                egui::color_picker::color_edit_button_srgba(ui, &mut m.color, egui::color_picker::Alpha::Opaque);
+                for hex in NEW_TAG_COLORS {
+                    if ui.add(egui::Button::new(RichText::new("●").color(parse_color(hex))).frame(false)).clicked() {
+                        m.color = parse_color(hex);
+                    }
+                }
+            });
+            let under = store.subtree(tag.id);
+            let label = |id: Option<i64>| id.and_then(|i| all.iter().find(|t| t.id == i)).map_or("(racine)".to_string(), |t| t.name.clone());
+            egui::ComboBox::from_label("Parent").selected_text(label(m.parent)).show_ui(ui, |ui| {
+                ui.selectable_value(&mut m.parent, None, "(racine)");
+                for t in all.iter().filter(|t| !under.contains(&t.id)) {
+                    ui.selectable_value(&mut m.parent, Some(t.id), format!("{}{}", "  ".repeat(t.depth), t.name));
+                }
+            });
+            // the fields are written at once, like finder.py
+            let name = m.name.trim();
+            if !name.is_empty() && name != tag.name {
+                store.rename(tag.id, name);
+            }
+            if to_hex(m.color) != tag.color.to_lowercase() {
+                store.recolor(tag.id, &to_hex(m.color));
+            }
+            if m.parent != tag.parent {
+                store.move_tag(tag.id, m.parent);
+            }
+        }
+        ui.horizontal(|ui| {
+            if ui.button("Nouvelle étiquette").clicked() {
+                let color = NEW_TAG_COLORS[all.len() % NEW_TAG_COLORS.len()];
+                m.selected = store.create("Nouvelle étiquette", color, None);
+            }
+            if let Some(tag) = &tag {
+                if ui.button("Nouvelle sous-étiquette").clicked() {
+                    let color = NEW_TAG_COLORS[all.len() % NEW_TAG_COLORS.len()];
+                    m.selected = store.create("Nouvelle étiquette", color, Some(tag.id));
+                }
+                if ui.button("Supprimer").clicked() {
+                    store.delete(tag.id);
+                    deleted = Some(tag.id);
+                    m.selected = None;
+                }
+            }
+            if ui.button("Fermer").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                close = true;
             }
         });
     });
-    if apply && !e.name.trim().is_empty() {
-        if let Some(store) = app.tags.as_mut() {
-            match e.id {
-                Some(id) => {
-                    store.rename(id, e.name.trim());
-                    store.recolor(id, &to_hex(e.color));
+    if let Some(id) = deleted {
+        if app.tag_filter == Some(id) {
+            app.set_tag_filter(None);
+        }
+    }
+    if !close {
+        app.tag_manager = Some(m);
+    }
+}
+
+enum Row {
+    Tag(Tag, Vec<String>),
+    Create(Vec<String>),
+}
+
+fn picker_modal(app: &mut FinderApp, ctx: &egui::Context) {
+    let Some(mut p) = app.tag_picker.take() else { return };
+    let paths = app.selected_paths();
+    let Some(store) = app.tags.as_mut() else { return };
+    if paths.is_empty() {
+        return;
+    }
+    let mut close = false;
+    egui::Modal::new(egui::Id::new("tag-picker")).show(ctx, |ui| {
+        ui.set_width(440.0);
+        let names: Vec<String> = paths.iter().take(3).map(|q| q.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).collect();
+        ui.weak(format!("Étiqueter « {}{} »", names.join(", "), if paths.len() > 3 { " …" } else { "" }));
+        let edit = ui.add(egui::TextEdit::singleline(&mut p.query).hint_text("Chercher ou créer une étiquette (a/b/c)").desired_width(f32::INFINITY));
+        edit.request_focus();
+        let parts = TagStore::split_path(&p.query);
+        let mut rows: Vec<Row> = if parts.is_empty() { store.all() } else { store.matching(&parts) }
+            .into_iter()
+            .map(|t| {
+                let path = store.tag_path(t.id);
+                Row::Tag(t, path)
+            })
+            .collect();
+        if store.can_create(&parts) {
+            rows.push(Row::Create(parts.clone()));
+        }
+        if p.query != p.shown_query {
+            p.shown_query = p.query.clone();
+            p.index = 0;
+        }
+        p.index = p.index.min(rows.len().saturating_sub(1));
+        if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+            p.index = (p.index + 1).min(rows.len().saturating_sub(1));
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+            p.index = p.index.saturating_sub(1);
+        }
+        let own: Vec<std::collections::HashSet<i64>> = paths.iter().map(|q| store.own(q)).collect();
+        let mut activate: Option<usize> = None;
+        // the Enter that opened the window is not the one of a choice
+        if !p.first && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !rows.is_empty() {
+            activate = Some(p.index);
+        }
+        p.first = false;
+        ui.add_space(4.0);
+        egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
+            for (i, row) in rows.iter().enumerate() {
+                let response = match row {
+                    Row::Tag(tag, path) => {
+                        let on = own.iter().filter(|set| set.contains(&tag.id)).count();
+                        let state = if on == own.len() { "☑" } else if on > 0 { "◪" } else { "☐" };
+                        ui.horizontal(|ui| {
+                            ui.add_space(if parts.is_empty() { tag.depth as f32 * 14.0 } else { 0.0 });
+                            ui.label(RichText::new("●").color(parse_color(&tag.color)));
+                            let text = if parts.is_empty() { tag.name.clone() } else { path.join(" / ") };
+                            ui.selectable_label(i == p.index, format!("{state} {text}"))
+                        })
+                        .inner
+                    }
+                    Row::Create(parts) => ui.selectable_label(i == p.index, format!("＋ Créer « {} »", parts.join(" / "))),
+                };
+                if response.clicked() {
+                    activate = Some(i);
                 }
-                None => {
-                    store.create(e.name.trim(), &to_hex(e.color), e.parent);
+            }
+            if rows.is_empty() {
+                ui.weak("Aucune étiquette");
+            }
+        });
+        ui.add_space(4.0);
+        if ui.button("Fermer").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            close = true;
+        }
+        if let Some(i) = activate {
+            match &rows[i] {
+                Row::Create(parts) => {
+                    if let Some(leaf) = store.create_path(parts) {
+                        for q in &paths {
+                            store.tag(q, leaf);
+                        }
+                    }
+                    p.query.clear();
+                }
+                Row::Tag(tag, _) => {
+                    let all_on = own.iter().all(|set| set.contains(&tag.id));
+                    for q in &paths {
+                        if all_on { store.untag(q, tag.id) } else { store.tag(q, tag.id) }
+                    }
                 }
             }
         }
-    } else if keep && !apply {
-        app.tag_edit = Some(e);
-    } else if apply {
-        app.tag_edit = Some(e);
+    });
+    if !close {
+        app.tag_picker = Some(p);
     }
 }
 
@@ -233,6 +411,15 @@ pub fn menu(ui: &mut egui::Ui, tags: &[(Tag, bool)], enabled: bool) -> Option<(i
             if tags.is_empty() {
                 ui.weak("Aucune étiquette");
             }
+            if ui.button("Chercher ou créer…").clicked() {
+                ask(ui.ctx(), Ask::Picker);
+                ui.close();
+            }
+            if ui.button("Gérer les étiquettes…").clicked() {
+                ask(ui.ctx(), Ask::Manager);
+                ui.close();
+            }
+            ui.separator();
             for (tag, on) in tags {
                 ui.horizontal(|ui| {
                     ui.add_space(tag.depth as f32 * 14.0);
