@@ -231,6 +231,38 @@ pub fn set_dark_mode(_window: &impl raw_window_handle::HasWindowHandle, _dark: b
     Err("not supported on this platform".to_string())
 }
 
+/// Windows 11: asks for the rounded corners of the system for a window without a title bar of the
+/// system (the ones of a window with a frame), and a shadow around it. A maximized window is square.
+#[cfg(target_os = "windows")]
+pub fn set_rounded_corners(window: &impl raw_window_handle::HasWindowHandle) -> Result<(), String> {
+    use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND};
+
+    let raw_window_handle::RawWindowHandle::Win32(handle) =
+        window.window_handle().map_err(|e| e.to_string())?.as_raw()
+    else {
+        return Err("not a win32 window".to_string());
+    };
+    let value: i32 = DWMWCP_ROUND;
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            handle.hwnd.get() as _,
+            DWMWA_WINDOW_CORNER_PREFERENCE as _,
+            (&raw const value).cast(),
+            size_of::<i32>() as _,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(format!("DwmSetWindowAttribute failed with {:#x}", result))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_rounded_corners(_window: &impl raw_window_handle::HasWindowHandle) -> Result<(), String> {
+    Err("not supported on this platform".to_string())
+}
+
 
 /// Puts the three buttons of the window (close, minimize, zoom) at a place of the title bar:
 /// the centre of the close button is `left` points from the left edge of the window and `top`

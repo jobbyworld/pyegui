@@ -58,6 +58,112 @@ pub fn ask(ctx: &egui::Context, what: Ask) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("tag-ask"), what));
 }
 
+/// The tags of the store as paths ("Work/Invoice"), with the colors of the levels: what the widget of the
+/// tags needs to draw the cell of a row
+#[derive(Default)]
+pub struct Library {
+    ids: std::collections::HashMap<i64, (String, usize)>,
+    pub colors: std::collections::HashMap<String, Color32>,
+    /// every path, for the list of the field
+    pub paths: Vec<String>,
+}
+
+impl Library {
+    pub fn read(all: &[Tag]) -> Self {
+        let mut library = Library::default();
+        for (order, tag) in all.iter().enumerate() {
+            let mut names = vec![];
+            let mut at = Some(tag.id);
+            while let Some(t) = at.and_then(|id| all.iter().find(|t| t.id == id)) {
+                names.push(t.name.replace('/', "-"));
+                at = t.parent;
+                if names.len() > 64 {
+                    break;
+                }
+            }
+            names.reverse();
+            let path = names.join("/");
+            library.colors.insert(path.clone(), parse_color(&tag.color));
+            library.paths.push(path.clone());
+            library.ids.insert(tag.id, (path, order));
+        }
+        library
+    }
+
+    pub fn path(&self, id: i64) -> Option<String> {
+        self.ids.get(&id).map(|(path, _)| path.clone())
+    }
+
+    pub fn order(&self, id: i64) -> usize {
+        self.ids.get(&id).map_or(usize::MAX, |(_, order)| *order)
+    }
+}
+
+/// The tags of a row as paths: all of them, and those that come from a folder
+#[derive(Default)]
+pub struct RowTags {
+    pub paths: Vec<String>,
+    pub inherited: Vec<String>,
+}
+
+/// What the widget of the tags changed in the cell of a row
+pub struct TagEdit {
+    pub path: PathBuf,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub colors: Vec<(String, Color32)>,
+}
+
+/// The cell of the tags of a row, the widget of pyegui: small chips (the last level of each tag, the full
+/// path on hover), those of the folders desaturated, a cross on the own ones and a field to add one while the
+/// mouse is over the cell
+pub fn cell(ui: &mut egui::Ui, app: &FinderApp, path: &std::path::Path) {
+    use pyegui_core::tags::{tags_edit, Tags, TagsOptions};
+    let row = app.row_tag_paths(path);
+    let library = app.library();
+    let mut tags = Tags::new(row.paths.clone(), library.colors.clone());
+    let before: Vec<String> = tags.tags.clone();
+    let mut options = TagsOptions::new(egui::Id::new(("finder-tags", path)));
+    options.small = true;
+    options.fit = true;
+    options.field_width = 64.0;
+    options.hint_text = "+ tag".into();
+    options.on_hover = true;
+    options.dropdown = true;
+    options.suggestions = library.paths.clone();
+    options.muted = row.inherited.iter().cloned().collect();
+    options.editable = app.tags.is_some();
+    if tags_edit(ui, &mut tags, &options) {
+        let added = tags.tags.iter().filter(|t| !before.contains(t)).cloned().collect();
+        let removed = before.iter().filter(|t| !tags.tags.contains(t)).cloned().collect();
+        let colors = tags.colors.iter().filter(|(p, c)| library.colors.get(*p) != Some(*c)).map(|(p, c)| (p.clone(), *c)).collect();
+        app.tag_edits.borrow_mut().push(TagEdit { path: path.to_path_buf(), added, removed, colors });
+    }
+}
+
+/// Writes what the cells changed to the store
+pub fn apply_edits(app: &mut FinderApp) {
+    let edits = std::mem::take(&mut *app.tag_edits.borrow_mut());
+    let Some(store) = app.tags.as_mut() else { return };
+    for edit in edits {
+        for added in &edit.added {
+            if let Some(id) = store.create_path(&TagStore::split_path(added)) {
+                store.tag(&edit.path, id);
+            }
+        }
+        for removed in &edit.removed {
+            if let Some(id) = store.find_path(&TagStore::split_path(removed)) {
+                store.untag(&edit.path, id);
+            }
+        }
+        for (path, color) in &edit.colors {
+            if let Some(id) = store.find_path(&TagStore::split_path(path)) {
+                store.recolor(id, &to_hex(*color));
+            }
+        }
+    }
+}
+
 /// The dots of an item: the color and the name of each tag, strongest first
 pub fn dots(ui: &mut egui::Ui, tags: &[(Color32, String, How)]) {
     for (color, name, how) in tags.iter().take(6) {

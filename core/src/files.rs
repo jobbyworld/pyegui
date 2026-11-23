@@ -740,10 +740,12 @@ impl FolderView {
         if n == 0 {
             return;
         }
-        let current = self
-            .cursor
-            .as_ref()
-            .and_then(|c| self.shown.iter().position(|p| p == c));
+        // nothing selected: Down gives the first item and Up the last one
+        let current = if self.selected.is_empty() {
+            None
+        } else {
+            self.cursor.as_ref().and_then(|c| self.shown.iter().position(|p| p == c))
+        };
         let back = |by: usize| current.map(|c| c.saturating_sub(by)).unwrap_or(n - 1);
         let ahead = |by: usize| current.map(|c| (c + by).min(n - 1)).unwrap_or(0);
         let target = if keys.down && step_y > 0 {
@@ -1070,7 +1072,7 @@ pub fn draw_folder_in(
     match view.focus.take() {
         Some(true) => ui.memory_mut(|m| m.request_focus(id)),
         Some(false) => ui.memory_mut(|m| m.surrender_focus(id)),
-        None if view.keep_focus && !ui.ctx().text_edit_focused() => ui.memory_mut(|m| m.request_focus(id)),
+        None if view.keep_focus && !ui.ctx().text_edit_focused() && !crate::terminal::terminal_focused(ui.ctx()) => ui.memory_mut(|m| m.request_focus(id)),
         None => {}
     }
     lock_arrows(ui, id);
@@ -1795,7 +1797,7 @@ pub fn draw_tree(
         match v.focus.take() {
             Some(true) => ui.memory_mut(|m| m.request_focus(id)),
             Some(false) => ui.memory_mut(|m| m.surrender_focus(id)),
-            None if v.keep_focus && !ctx.text_edit_focused() => ui.memory_mut(|m| m.request_focus(id)),
+            None if v.keep_focus && !ctx.text_edit_focused() && !crate::terminal::terminal_focused(&ctx) => ui.memory_mut(|m| m.request_focus(id)),
             None => {}
         }
         (state, nodes, v.multi_select, v.show_root, v.activatable_dirs, v.scroll_to.take(), rules, given)
@@ -1837,6 +1839,27 @@ pub fn draw_tree(
                 state.set_selected(vec![path.clone()]);
                 scroll_to = Some(path);
             }
+        }
+    }
+
+    // nothing selected: Down gives the first row and Up the last one
+    if ui.memory(|m| m.has_focus(id)) && state.selected().is_empty() {
+        let (down, up) = ui.input_mut(|i| {
+            (i.consume_key(egui::Modifiers::NONE, Key::ArrowDown), i.consume_key(egui::Modifiers::NONE, Key::ArrowUp))
+        });
+        let picked = {
+            let v = view.borrow();
+            if down {
+                v.shown.first().cloned()
+            } else if up {
+                v.shown.last().cloned()
+            } else {
+                None
+            }
+        };
+        if let Some(path) = picked {
+            state.set_selected(vec![path.clone()]);
+            scroll_to = Some(path);
         }
     }
 

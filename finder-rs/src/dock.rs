@@ -115,6 +115,16 @@ fn sheet(visuals: &egui::Visuals) -> egui::Color32 {
     pyegui_core::style::layer_fill(pyegui_core::style::Layer::Active, visuals)
 }
 
+/// A path without the points that repeat the previous one (the end of an arc is the start of the next
+/// segment): a stroke of egui doubles its width there, which shows as dots when the color is semi transparent
+fn dedup(mut pts: Vec<egui::Pos2>, closed: bool) -> Vec<egui::Pos2> {
+    pts.dedup_by(|b, a| a.distance(*b) < 0.05);
+    if closed && pts.len() > 1 && pts[0].distance(pts[pts.len() - 1]) < 0.05 {
+        pts.pop();
+    }
+    pts
+}
+
 /// The outline of a tab, open at the bottom so it joins its pane
 fn tab_outline(rect: egui::Rect, radius: f32, foot: f32) -> Vec<egui::Pos2> {
     use std::f32::consts::FRAC_PI_2;
@@ -174,6 +184,8 @@ struct Behavior<'a> {
     sheets: Vec<egui::Rect>,
     /// the corners round the active tab that the glass of the bands fills (what the curves leave out)
     corners: Vec<egui::Mesh>,
+    /// the fill of the active tab and of its feet, painted with the sheets (not clipped by the bar of tabs)
+    fills: Vec<egui::Shape>,
     /// the active tab of a pane (its rectangle and its radius), to draw one outline around tab and pane
     active_tabs: std::collections::HashMap<TileId, (egui::Rect, u8)>,
     /// the panes drawn in one sheet (their rectangle): the outline of tab and pane is drawn once the tabs are known
@@ -204,7 +216,13 @@ fn pane_outline(area: egui::Rect, tab: Option<(egui::Rect, u8)>, square_tl: bool
     }
     if let Some((tab, r)) = tab {
         let all = tab_outline(tab, f32::from(r), r_foot(r));
-        pts.extend(if flush { all[13..].to_vec() } else { all });
+        let mut part = if flush { all[13..].to_vec() } else { all };
+        // a tab scrolled out of the bar (its rectangle goes past a side of the pane) must not pull the
+        // outline outside the pane: its points stay between the sides
+        for p in &mut part {
+            p.x = p.x.clamp(area.left(), area.right());
+        }
+        pts.extend(part);
     }
     arc(&mut pts, area.right_top() + egui::vec2(-rr, rr), 3.0 * FRAC_PI_2);
     arc(&mut pts, area.right_bottom() + egui::vec2(-rr, -rr), 0.0);
@@ -212,21 +230,44 @@ fn pane_outline(area: egui::Rect, tab: Option<(egui::Rect, u8)>, square_tl: bool
     pts
 }
 
-/// What the round corner of a sheet leaves out: a fan from the corner, `sx` and `sy` (+1 or -1) point inside
-fn corner_mesh(outer: egui::Pos2, sx: f32, sy: f32, r: f32, tint: egui::Color32) -> egui::Mesh {
-    let r = r - OVERLAP;
-    let center = outer + egui::vec2(sx * (r + OVERLAP), sy * (r + OVERLAP));
+/// A fan of triangles from `apex` to an arc, whose edge on the arc is smoothed over one pixel (the colour
+/// fades from full to nothing across the circle), like the edge of a rounded rectangle of egui: the
+/// pieces that meet on a curve then blend with no dotted fringe. `point(radius, i)` is the point `i` of the
+/// arc at that radius; `outside` is the side of the circle that is filled.
+fn feathered_fan(apex: egui::Pos2, radius: f32, outside: bool, grow: f32, color: egui::Color32, point: impl Fn(f32, usize) -> egui::Pos2) -> egui::Mesh {
+    const STEPS: usize = 8;
+    let half = 0.5;
+    // `grow` pushes the edge that far into the neighbour, which lies under it: the glass of the window does
+    // not show through the seam where two smoothed edges meet
+    let (full, none) = if outside { (radius + half - grow, radius - half - grow) } else { ((radius - half + grow).max(0.0), radius + half + grow) };
     let mut m = egui::Mesh::default();
-    m.colored_vertex(outer, tint);
-    for i in 0..=8 {
-        let a = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
-        m.colored_vertex(egui::pos2(center.x - sx * r * a.cos(), center.y - sy * r * a.sin()), tint);
+    m.colored_vertex(apex, color);
+    for i in 0..=STEPS {
+        m.colored_vertex(point(full, i), color);
     }
-    for i in 0..8 {
-        m.add_triangle(0, 1 + i, 2 + i);
+    for i in 0..=STEPS {
+        m.colored_vertex(point(none, i), egui::Color32::TRANSPARENT);
+    }
+    let (a, b) = (1u32, 2 + STEPS as u32);
+    for i in 0..STEPS as u32 {
+        m.add_triangle(0, a + i, a + i + 1);
+        m.add_triangle(a + i, b + i, a + i + 1);
+        m.add_triangle(a + i + 1, b + i, b + i + 1);
     }
     m
 }
+
+/// What the round corner of a sheet leaves out: a fan from the corner, `sx` and `sy` (+1 or -1) point inside
+fn corner_mesh(outer: egui::Pos2, sx: f32, sy: f32, r: f32, tint: egui::Color32) -> egui::Mesh {
+    let center = outer + egui::vec2(sx * r, sy * r);
+    feathered_fan(outer, r, true, SEAM, tint, |rad, i| {
+        let a = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
+        egui::pos2(center.x - sx * rad * a.cos(), center.y - sy * rad * a.sin())
+    })
+}
+
+/// How far (in points) the glass of the bands goes under the curves of the sheets
+const SEAM: f32 = 0.35;
 
 /// How far the glass of the bands goes under the curves of the active tab: the edges of the curves are
 /// smoothed, and without it a pixel of the edge would let the window show through
@@ -354,9 +395,16 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
                 fill = if ui.visuals().dark_mode { egui::Color32::from_white_alpha(14) } else { sheet(ui.visuals()).gamma_multiply(0.4) };
             }
             let r = radius.min(rect.width() / 2.0).min(rect.height() / 2.0).floor() as u8;
-            ui.painter().rect_filled(rect, CornerRadius { nw: r, ne: r, sw: 0, se: 0 }, fill);
+            if !state.active {
+                ui.painter().rect_filled(rect, CornerRadius { nw: r, ne: r, sw: 0, se: 0 }, fill);
+            }
+            // an active tab scrolled out of the bar (partly hidden) is drawn as the part that is seen: a narrower
+            // tab, so its feet, corners and outline stay inside the bar and join the pane
             if state.active {
+                let rect = rect.intersect(ui.clip_rect());
+                let rect = if rect.width() < 2.0 * f32::from(r) { egui::Rect::from_min_size(rect.min, egui::vec2(2.0 * f32::from(r), rect.height())) } else { rect };
                 self.sheets.push(rect);
+                self.fills.push(egui::Shape::rect_filled(rect, CornerRadius { nw: r, ne: r, sw: 0, se: 0 }, fill));
                 self.active_tabs.insert(tile_id, (rect, r));
                 let flush = rect.min.x - r_foot(r) < ui.max_rect().left() - 0.01;
                 let tint = crate::app::bar_tint(ui.visuals());
@@ -371,53 +419,30 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
                     let center = corner + egui::vec2(dir * foot, -foot);
                     self.sheets.push(egui::Rect::from_two_pos(corner, center));
                     // the quarter of disc on the far side of the curve
-                    let mut m = egui::Mesh::default();
-                    m.colored_vertex(center, tint);
-                    for i in 0..=6 {
-                        let a = std::f32::consts::FRAC_PI_2 * i as f32 / 6.0;
-                        m.colored_vertex(egui::pos2(center.x - dir * (foot + OVERLAP) * a.cos(), center.y + (foot + OVERLAP) * a.sin()), tint);
-                    }
-                    for i in 0..6 {
-                        m.add_triangle(0, 1 + i, 2 + i);
-                    }
-                    self.corners.push(m);
+                    self.corners.push(feathered_fan(center, foot, false, SEAM, tint, |rad, i| {
+                        let a = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
+                        egui::pos2(center.x - dir * rad * a.cos(), center.y + rad * a.sin())
+                    }));
                 }
                 for (outer, dir) in [(rect.left_top(), 1.0f32), (rect.right_top(), -1.0f32)] {
-                    let center = outer + egui::vec2(dir * rf, rf);
-                    let mut m = egui::Mesh::default();
-                    m.colored_vertex(outer, tint);
-                    for i in 0..=6 {
-                        let a = std::f32::consts::FRAC_PI_2 * i as f32 / 6.0;
-                        m.colored_vertex(egui::pos2(center.x - dir * (rf - OVERLAP) * a.cos(), center.y - (rf - OVERLAP) * a.sin()), tint);
-                    }
-                    for i in 0..6 {
-                        m.add_triangle(0, 1 + i, 2 + i);
-                    }
-                    self.corners.push(m);
+                    self.corners.push(corner_mesh(outer, dir, 1.0, rf, tint));
                 }
                 // concave feet at both bottom corners join the tab to its pane
-                let mut mesh = egui::Mesh::default();
                 for (corner, dir) in [(rect.left_bottom(), -1.0f32), (rect.right_bottom(), 1.0f32)] {
                     if dir < 0.0 && flush {
                         continue; // the first tab is flush with the side of the pane: no foot on that side
                     }
                     let center = corner + egui::vec2(dir * foot, -foot);
-                    let first = mesh.vertices.len() as u32;
-                    mesh.colored_vertex(corner, fill);
-                    for i in 0..=6 {
-                        let a = std::f32::consts::FRAC_PI_2 * i as f32 / 6.0;
-                        mesh.colored_vertex(egui::pos2(center.x - dir * foot * a.cos(), center.y + foot * a.sin()), fill);
-                    }
-                    for i in 0..6 {
-                        mesh.add_triangle(first, first + 1 + i, first + 2 + i);
-                    }
+                    self.fills.push(egui::Shape::mesh(feathered_fan(corner, foot, true, 0.0, fill, |rad, i| {
+                        let a = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
+                        egui::pos2(center.x - dir * rad * a.cos(), center.y + rad * a.sin())
+                    })));
                 }
-                ui.painter().add(egui::Shape::mesh(mesh));
             }
             let stroke = self.tab_outline_stroke(ui.visuals(), tiles, tile_id, state);
             let foot = if state.active { r_foot(r) } else { 0.0 };
             if !state.active {
-                ui.painter().add(egui::Shape::line(tab_outline(rect, f32::from(r), foot), stroke));
+                ui.painter().add(egui::Shape::line(dedup(tab_outline(rect, f32::from(r), foot), false), stroke));
             }
             let color = self.tab_text_color(ui.visuals(), tiles, tile_id, state);
             let inner = rect.shrink(x_margin);
@@ -602,7 +627,7 @@ pub fn show(app: &mut FinderApp, tree: &mut Tree<Pane>, ui: &mut egui::Ui) {
         Tile::Container(Container::Tabs(tabs)) if !hidden_bars.contains(id) => Some(tabs.children.clone()),
         _ => None,
     }).flatten().collect();
-    let mut behavior = Behavior { app, hidden_bars, titled, sheets: Vec::new(), corners: Vec::new(), active_tabs: Default::default(), panes: Vec::new(), barred };
+    let mut behavior = Behavior { app, hidden_bars, titled, sheets: Vec::new(), corners: Vec::new(), fills: Vec::new(), active_tabs: Default::default(), panes: Vec::new(), barred };
     tree.ui(&mut behavior, ui);
     let tint = crate::app::bar_tint(ui.visuals());
     let mut rest = vec![dock_rect];
@@ -611,11 +636,12 @@ pub fn show(app: &mut FinderApp, tree: &mut Tree<Pane>, ui: &mut egui::Ui) {
     }
     let mut shapes: Vec<egui::Shape> = rest.into_iter().map(|r| egui::Shape::rect_filled(r, 0.0, tint)).collect();
     shapes.extend(behavior.corners.drain(..).map(egui::Shape::mesh));
+    shapes.extend(behavior.fills.drain(..));
     {
         let (width, color) = behavior.app.outline(ui.visuals(), true);
         for (tile, area) in &behavior.panes {
             let pts = pane_outline(*area, behavior.active_tabs.get(tile).copied(), behavior.barred.contains(tile));
-            ui.painter().add(egui::Shape::closed_line(pts, egui::Stroke::new(width, color)));
+            ui.painter().add(egui::Shape::closed_line(dedup(pts, true), egui::Stroke::new(width, color)));
         }
     }
     ui.painter().set(slot, egui::Shape::Vec(shapes));
@@ -671,6 +697,9 @@ fn add(tree: &mut Tree<Pane>, pane: Pane) {
     }
 }
 
+/// The widest a button of the Actions pane gets, so that the buttons of a wide dock keep the same width
+const ACTION_BUTTON_MAX_WIDTH: f32 = 230.0;
+
 fn actions_pane(app: &mut FinderApp, ui: &mut egui::Ui) {
     let enabled = actions::enabled_flags(app);
     let mut run = None;
@@ -682,7 +711,7 @@ fn actions_pane(app: &mut FinderApp, ui: &mut egui::Ui) {
             ui.label(RichText::new(category).strong().small());
         }
         ui.horizontal(|ui| {
-            let button = crate::glyphs::action_button(ui, action.icon, action.label).min_size(egui::vec2(ui.available_width() - 90.0, 0.0));
+            let button = crate::glyphs::action_button(ui, action.icon, action.label).min_size(egui::vec2((ui.available_width() - 90.0).min(ACTION_BUTTON_MAX_WIDTH), 0.0));
             if ui.add_enabled(enabled[index], button).clicked() {
                 run = Some(index);
             }

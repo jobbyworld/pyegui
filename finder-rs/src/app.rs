@@ -143,6 +143,8 @@ struct Saved {
     /// an accent chosen with the color picker
     accent_custom: Option<[u8; 3]>,
     show_hidden: bool,
+    /// Windows: the folders in the blue of the Finder, not the yellow of the Explorer
+    blue_folders: bool,
     dock: Option<String>,
     open_folders: Vec<PathBuf>,
 }
@@ -163,6 +165,7 @@ impl Default for Saved {
             looks: Default::default(),
             accent_custom: None,
             show_hidden: false,
+            blue_folders: !cfg!(target_os = "macos"),
             dock: None,
             open_folders: Vec::new(),
         }
@@ -196,9 +199,13 @@ pub struct FinderApp {
     pub new_window: Option<PathBuf>,
     window_serial: u64,
     backdrop_applied: bool,
+    corners_applied: bool,
+    /// the keyboard goes back to the view (after a navigation, a search field that is still focused lets it go)
+    focus_view: bool,
     custom_titlebar: bool,
     terminals: Terminals,
     pub show_hidden: bool,
+    blue_folders: bool,
     pub search: String,
     /// the items shown at the last frame, in their order (what the views show: filters and sort included)
     pub items: Vec<Entry>,
@@ -233,6 +240,11 @@ pub struct FinderApp {
     pub tag_picker: Option<TagPicker>,
     /// the tags of the rows shown, by path, until the store changes
     tag_cache: std::cell::RefCell<(u64, std::collections::HashMap<PathBuf, std::rc::Rc<Vec<(Color32, String, How)>>>)>,
+    /// the tag paths of the rows shown, and the tags of the store with their colors, until the store changes
+    tag_paths_cache: std::cell::RefCell<(u64, std::collections::HashMap<PathBuf, std::rc::Rc<tagsui::RowTags>>)>,
+    library_cache: std::cell::RefCell<(u64, std::rc::Rc<tagsui::Library>)>,
+    /// what the widget of the tags changed in the cells of the rows, applied once the view is drawn
+    pub tag_edits: std::cell::RefCell<Vec<tagsui::TagEdit>>,
     opened_cache: std::cell::RefCell<(u64, std::collections::HashMap<String, f64>)>,
     opened_loaded: std::cell::Cell<bool>,
     /// every tag, read once per version of the store (not once per row)
@@ -290,10 +302,31 @@ impl FinderApp {
         self.new_tab = Some(folder);
     }
 
-    fn make_new_tab(&mut self, folder: PathBuf) {
+    /// What a new tab or window opens: the item selected when it can be shown (a folder, or a file the
+    /// viewer reads: markdown, PDF, image, text), else the folder that holds it; nothing selected, the item
+    /// shown now (the file of the viewer, else the folder)
+    pub fn new_target(&self) -> PathBuf {
+        match self.selected_paths().into_iter().next() {
+            Some(path) if path.is_dir() => path,
+            Some(path) if viewer::can_view(&path) => path,
+            Some(path) => path.parent().map(Path::to_path_buf).unwrap_or_else(|| self.folder().to_path_buf()),
+            None => self.viewer_path().map(Path::to_path_buf).unwrap_or_else(|| self.folder().to_path_buf()),
+        }
+    }
+
+    fn make_new_tab(&mut self, target: PathBuf) {
+        // a file opens in the viewer of the new tab, in the folder that holds it
+        let (folder, file) = if target.is_file() {
+            (target.parent().map(Path::to_path_buf).unwrap_or_else(|| self.folder().to_path_buf()), Some(target))
+        } else {
+            (target, None)
+        };
         let id = self.next_tab;
         self.next_tab += 1;
-        let state = self.new_tab_state(folder);
+        let mut state = self.new_tab_state(folder);
+        if let Some(file) = file {
+            state.viewer = Viewer::open(&file, &self.core);
+        }
         self.parked_tabs.insert(id, state);
         let after = self.current_tab;
         if let Some(tree) = self.dock.as_mut() {
@@ -369,7 +402,13 @@ impl FinderApp {
 
     /// Another window of the app: its own folder, view and selection, the look of this one, no
     /// terminal and no dock
-    pub fn new_window(&self, ctx: &egui::Context, folder: PathBuf) -> Self {
+    pub fn new_window(&self, ctx: &egui::Context, target: PathBuf) -> Self {
+        // a file opens in the viewer of the new window, in the folder that holds it
+        let (folder, file) = if target.is_file() {
+            (target.parent().map(Path::to_path_buf).unwrap_or_else(|| self.folder().to_path_buf()), Some(target))
+        } else {
+            (target, None)
+        };
         let saved = Saved {
             view: self.view,
             theme: self.theme,
@@ -377,6 +416,7 @@ impl FinderApp {
             looks: self.looks.clone(),
             accent_custom: self.accent_custom,
             show_hidden: self.show_hidden,
+            blue_folders: self.blue_folders,
             show_dock: false,
             show_terminal: false,
             terminal_opacity: self.terminal_opacity,
@@ -384,6 +424,9 @@ impl FinderApp {
         };
         let mut app = Self::build(ctx, saved, Some(folder), false);
         app.secondary = true;
+        if let Some(file) = file {
+            app.viewer = Viewer::open(&file, &self.core);
+        }
         app
     }
 
@@ -396,6 +439,7 @@ impl FinderApp {
             .or(saved.folder.filter(|p| p.is_dir()))
             .unwrap_or(home);
         let folder_for_terminal = folder.clone();
+        pyegui_core::icons::set_blue(saved.blue_folders);
         let core = default_core();
         let views = Views::new(&core, &folder, saved.show_hidden);
         views.open_in_tree(&saved.open_folders);
@@ -422,9 +466,12 @@ impl FinderApp {
             new_window: None,
             window_serial: 0,
             backdrop_applied: false,
+            corners_applied: false,
+            focus_view: false,
             custom_titlebar,
             terminals: Terminals::new(&folder_for_terminal, font_path.as_deref()),
             show_hidden: saved.show_hidden,
+            blue_folders: saved.blue_folders,
             search: String::new(),
             items: Vec::new(),
             views,
@@ -450,6 +497,9 @@ impl FinderApp {
             tag_manager: None,
             tag_picker: None,
             tag_cache: Default::default(),
+            tag_paths_cache: Default::default(),
+            library_cache: Default::default(),
+            tag_edits: Default::default(),
             opened_cache: Default::default(),
             opened_loaded: Default::default(),
             all_tags: Default::default(),
@@ -487,6 +537,7 @@ impl FinderApp {
         self.selected.clear();
         self.search.clear();
         self.path_text = None;
+        self.focus_view = true;
     }
 
     /// The markdown file to export: the one selected, else the one open in the central view
@@ -667,6 +718,42 @@ impl FinderApp {
         tags.sort_by_key(|(_, _, how)| match how { How::Own => 0, How::Folder => 1, How::Parent => 2 });
         let value = std::rc::Rc::new(tags);
         cache.1.insert(path.to_path_buf(), value.clone());
+        value
+    }
+
+    /// Every tag of the store as a path, with the colors of its levels (read once per version of the store)
+    pub fn library(&self) -> std::rc::Rc<tagsui::Library> {
+        let Some(store) = &self.tags else { return Default::default() };
+        let mut cache = self.library_cache.borrow_mut();
+        // the version is kept plus one: the first value is 0, "never read"
+        if cache.0 != store.version + 1 {
+            *cache = (store.version + 1, std::rc::Rc::new(tagsui::Library::read(&store.all())));
+        }
+        cache.1.clone()
+    }
+
+    /// The tags of an item as paths, its own then those of its folders (the parents of tags are left out)
+    pub fn row_tag_paths(&self, path: &Path) -> std::rc::Rc<tagsui::RowTags> {
+        let Some(store) = &self.tags else { return Default::default() };
+        {
+            let mut cache = self.tag_paths_cache.borrow_mut();
+            if cache.0 != store.version {
+                *cache = (store.version, Default::default());
+            }
+            if let Some(found) = cache.1.get(path) {
+                return found.clone();
+            }
+        }
+        let library = self.library();
+        let effective = store.effective(path);
+        let mut found: Vec<(&i64, &How)> = effective.iter().filter(|(_, how)| **how != How::Parent).collect();
+        found.sort_by_key(|(id, how)| (**how != How::Own, library.order(**id)));
+        let row = tagsui::RowTags {
+            paths: found.iter().filter_map(|(id, _)| library.path(**id)).collect(),
+            inherited: found.iter().filter(|(_, how)| **how == How::Folder).filter_map(|(id, _)| library.path(**id)).collect(),
+        };
+        let value = std::rc::Rc::new(row);
+        self.tag_paths_cache.borrow_mut().1.insert(path.to_path_buf(), value.clone());
         value
     }
 
@@ -1021,7 +1108,7 @@ impl FinderApp {
             self.palette = Some((String::new(), 0));
             return;
         }
-        if ctx.egui_wants_keyboard_input() || pyegui_core::terminal::terminal_focused(ctx) || self.rename.is_some() || self.confirm_delete.is_some() || self.palette.is_some() {
+        if ctx.text_edit_focused() || pyegui_core::terminal::terminal_focused(ctx) || self.rename.is_some() || self.confirm_delete.is_some() || self.palette.is_some() {
             return;
         }
         if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Space)) {
@@ -1072,6 +1159,14 @@ impl FinderApp {
     }
 
     /// The toggle of the sidebar, just on the right of the window buttons
+    /// The buttons of the window (close, minimize, maximize), drawn like macOS at the left of the top band
+    /// when the system has no title bar
+    fn window_buttons(&self, ui: &mut egui::Ui) {
+        ui.add_space(8.0);
+        pyegui_core::titlebar::window_controls(ui, 12.0, 8.0);
+        ui.add_space(14.0);
+    }
+
     fn sidebar_button(&mut self, ui: &mut egui::Ui) {
         let glyph = glyphs::by_name(if self.show_sidebar { "sidebar-open" } else { "sidebar-closed" });
         if glyphs::button(ui, glyph, 18.0, false, "Afficher / masquer la sidebar (⌘B)").clicked() {
@@ -1098,6 +1193,8 @@ impl FinderApp {
         ui.allocate_ui_with_layout(egui::vec2(row, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             if MAC_TITLEBAR && !self.show_sidebar {
                 ui.add_space(76.0); // the window buttons are over the toolbar when the sidebar is hidden
+            } else if self.custom_titlebar && !self.show_sidebar {
+                self.window_buttons(ui); // the sidebar is hidden: the buttons are at the left of the toolbar
             }
             if !self.show_sidebar {
                 self.sidebar_button(ui);
@@ -1159,14 +1256,14 @@ impl FinderApp {
                 });
                 ui.add_space(8.0);
                 if show_search {
-                    ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("Rechercher").vertical_align(egui::Align::Center).desired_width(search_width));
+                    ui.add(egui::TextEdit::singleline(&mut self.search).id(egui::Id::new("search-field")).hint_text("Rechercher").vertical_align(egui::Align::Center).desired_width(search_width));
                     ui.add_space(8.0);
                 }
                 if show_view {
                     let views = glyphs::segmented(ui, "view", 16.0, &[
-                        glyphs::cell(glyphs::TREE, self.view == ViewMode::Tree, "Arbre (⌘3)"),
-                        glyphs::cell(glyphs::LIST, self.view == ViewMode::List, "Liste (⌘1)"),
-                        glyphs::cell(glyphs::GRID, self.view == ViewMode::Icons, "Icônes (⌘2)"),
+                        glyphs::cell(glyphs::TREE, self.view == ViewMode::Tree, "Arbre (⌘1)"),
+                        glyphs::cell(glyphs::LIST, self.view == ViewMode::List, "Liste (⌘2)"),
+                        glyphs::cell(glyphs::GRID, self.view == ViewMode::Icons, "Icônes (⌘3)"),
                     ]);
                     match views.clicked {
                         Some(0) => self.view = ViewMode::Tree,
@@ -1302,7 +1399,12 @@ impl FinderApp {
             ui.selectable_value(&mut look.background, Background::Color, "Couleur");
         });
         if look.background != Background::Color {
-            ui.add(egui::Slider::new(&mut look.blur, 0..=40).text("Flou"));
+            // the blur of the glass of the system is only set on macOS
+            let unavailable = look.background == Background::Glass && !cfg!(target_os = "macos");
+            let slider = ui.add_enabled(!unavailable, egui::Slider::new(&mut look.blur, 0..=40).text("Flou"));
+            if unavailable {
+                slider.on_disabled_hover_text("Non disponible");
+            }
         }
         match look.background {
             Background::Image => {
@@ -1375,6 +1477,9 @@ impl FinderApp {
         ui.label(RichText::new("Terminal").strong());
         ui.add(egui::Slider::new(&mut self.terminal_opacity, 0.0..=1.0).text("Opacité"));
         ui.checkbox(&mut self.show_terminal, "Afficher le terminal (⌘T)");
+        if cfg!(windows) && ui.checkbox(&mut self.blue_folders, "Dossiers bleus").changed() {
+            pyegui_core::icons::set_blue(self.blue_folders);
+        }
     }
 
     /// The path, with the breadcrumb widget of pyegui: the folders down to the selected item, the
@@ -1418,30 +1523,6 @@ impl FinderApp {
         if glyphs::small(ui, glyphs::by_name("rename"), "Saisir un chemin").clicked() {
             self.path_text = Some(self.folder().to_string_lossy().into_owned());
         }
-    }
-
-    /// The title bar drawn by the app (no system one): the title, and the buttons of the window
-    fn titlebar(&mut self, ui: &mut egui::Ui) {
-        let outer = ui.max_rect();
-        let strip = egui::Rect::from_min_size(outer.min, egui::vec2(outer.width(), 28.0));
-        ui.horizontal(|ui| {
-            let title = self.folder().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Finder".into());
-            ui.label(RichText::new(title).strong());
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let ctx = ui.ctx().clone();
-                let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-                if glyphs::small(ui, glyphs::CLOSE, "Fermer").clicked() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-                if glyphs::small(ui, if maximized { glyphs::RESTORE } else { glyphs::MAXIMIZE }, if maximized { "Restaurer" } else { "Agrandir" }).clicked() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-                }
-                if glyphs::small(ui, glyphs::MINIMIZE, "Réduire").clicked() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                }
-            });
-        });
-        drag_window(ui, strip);
     }
 
     /// Above a tag view: which tag it is, how many items it holds, and the way back to the folder
@@ -1510,6 +1591,8 @@ impl FinderApp {
             ui.set_height(TOP_H);
             if MAC_TITLEBAR {
                 ui.add_space(76.0);
+            } else if self.custom_titlebar {
+                self.window_buttons(ui);
             }
             // open, the toggle is at the right of the sidebar; closed, it is next to the window buttons
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1675,7 +1758,7 @@ impl FinderApp {
                         let _ = pyegui_core::pdf_view::pdf_thumbnail(ui, doc, 1, &options);
                     }
                 } else if model::is_image(&e.path) {
-                    let uri = format!("file://{}", e.path.to_string_lossy());
+                    let uri = file_uri(&e.path);
                     ui.add(egui::Image::new(uri).max_width(ui.available_width()).corner_radius(6.0));
                 } else if model::is_text(&e.path) && e.size < 512 * 1024 {
                     if self.preview_text.as_ref().map(|(p, _)| p) != Some(&e.path) {
@@ -1735,6 +1818,7 @@ impl eframe::App for FinderApp {
             looks: self.looks.clone(),
             accent_custom: self.accent_custom,
             show_hidden: self.show_hidden,
+            blue_folders: self.blue_folders,
             dock: self.dock.as_ref().and_then(|d| serde_json::to_string(d).ok()),
             open_folders: self.open_folders.iter().cloned().collect(),
         };
@@ -1760,6 +1844,10 @@ impl eframe::App for FinderApp {
         // the window buttons centered in the top band
         #[cfg(target_os = "macos")]
         pyegui_core::window::place_window_buttons(&*frame, 20.0, TOP_H as f64 / 2.0, 20.0);
+        if self.custom_titlebar && !self.corners_applied {
+            self.corners_applied = true;
+            let _ = pyegui_core::window::set_rounded_corners(&*frame);
+        }
         let dark = ui.visuals().dark_mode as usize;
         let background = self.looks[dark].background;
         if background == Background::Glass && !self.backdrop_applied {
@@ -1869,6 +1957,10 @@ impl FinderApp {
     /// The window: its panels and its views
     fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        if std::mem::take(&mut self.focus_view) {
+            // a field of search that still has the focus would keep the arrows from the view
+            ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("search-field")));
+        }
         self.paint_background(&ctx, ui.visuals().dark_mode);
         let prof = std::env::var_os("FINDER_PROF").is_some();
         let t0 = std::time::Instant::now();
@@ -1883,8 +1975,7 @@ impl FinderApp {
         }
 
         if self.custom_titlebar {
-            egui::Panel::top("titlebar").show(ui, |ui| self.titlebar(ui));
-            edge_resize(&ctx);
+            pyegui_core::titlebar::edge_resize(&ctx);
         }
         if self.show_sidebar {
             // no top margin: the top band of the sidebar is as high as the toolbar
@@ -1975,7 +2066,8 @@ fn free_space(path: &Path) -> Option<u64> {
 pub const TOP_H: f32 = 40.0;
 
 pub use pyegui_core::style::bar_tint;
-const BOTTOM_H: f32 = 30.0;
+/// the bottom bands are as high as the top ones
+const BOTTOM_H: f32 = TOP_H;
 /// What the "…" button that ends the path takes, with its spacing
 const EDIT_BUTTON: f32 = 40.0;
 /// What the toolbar keeps for the navigation, the name, the view and the panes
@@ -1997,39 +2089,11 @@ fn drag_window(ui: &mut egui::Ui, rect: egui::Rect) {
     }
 }
 
-/// Resize a window without a system title bar by its edges
-fn edge_resize(ctx: &egui::Context) {
-    use egui::viewport::ResizeDirection as D;
-    let (rect, pos, pressed, maximized) =
-        ctx.input(|i| (i.viewport_rect(), i.pointer.hover_pos(), i.pointer.primary_pressed(), i.viewport().maximized.unwrap_or(false)));
-    let Some(pos) = pos else { return };
-    if maximized {
-        return;
-    }
-    let m = 5.0;
-    let (l, r, t, b) = (pos.x < rect.left() + m, pos.x > rect.right() - m, pos.y < rect.top() + m, pos.y > rect.bottom() - m);
-    let dir = match (l, r, t, b) {
-        (true, _, true, _) => Some(D::NorthWest),
-        (_, true, true, _) => Some(D::NorthEast),
-        (true, _, _, true) => Some(D::SouthWest),
-        (_, true, _, true) => Some(D::SouthEast),
-        (true, ..) => Some(D::West),
-        (_, true, ..) => Some(D::East),
-        (_, _, true, _) => Some(D::North),
-        (_, _, _, true) => Some(D::South),
-        _ => None,
-    };
-    if let Some(dir) = dir {
-        ctx.set_cursor_icon(match dir {
-            D::North | D::South => egui::CursorIcon::ResizeVertical,
-            D::East | D::West => egui::CursorIcon::ResizeHorizontal,
-            D::NorthWest | D::SouthEast => egui::CursorIcon::ResizeNwSe,
-            D::NorthEast | D::SouthWest => egui::CursorIcon::ResizeNeSw,
-        });
-        if pressed {
-            ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
-        }
-    }
+/// The `file://` uri of a path, as the image loaders of egui want it (`file:///C:/dir/a.png` on Windows,
+/// where `file://C:\dir` would be read as a network path)
+pub fn file_uri(path: &Path) -> String {
+    let p = path.to_string_lossy();
+    if cfg!(windows) { format!("file:///{}", p.replace('\\', "/")) } else { format!("file://{p}") }
 }
 
 fn home() -> PathBuf {

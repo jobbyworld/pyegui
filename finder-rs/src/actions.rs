@@ -102,14 +102,8 @@ pub static ACTIONS: &[Action] = &[
     Action { category: "Fichier", label: "Ouvrir avec Claude (Cowork)", icon: "claude", shortcut: None, enabled: claude_available, in_menu: true, run: |app, ctx| {
         ctx.open_url(egui::OpenUrl::same_tab(openapps::claude_url("cowork", &target_directory(app))));
     }},
-    Action { category: "Fichier", label: "Nouvelle fenêtre", icon: "dock", shortcut: cmd(Key::N), enabled: always, in_menu: false, run: |app, _| app.new_window = Some(app.folder().to_path_buf()) },
-    Action { category: "Fichier", label: "Ouvrir dans une nouvelle fenêtre", icon: "dock", shortcut: None, enabled: |a| a.selected.len() == 1 && a.selected.iter().all(|p| p.is_dir()), in_menu: true, run: |app, _| {
-        if let Some(p) = app.selected_paths().first() { app.new_window = Some(p.clone()); }
-    }},
-    Action { category: "Fichier", label: "Nouvel onglet", icon: "dock", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::T)), enabled: always, in_menu: false, run: |app, _| app.open_in_new_tab(app.folder().to_path_buf()) },
-    Action { category: "Fichier", label: "Ouvrir dans un nouvel onglet", icon: "dock", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::T)), enabled: |a| a.selected.len() == 1 && a.selected.iter().all(|p| p.is_dir()), in_menu: true, run: |app, _| {
-        if let Some(p) = app.selected_paths().first() { app.open_in_new_tab(p.clone()); }
-    }},
+    Action { category: "Fichier", label: "Nouvelle fenêtre", icon: "dock", shortcut: cmd(Key::N), enabled: always, in_menu: true, run: |app, _| app.new_window = Some(app.new_target()) },
+    Action { category: "Fichier", label: "Nouvel onglet", icon: "dock", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::T)), enabled: always, in_menu: true, run: |app, _| app.open_in_new_tab(app.new_target()) },
     Action { category: "Fichier", label: "Nouveau dossier", icon: "folder-plus", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::N)), enabled: always, in_menu: true, run: |app, _| app.new_folder() },
     Action { category: "Fichier", label: "Regrouper dans un dossier", icon: "group", shortcut: Some(KeyboardShortcut::new(GROUP_MODIFIERS, Key::N)), enabled: can_group, in_menu: true, run: |app, _| app.group_selection() },
     Action { category: "Fichier", label: "Renommer", icon: "rename", shortcut: Some(KeyboardShortcut::new(Modifiers::NONE, Key::F2)), enabled: one_selected, in_menu: true, run: |app, _| {
@@ -141,9 +135,9 @@ pub static ACTIONS: &[Action] = &[
     Action { category: "Navigation", label: "Précédent", icon: "chevron-left", shortcut: cmd(Key::OpenBracket), enabled: |a| a.history.can_back(), in_menu: false, run: |app, _| app.back() },
     Action { category: "Navigation", label: "Suivant", icon: "chevron-right", shortcut: cmd(Key::CloseBracket), enabled: |a| a.history.can_forward(), in_menu: false, run: |app, _| app.forward() },
     Action { category: "Navigation", label: "Dossier parent", icon: "folder-up", shortcut: cmd(Key::ArrowUp), enabled: |a| a.folder().parent().is_some(), in_menu: false, run: |app, _| app.parent() },
-    Action { category: "Affichage", label: "Liste", icon: "list", shortcut: cmd(Key::Num1), enabled: always, in_menu: false, run: |app, _| app.view = ViewMode::List },
-    Action { category: "Affichage", label: "Icônes", icon: "grid", shortcut: cmd(Key::Num2), enabled: always, in_menu: false, run: |app, _| app.view = ViewMode::Icons },
-    Action { category: "Affichage", label: "Arbre", icon: "tree", shortcut: cmd(Key::Num3), enabled: always, in_menu: false, run: |app, _| app.view = ViewMode::Tree },
+    Action { category: "Affichage", label: "Liste", icon: "list", shortcut: cmd(Key::Num2), enabled: always, in_menu: false, run: |app, _| app.view = ViewMode::List },
+    Action { category: "Affichage", label: "Icônes", icon: "grid", shortcut: cmd(Key::Num3), enabled: always, in_menu: false, run: |app, _| app.view = ViewMode::Icons },
+    Action { category: "Affichage", label: "Arbre", icon: "tree", shortcut: cmd(Key::Num1), enabled: always, in_menu: false, run: |app, _| app.view = ViewMode::Tree },
     Action { category: "Affichage", label: "Fichiers cachés", icon: "eye", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Period)), enabled: always, in_menu: false, run: |app, _| app.show_hidden = !app.show_hidden },
     Action { category: "Affichage", label: "Barre latérale", icon: "sidebar", shortcut: cmd(Key::B), enabled: always, in_menu: false, run: |app, _| app.toggle_sidebar() },
     Action { category: "Affichage", label: "Terminal", icon: "terminal", shortcut: cmd(Key::T), enabled: always, in_menu: false, run: |app, _| app.toggle_terminal() },
@@ -156,7 +150,7 @@ pub fn enabled_flags(app: &FinderApp) -> Vec<bool> {
 
 /// The shortcuts pressed this frame run their action. Not while a text field has the focus
 pub fn run_shortcuts(app: &mut FinderApp, ctx: &egui::Context) {
-    if ctx.egui_wants_keyboard_input() {
+    if ctx.text_edit_focused() || pyegui_core::terminal::terminal_focused(ctx) {
         return;
     }
     for action in ACTIONS {
