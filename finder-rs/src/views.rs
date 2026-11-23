@@ -200,10 +200,15 @@ fn feed_folder(view: &mut FolderView, app: &FinderApp, paths: &Option<Vec<PathBu
 struct Outcome {
     action: Option<usize>,
     tag: Option<(i64, bool)>,
+    /// a right click: the palette of the actions opens (there is no other context menu)
+    palette: bool,
 }
 
 impl Outcome {
     fn apply(self, app: &mut FinderApp, ctx: &egui::Context) {
+        if self.palette {
+            app.open_palette();
+        }
         if let Some(action) = self.action {
             (ACTIONS[action].run)(app, ctx);
         }
@@ -240,9 +245,6 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
     // the widths of the columns are the same in every tab (and kept between two runs)
     let widths = app.column_widths.clone();
     app.views.set_column_widths(&widths);
-    let enabled = actions::enabled_flags(app);
-    let tag_menu = tagsui::menu_tags(app, &ctx);
-    let has_selection = !app.selected.is_empty();
     let mut out = Outcome::default();
     let back;
 
@@ -280,15 +282,10 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
         {
             let hooks = hooks(app);
             let menu_out = std::cell::RefCell::new(Outcome::default());
+            // the menu of the tree is the palette: the popup of egui is closed at once
             let menu = |ui: &mut egui::Ui, _ids: &Vec<String>| {
-                let mut o = menu_out.borrow_mut();
-                if let Some(action) = actions::menu(ui, &enabled) {
-                    o.action = Some(action);
-                }
-                ui.separator();
-                if let Some(change) = tagsui::menu(ui, &tag_menu, has_selection) {
-                    o.tag = Some(change);
-                }
+                menu_out.borrow_mut().palette = true;
+                ui.close();
             };
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 draw_tree(ui, &shared, &hooks, &params, Some(&menu));
@@ -321,15 +318,9 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
             draw_folder(ui, &mut view, shape, &hooks, true, options())
         };
         for (response, _paths) in menus {
-            response.context_menu(|ui| {
-                if let Some(action) = actions::menu(ui, &enabled) {
-                    out.action = Some(action);
-                }
-                ui.separator();
-                if let Some(change) = tagsui::menu(ui, &tag_menu, has_selection) {
-                    out.tag = Some(change);
-                }
-            });
+            if response.secondary_clicked() {
+                out.palette = true;
+            }
         }
         back = Back {
             selected: view.selected.clone(),

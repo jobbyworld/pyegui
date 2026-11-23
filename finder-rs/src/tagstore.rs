@@ -33,6 +33,13 @@ CREATE TABLE IF NOT EXISTS files (
     open_count INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS files_last_opened ON files(last_opened);
+CREATE TABLE IF NOT EXISTS favorites (
+    id INTEGER PRIMARY KEY,
+    path TEXT NOT NULL UNIQUE,
+    label TEXT NOT NULL,
+    icon TEXT NOT NULL DEFAULT 'folder',
+    position INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS notes (
     path TEXT PRIMARY KEY,
     text TEXT NOT NULL,
@@ -80,6 +87,39 @@ pub struct Tag {
     pub color: String,
     pub parent: Option<i64>,
     pub depth: usize,
+}
+
+/// A favorite of the sidebar: a folder with the name and the icon it is shown with
+#[derive(Clone, Debug, PartialEq)]
+pub struct Favorite {
+    pub id: i64,
+    pub path: String,
+    pub label: String,
+    /// the name of a glyph (see `glyphs::by_name`)
+    pub icon: String,
+}
+
+/// The favorites a new database starts with: the home folder and its usual folders that exist
+fn default_favorites() -> Vec<(String, String, String)> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"));
+    let mut out = vec![(home.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Départ".into()), "home".to_owned(), home.to_string_lossy().into_owned())];
+    for (label, icon, name) in [
+        ("Bureau", "desktop", "Desktop"),
+        ("Documents", "document", "Documents"),
+        ("Téléchargements", "download", "Downloads"),
+        ("Images", "image", "Pictures"),
+        ("Musique", "folder", "Music"),
+        ("Vidéos", "folder", if cfg!(target_os = "macos") { "Movies" } else { "Videos" }),
+    ] {
+        let path = home.join(name);
+        if path.is_dir() {
+            out.push((label.to_owned(), icon.to_owned(), path.to_string_lossy().into_owned()));
+        }
+    }
+    if cfg!(target_os = "macos") {
+        out.push(("Applications".to_owned(), "folder".to_owned(), "/Applications".to_owned()));
+    }
+    out
 }
 
 pub struct TagStore {
@@ -132,8 +172,68 @@ impl TagStore {
             }
         };
         db.execute_batch("PRAGMA foreign_keys = ON;")?;
+        // a database without the table of the favorites (new, or older) starts with the usual ones
+        let had_favorites = db
+            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'favorites'", [], |r| r.get::<_, i64>(0))
+            .map(|n| n > 0)
+            .unwrap_or(true);
         db.execute_batch(SCHEMA)?;
-        Ok(TagStore { db, version: 0 })
+        let store = TagStore { db, version: 0 };
+        if !had_favorites && path.is_none_or(|p| p.as_os_str() != ":memory:") {
+            for (label, icon, path) in default_favorites() {
+                let position = store.next_favorite_position();
+                let _ = store.db.execute("INSERT OR IGNORE INTO favorites (path, label, icon, position) VALUES (?, ?, ?, ?)", params![path, label, icon, position]);
+            }
+        }
+        Ok(store)
+    }
+
+    // the favorites
+
+    fn next_favorite_position(&self) -> i64 {
+        self.db.query_row("SELECT COALESCE(MAX(position) + 1, 0) FROM favorites", [], |r| r.get(0)).unwrap_or(0)
+    }
+
+    /// The favorites in the order of the sidebar
+    pub fn favorites(&self) -> Vec<Favorite> {
+        let Ok(mut statement) = self.db.prepare("SELECT id, path, label, icon FROM favorites ORDER BY position, id") else { return vec![] };
+        statement
+            .query_map([], |r| Ok(Favorite { id: r.get(0)?, path: r.get(1)?, label: r.get(2)?, icon: r.get(3)? }))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
+    /// A folder or a file added last, named after it; None if it already is a favorite
+    pub fn add_favorite(&mut self, path: &Path) -> Option<i64> {
+        let text = path.to_string_lossy().into_owned();
+        let label = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| text.clone());
+        let position = self.next_favorite_position();
+        let icon = if path.is_dir() { "folder" } else { "document" };
+        let added = self.db.execute("INSERT OR IGNORE INTO favorites (path, label, icon, position) VALUES (?, ?, ?, ?)", params![text, label, icon, position]).ok()?;
+        if added == 0 {
+            return None;
+        }
+        self.changed();
+        Some(self.db.last_insert_rowid())
+    }
+
+    pub fn remove_favorite(&mut self, id: i64) {
+        let _ = self.db.execute("DELETE FROM favorites WHERE id = ?", params![id]);
+        self.changed();
+    }
+
+    /// Puts the favorites in this order; the ones that are not named follow, in their order
+    pub fn set_favorite_order(&mut self, ids: &[i64]) {
+        let mut order: Vec<i64> = ids.to_vec();
+        for favorite in self.favorites() {
+            if !order.contains(&favorite.id) {
+                order.push(favorite.id);
+            }
+        }
+        for (position, id) in order.iter().enumerate() {
+            let _ = self.db.execute("UPDATE favorites SET position = ? WHERE id = ?", params![position as i64, id]);
+        }
+        self.changed();
     }
 
     fn changed(&mut self) {
@@ -176,6 +276,26 @@ impl TagStore {
         }
         let position = self.next_position(parent);
         let _ = self.db.execute("UPDATE tags SET parent_id = ?, position = ? WHERE id = ?", params![parent, position, tag]);
+        self.changed();
+        true
+    }
+
+    /// Puts a tag under a parent (None: at the root), before one of its children (None: last). The siblings are
+    /// numbered again. False if that would make a loop
+    pub fn move_tag_at(&mut self, tag: i64, parent: Option<i64>, before: Option<i64>) -> bool {
+        if parent.is_some_and(|p| self.subtree(tag).contains(&p)) || before == Some(tag) {
+            return false;
+        }
+        let mut siblings: Vec<i64> = match self.db.prepare("SELECT id FROM tags WHERE parent_id IS ? AND id != ? ORDER BY position, id") {
+            Ok(mut statement) => statement.query_map(params![parent, tag], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default(),
+            Err(_) => return false,
+        };
+        let at = before.and_then(|b| siblings.iter().position(|id| *id == b)).unwrap_or(siblings.len());
+        siblings.insert(at, tag);
+        let _ = self.db.execute("UPDATE tags SET parent_id = ? WHERE id = ?", params![parent, tag]);
+        for (position, id) in siblings.iter().enumerate() {
+            let _ = self.db.execute("UPDATE tags SET position = ? WHERE id = ?", params![position as i64, id]);
+        }
         self.changed();
         true
     }
@@ -401,6 +521,60 @@ mod tests {
 
     fn store() -> TagStore {
         TagStore::open(Some(Path::new(":memory:"))).unwrap()
+    }
+
+    #[test]
+    fn a_tag_moves_under_another_or_among_its_siblings_but_never_under_itself() {
+        let mut s = store();
+        let a = s.create("A", "#111111", None).unwrap();
+        let b = s.create("B", "#222222", None).unwrap();
+        let c = s.create("C", "#333333", None).unwrap();
+        let a1 = s.create("A1", "#444444", Some(a)).unwrap();
+        let names = |s: &TagStore| s.all().iter().map(|t| (t.name.clone(), t.depth)).collect::<Vec<_>>();
+        // C before A
+        assert!(s.move_tag_at(c, None, Some(a)));
+        assert_eq!(names(&s), [("C".into(), 0), ("A".into(), 0), ("A1".into(), 1), ("B".into(), 0)]);
+        // B under A, before A1
+        assert!(s.move_tag_at(b, Some(a), Some(a1)));
+        assert_eq!(names(&s), [("C".into(), 0), ("A".into(), 0), ("B".into(), 1), ("A1".into(), 1)]);
+        // A under its own child: refused
+        assert!(!s.move_tag_at(a, Some(a1), None));
+        // A1 to the root, last
+        assert!(s.move_tag_at(a1, None, None));
+        assert_eq!(names(&s).last(), Some(&("A1".to_string(), 0)));
+    }
+
+    #[test]
+    fn favorites_are_added_once_reordered_and_removed() {
+        let mut s = store();
+        assert!(s.favorites().is_empty()); // the in-memory base is not seeded
+        let a = s.add_favorite(Path::new("/tmp/a")).unwrap();
+        let b = s.add_favorite(Path::new("/tmp/b")).unwrap();
+        let c = s.add_favorite(Path::new("/tmp/c")).unwrap();
+        assert!(s.add_favorite(Path::new("/tmp/a")).is_none());
+        assert_eq!(s.favorites().iter().map(|f| f.label.as_str()).collect::<Vec<_>>(), ["a", "b", "c"]);
+        s.set_favorite_order(&[c, a]);
+        assert_eq!(s.favorites().iter().map(|f| f.id).collect::<Vec<_>>(), [c, a, b]);
+        s.remove_favorite(a);
+        assert_eq!(s.favorites().iter().map(|f| f.id).collect::<Vec<_>>(), [c, b]);
+    }
+
+    #[test]
+    fn a_new_database_starts_with_the_usual_favorites_and_keeps_their_removal() {
+        let dir = std::env::temp_dir().join(format!("finder-fav-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("tags.db");
+        let first = {
+            let mut s = TagStore::open(Some(&path)).unwrap();
+            let all = s.favorites();
+            assert!(!all.is_empty());
+            s.remove_favorite(all[0].id);
+            all.len()
+        };
+        // opened again: not filled again
+        let s = TagStore::open(Some(&path)).unwrap();
+        assert_eq!(s.favorites().len(), first - 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
