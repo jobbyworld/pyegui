@@ -16,11 +16,13 @@ pub mod clipboard;
 pub mod native_dnd;
 pub mod style;
 pub mod window;
+pub mod titlebar;
 pub mod icons;
 pub mod path;
 pub mod columns;
 pub mod files;
 pub mod terminal;
+pub mod tags;
 pub mod markdown;
 #[cfg(feature = "pdf")]
 pub mod pdf_view;

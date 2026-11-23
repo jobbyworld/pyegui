@@ -43,6 +43,12 @@ fn open_pdf(path: &Path) -> Arc<Mutex<PdfDocument>> {
     Arc::new(Mutex::new(PdfDocument::open(path.to_string_lossy().into_owned(), None, false)))
 }
 
+/// True when the viewer shows this kind of file (PDF, image, markdown, text)
+pub fn can_view(path: &Path) -> bool {
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    path.is_file() && (ext == "pdf" || matches!(ext.as_str(), "md" | "markdown") || model::is_image(path) || model::is_text(path))
+}
+
 impl Viewer {
     /// A viewer for a file, None when the file has no viewer here (the system opens it)
     pub fn open(path: &Path, core: &Arc<Mutex<Core>>) -> Option<Viewer> {
@@ -97,7 +103,7 @@ impl Viewer {
 pub fn show(viewer: &mut Viewer, ui: &mut egui::Ui, core: &Arc<Mutex<Core>>) -> bool {
     if lock(core).has_changed(&viewer.path) {
         viewer.reload();
-        ui.ctx().forget_image(&format!("file://{}", viewer.path.to_string_lossy()));
+        ui.ctx().forget_image(&crate::app::file_uri(&viewer.path));
     }
     let mut close = false;
     ui.horizontal_wrapped(|ui| {
@@ -136,12 +142,12 @@ pub fn show(viewer: &mut Viewer, ui: &mut egui::Ui, core: &Arc<Mutex<Core>>) -> 
         Body::Code { text, lang } => markdown::code_view(ui, text, lang, true, "viewer-code"),
         Body::Image => {
             egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-                ui.add(egui::Image::new(format!("file://{}", path.to_string_lossy())).max_width(ui.available_width()));
+                ui.add(egui::Image::new(crate::app::file_uri(&path)).max_width(ui.available_width()));
             });
         }
         Body::Pdf(p) => pdf_body(ui, p),
     }
-    if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) && !ui.ctx().egui_wants_keyboard_input() {
+    if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) && !ui.ctx().text_edit_focused() {
         close = true;
     }
     close

@@ -93,7 +93,9 @@ pub fn nerd_font() -> Option<PathBuf> {
 
 pub fn cd_command(folder: &Path) -> String {
     if cfg!(windows) {
-        format!("cd /d \"{}\"", folder.display())
+        // PowerShell, the shell of the terminal on Windows (`cd /d` is the syntax of cmd.exe); the quotes
+        // of the path are doubled and nothing in it is read as a wildcard
+        format!("Set-Location -LiteralPath '{}'", folder.to_string_lossy().replace('\'', "''"))
     } else {
         // the leading space keeps it out of the history
         format!(" cd '{}'", folder.to_string_lossy().replace('\'', "'\\''"))

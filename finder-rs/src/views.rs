@@ -101,7 +101,7 @@ fn hooks(app: &FinderApp) -> Hooks<'_> {
     let tags = Extra {
         title: "Étiquettes".into(),
         width: 140.0,
-        cell: Box::new(move |ui, path| tagsui::dots(ui, &app.row_tags(path))),
+        cell: Box::new(move |ui, path| tagsui::cell(ui, app, path)),
         ty: DataType::Choice,
         value: Some(Box::new(move |path| {
             let tags = app.row_tags(path);
@@ -318,6 +318,7 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
         }
     }
 
+    tagsui::apply_edits(app);
     app.selected = back.selected.into_iter().collect();
     if let Some(key) = sort_key(&back.sort.0) {
         app.sort_key = key;
