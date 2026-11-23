@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Key, KeyboardShortcut, Modifiers};
 
-use crate::app::{FinderApp, ViewMode};
+use crate::app::{FinderApp, ThemeChoice, ViewMode};
 use crate::openapps;
 
 pub struct Action {
@@ -135,9 +135,12 @@ pub static ACTIONS: &[Action] = &[
     Action { category: "Navigation", label: "Précédent", icon: "chevron-left", shortcut: cmd(Key::OpenBracket), enabled: |a| a.history.can_back(), in_menu: false, run: |app, _| app.back() },
     Action { category: "Navigation", label: "Suivant", icon: "chevron-right", shortcut: cmd(Key::CloseBracket), enabled: |a| a.history.can_forward(), in_menu: false, run: |app, _| app.forward() },
     Action { category: "Navigation", label: "Dossier parent", icon: "folder-up", shortcut: cmd(Key::ArrowUp), enabled: |a| a.folder().parent().is_some(), in_menu: false, run: |app, _| app.parent() },
+    Action { category: "Affichage", label: "Arbre", icon: "tree", shortcut: cmd(Key::Num1), enabled: always, in_menu: false, run: |app, _| app.view = ViewMode::Tree },
     Action { category: "Affichage", label: "Liste", icon: "list", shortcut: cmd(Key::Num2), enabled: always, in_menu: false, run: |app, _| app.view = ViewMode::List },
     Action { category: "Affichage", label: "Icônes", icon: "grid", shortcut: cmd(Key::Num3), enabled: always, in_menu: false, run: |app, _| app.view = ViewMode::Icons },
-    Action { category: "Affichage", label: "Arbre", icon: "tree", shortcut: cmd(Key::Num1), enabled: always, in_menu: false, run: |app, _| app.view = ViewMode::Tree },
+    Action { category: "Affichage", label: "Thème clair", icon: "sun", shortcut: cmd(Key::Num7), enabled: always, in_menu: false, run: |app, ctx| { app.theme = ThemeChoice::Light; app.apply_theme(ctx) } },
+    Action { category: "Affichage", label: "Thème sombre", icon: "moon", shortcut: cmd(Key::Num8), enabled: always, in_menu: false, run: |app, ctx| { app.theme = ThemeChoice::Dark; app.apply_theme(ctx) } },
+    Action { category: "Affichage", label: "Thème du système", icon: "theme-system", shortcut: cmd(Key::Num9), enabled: always, in_menu: false, run: |app, ctx| { app.theme = ThemeChoice::System; app.apply_theme(ctx) } },
     Action { category: "Affichage", label: "Fichiers cachés", icon: "eye", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Period)), enabled: always, in_menu: false, run: |app, _| app.show_hidden = !app.show_hidden },
     Action { category: "Affichage", label: "Barre latérale", icon: "sidebar", shortcut: cmd(Key::B), enabled: always, in_menu: false, run: |app, _| app.toggle_sidebar() },
     Action { category: "Affichage", label: "Terminal", icon: "terminal", shortcut: cmd(Key::T), enabled: always, in_menu: false, run: |app, _| app.toggle_terminal() },
@@ -149,13 +152,32 @@ pub fn enabled_flags(app: &FinderApp) -> Vec<bool> {
 }
 
 /// The shortcuts pressed this frame run their action. Not while a text field has the focus
+/// The shortcut pressed: by the key it types, or by its place on the keyboard (on an AZERTY keyboard the
+/// key of the 8 types "!", so ⌘8 only has the physical key of the 8)
+fn consume(input: &mut egui::InputState, shortcut: &KeyboardShortcut) -> bool {
+    if input.consume_shortcut(shortcut) {
+        return true;
+    }
+    let position = input.events.iter().position(|e| {
+        matches!(e, egui::Event::Key { physical_key: Some(key), pressed: true, repeat: false, modifiers, .. }
+            if *key == shortcut.logical_key && modifiers.matches_logically(shortcut.modifiers))
+    });
+    match position {
+        Some(i) => {
+            input.events.remove(i);
+            true
+        }
+        None => false,
+    }
+}
+
 pub fn run_shortcuts(app: &mut FinderApp, ctx: &egui::Context) {
     if ctx.text_edit_focused() || pyegui_core::terminal::terminal_focused(ctx) {
         return;
     }
     for action in ACTIONS {
         if let Some(shortcut) = &action.shortcut {
-            if ctx.input_mut(|i| i.consume_shortcut(shortcut)) && (action.enabled)(app) {
+            if ctx.input_mut(|i| consume(i, shortcut)) && (action.enabled)(app) {
                 (action.run)(app, ctx);
             }
         }

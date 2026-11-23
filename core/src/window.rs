@@ -119,6 +119,18 @@ pub fn corner_radius(window: &impl raw_window_handle::HasWindowHandle) -> f64 {
 /// at run time: on a system without them, an error is returned and nothing changes
 #[cfg(target_os = "macos")]
 pub fn set_window_blur(window: &impl raw_window_handle::HasWindowHandle, radius: u32) -> Result<(), String> {
+    set_window_filter(window, radius, 1.0, 1.0)
+}
+
+/// The blur of `set_window_blur` with the contrast and the saturation of what is seen through the glass
+/// (1.0 changes nothing). The view is removed when all three change nothing
+#[cfg(target_os = "macos")]
+pub fn set_window_filter(
+    window: &impl raw_window_handle::HasWindowHandle,
+    radius: u32,
+    contrast: f32,
+    saturation: f32,
+) -> Result<(), String> {
     use objc2::msg_send;
     use objc2::runtime::{AnyClass, AnyObject, Bool as ObjcBool};
     use objc2_foundation::{NSRect, NSString};
@@ -154,7 +166,8 @@ pub fn set_window_blur(window: &impl raw_window_handle::HasWindowHandle, radius:
                 }
             }
         }
-        if radius == 0 {
+        let neutral = (contrast - 1.0).abs() < 0.005 && (saturation - 1.0).abs() < 0.005;
+        if radius == 0 && neutral {
             if !blur_view.is_null() {
                 let _: () = msg_send![&*blur_view, removeFromSuperview];
             }
@@ -183,17 +196,51 @@ pub fn set_window_blur(window: &impl raw_window_handle::HasWindowHandle, radius:
         }
 
         let layer: *mut AnyObject = msg_send![&*blur_view, layer];
-        let filter: *mut AnyObject =
-            msg_send![class(c"CAFilter")?, filterWithType: &*NSString::from_str("gaussianBlur")];
-        if filter.is_null() {
-            return Err("no gaussianBlur filter".to_string());
+        let filters: *mut AnyObject = msg_send![class(c"NSMutableArray")?, array];
+        if radius > 0 {
+            let filter: *mut AnyObject =
+                msg_send![class(c"CAFilter")?, filterWithType: &*NSString::from_str("gaussianBlur")];
+            if filter.is_null() {
+                return Err("no gaussianBlur filter".to_string());
+            }
+            let value: *mut AnyObject = msg_send![class(c"NSNumber")?, numberWithDouble: radius as f64];
+            let _: () = msg_send![&*filter, setValue: value, forKey: &*NSString::from_str("inputRadius")];
+            // the edges of the window are not darkened by the blur
+            let yes: *mut AnyObject = msg_send![class(c"NSNumber")?, numberWithBool: true];
+            let _: () = msg_send![&*filter, setValue: yes, forKey: &*NSString::from_str("inputNormalizeEdges")];
+            let _: () = msg_send![&*filters, addObject: filter];
         }
-        let value: *mut AnyObject = msg_send![class(c"NSNumber")?, numberWithDouble: radius as f64];
-        let _: () = msg_send![&*filter, setValue: value, forKey: &*NSString::from_str("inputRadius")];
-        // the edges of the window are not darkened by the blur
-        let yes: *mut AnyObject = msg_send![class(c"NSNumber")?, numberWithBool: true];
-        let _: () = msg_send![&*filter, setValue: yes, forKey: &*NSString::from_str("inputNormalizeEdges")];
-        let filters: *mut AnyObject = msg_send![class(c"NSArray")?, arrayWithObject: filter];
+        if (saturation - 1.0).abs() >= 0.005 {
+            let filter: *mut AnyObject =
+                msg_send![class(c"CAFilter")?, filterWithType: &*NSString::from_str("colorSaturate")];
+            if !filter.is_null() {
+                let value: *mut AnyObject = msg_send![class(c"NSNumber")?, numberWithDouble: saturation as f64];
+                let _: () = msg_send![&*filter, setValue: value, forKey: &*NSString::from_str("inputAmount")];
+                let _: () = msg_send![&*filters, addObject: filter];
+            }
+        }
+        if (contrast - 1.0).abs() >= 0.005 {
+            let filter: *mut AnyObject =
+                msg_send![class(c"CAFilter")?, filterWithType: &*NSString::from_str("colorMatrix")];
+            if !filter.is_null() {
+                // the contrast scales the colors around the middle gray: a CAColorMatrix (4 rows of
+                // r, g, b, a and a bias)
+                let bias = 0.5 * (1.0 - contrast);
+                let matrix: [f32; 20] = [
+                    contrast, 0.0, 0.0, 0.0, bias, //
+                    0.0, contrast, 0.0, 0.0, bias, //
+                    0.0, 0.0, contrast, 0.0, bias, //
+                    0.0, 0.0, 0.0, 1.0, 0.0,
+                ];
+                let value: *mut AnyObject = msg_send![
+                    class(c"NSValue")?,
+                    valueWithBytes: matrix.as_ptr().cast::<std::ffi::c_void>(),
+                    objCType: c"{CAColorMatrix=ffffffffffffffffffff}".as_ptr()
+                ];
+                let _: () = msg_send![&*filter, setValue: value, forKey: &*NSString::from_str("inputColorMatrix")];
+                let _: () = msg_send![&*filters, addObject: filter];
+            }
+        }
         let _: () = msg_send![&*layer, setFilters: filters];
     }
     Ok(())

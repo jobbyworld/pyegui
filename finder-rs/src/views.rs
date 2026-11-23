@@ -3,7 +3,7 @@
 //! of the Python module. The application keeps the folder, the history, the selection and the sort,
 //! gives them to the view before it is drawn and reads what the user did after.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -48,6 +48,30 @@ impl Views {
         let mut tree = TreeState::new("tree".into(), folder.to_path_buf(), core.clone(), show_hidden, true, false, true, true);
         tree.keep_focus = true;
         Views { list: Some(make("list")), icons: Some(icons), tree: Shared::new(tree), tagged: None, shown_key: None }
+    }
+
+    /// The widths of the columns the user chose, by view ("list" and "tree") and column key
+    pub fn column_widths(&self) -> BTreeMap<String, BTreeMap<String, f32>> {
+        let mut out = BTreeMap::new();
+        let sorted = |w: &HashMap<String, f32>| w.iter().map(|(k, v)| (k.clone(), *v)).collect::<BTreeMap<_, _>>();
+        if let Some(list) = &self.list {
+            out.insert("list".to_owned(), sorted(&list.columns.widths));
+        }
+        out.insert("tree".to_owned(), sorted(&self.tree.borrow().columns.widths));
+        out.retain(|_, w| !w.is_empty());
+        out
+    }
+
+    /// Gives the views these widths again (what was kept between two runs, or chosen in another tab)
+    pub fn set_column_widths(&mut self, widths: &BTreeMap<String, BTreeMap<String, f32>>) {
+        if &self.column_widths() == widths {
+            return;
+        }
+        let map = |name: &str| widths.get(name).map(|w| w.iter().map(|(k, v)| (k.clone(), *v)).collect::<HashMap<_, _>>()).unwrap_or_default();
+        if let Some(list) = &mut self.list {
+            list.columns.set_widths(map("list"));
+        }
+        self.tree.borrow_mut().columns.set_widths(map("tree"));
     }
 
     /// Opens these folders in the tree
@@ -213,6 +237,9 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
     let mut cache = app.views.tagged.take();
     let paths = tagged(app, &mut cache);
     app.views.tagged = cache;
+    // the widths of the columns are the same in every tab (and kept between two runs)
+    let widths = app.column_widths.clone();
+    app.views.set_column_widths(&widths);
     let enabled = actions::enabled_flags(app);
     let tag_menu = tagsui::menu_tags(app, &ctx);
     let has_selection = !app.selected.is_empty();
@@ -324,6 +351,7 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
         app.sort_key = key;
         app.ascending = back.sort.1;
     }
+    app.column_widths = app.views.column_widths();
     app.set_items(&ctx, back.shown);
     if let Some(folder) = back.folder {
         app.go(folder);

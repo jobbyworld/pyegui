@@ -4,6 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Color32, FontFamily};
+
+use crate::glyphs;
 use pyegui_core::terminal::{self, Scheme, Terminal, TerminalOptions};
 
 pub struct Terminals {
@@ -113,7 +115,8 @@ impl Terminals {
             python: make(newest_python(), vec!["-q".to_owned()]),
             follow: true,
             shell_folder: start.to_path_buf(),
-            font_family: font_path.map(|_| FontFamily::Name("nerd".into())),
+            // the family "nerd" is always defined (the font chosen, the Nerd Font installed, else the monospace one)
+            font_family: Some(FontFamily::Name("nerd".into())),
         }
     }
 
@@ -132,35 +135,61 @@ impl Terminals {
         options
     }
 
-    /// The pane of the shell: its buttons, then the terminal
+    /// The pane of the shell: the terminal, with its buttons (small icons) floating at the top right
     pub fn shell_ui(&mut self, ui: &mut egui::Ui, folder: &Path, opacity: f32) {
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut self.follow, "Suivre le dossier");
-            if ui.small_button("cd ici").clicked() {
-                self.shell.run(&cd_command(folder));
-                self.shell_folder = folder.to_path_buf();
-            }
-            if ui.small_button("Redémarrer").clicked() {
-                self.shell.restart(Some(folder.to_path_buf()));
-                self.shell_folder = folder.to_path_buf();
-            }
-        });
+        let area = ui.available_rect_before_wrap();
         let options = self.options(opacity);
         if let Err(error) = terminal::show(ui, &mut self.shell, options) {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
+        // drawn after the terminal: over it, and they get the clicks of their place
+        floating_buttons(ui, area, |ui| {
+            // from the right: restart, go to the folder once, follow the folder (a toggle)
+            if icon_button(ui, glyphs::REFRESH, false, "Redémarrer le shell").clicked() {
+                self.shell.restart(Some(folder.to_path_buf()));
+                self.shell_folder = folder.to_path_buf();
+            }
+            if icon_button(ui, glyphs::FOLDER_ENTER, false, "cd ici : aller au dossier affiché").clicked() {
+                self.shell.run(&cd_command(folder));
+                self.shell_folder = folder.to_path_buf();
+            }
+            if icon_button(ui, glyphs::LINK, self.follow, "Suivre le dossier du Finder").clicked() {
+                self.follow = !self.follow;
+            }
+        });
     }
 
     /// The pane of the Python prompt
     pub fn python_ui(&mut self, ui: &mut egui::Ui, opacity: f32) {
-        ui.horizontal(|ui| {
-            if ui.small_button("Redémarrer").clicked() {
-                self.python.restart(None);
-            }
-        });
+        let area = ui.available_rect_before_wrap();
         let options = self.options(opacity);
         if let Err(error) = terminal::show(ui, &mut self.python, options) {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
+        floating_buttons(ui, area, |ui| {
+            if icon_button(ui, glyphs::REFRESH, false, "Redémarrer Python").clicked() {
+                self.python.restart(None);
+            }
+        });
     }
+}
+
+/// Small buttons in a rounded frame floating at the top right of an area (right to left)
+fn floating_buttons(ui: &mut egui::Ui, area: egui::Rect, add: impl FnOnce(&mut egui::Ui)) {
+    let corner = egui::Rect::from_min_max(area.min, egui::pos2(area.right() - 14.0, area.top() + 40.0));
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(corner.shrink2(egui::vec2(0.0, 0.0)))
+            .layout(egui::Layout::right_to_left(egui::Align::Min)),
+    );
+    let fill = ui.visuals().extreme_bg_color.gamma_multiply(0.85);
+    egui::Frame::new().fill(fill).corner_radius(8.0).inner_margin(2.0).show(&mut child, |ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), add);
+    });
+}
+
+/// A small icon button with its tooltip and the hand of a click
+fn icon_button(ui: &mut egui::Ui, glyph: glyphs::Glyph, on: bool, tip: &str) -> egui::Response {
+    glyphs::button(ui, glyph, 14.0, on, tip).on_hover_cursor(egui::CursorIcon::PointingHand)
 }

@@ -70,6 +70,9 @@ pub struct Look {
     pub image: Option<PathBuf>,
     /// the blur of the glass or of the picture
     pub blur: u32,
+    /// the contrast and the saturation of the glass or of the picture, in percent (100: unchanged)
+    pub contrast: u32,
+    pub saturation: u32,
     pub layers: [LayerSetting; 3],
     /// the outline of the tabs and of the panes: thickness and color with its alpha (None: the one of the theme)
     /// [active tabs and panes, inactive tabs]
@@ -81,7 +84,7 @@ pub struct Look {
 
 impl Default for Look {
     fn default() -> Self {
-        Look { background: Background::default_for_system(), color: None, image: None, blur: 0, layers: Default::default(), outline_width: [1.0; 2], outline: [None; 2], text: None }
+        Look { background: Background::default_for_system(), color: None, image: None, blur: 0, contrast: 100, saturation: 100, layers: Default::default(), outline_width: [1.0; 2], outline: [None; 2], text: None }
     }
 }
 
@@ -89,19 +92,79 @@ fn is_image(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"))
 }
 
-/// The menu of the appearance stays open while a click lands in it or in a popup of a color picker;
-/// a click elsewhere (but on its button) closes it
-fn close_on_click_outside(ui: &egui::Ui) {
-    let ctx = ui.ctx();
-    if !ctx.input(|i| i.pointer.any_pressed()) {
-        return;
+/// The font files installed (.ttf and .otf) by name, sorted: the choices of the fonts of the app
+fn installed_fonts() -> &'static [(String, PathBuf)] {
+    static FONTS: std::sync::OnceLock<Vec<(String, PathBuf)>> = std::sync::OnceLock::new();
+    FONTS.get_or_init(|| {
+        let mut folders = vec![PathBuf::from("/Library/Fonts"), PathBuf::from("/System/Library/Fonts"), PathBuf::from("/System/Library/Fonts/Supplemental")];
+        folders.push(PathBuf::from("/usr/share/fonts"));
+        folders.push(PathBuf::from(r"C:\Windows\Fonts"));
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            folders.push(home.join("Library/Fonts"));
+            folders.push(home.join(".local/share/fonts"));
+        }
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            folders.push(PathBuf::from(local).join("Microsoft/Windows/Fonts"));
+        }
+        let mut found = Vec::new();
+        let mut pending: Vec<(PathBuf, u8)> = folders.into_iter().map(|f| (f, 0)).collect();
+        while let Some((folder, depth)) = pending.pop() {
+            let Ok(entries) = std::fs::read_dir(&folder) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if depth < 2 {
+                        pending.push((path, depth + 1));
+                    }
+                    continue;
+                }
+                let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+                if matches!(ext.as_deref(), Some("ttf" | "otf")) {
+                    if let Some(stem) = path.file_stem().and_then(|n| n.to_str()) {
+                        found.push((stem.to_owned(), path));
+                    }
+                }
+            }
+        }
+        found.sort_by_key(|(name, _)| name.to_lowercase());
+        found.dedup_by(|a, b| a.0 == b.0);
+        found
+    })
+}
+
+/// The size of a font in points, a small field to drag or type in
+fn size_drag(size: &mut f32, range: std::ops::RangeInclusive<f32>) -> egui::DragValue<'_> {
+    egui::DragValue::new(size).range(range).speed(0.1).max_decimals(0).suffix(" pt")
+}
+
+/// A list of the installed fonts, "Par défaut" first; true when the choice changed
+fn font_combo(ui: &mut egui::Ui, id: &str, current: &mut Option<PathBuf>, fonts: &[(String, PathBuf)]) -> bool {
+    let label = current.as_ref().and_then(|p| p.file_stem()).and_then(|n| n.to_str()).unwrap_or("Par défaut").to_owned();
+    let mut picked: Option<Option<PathBuf>> = None;
+    egui::ComboBox::from_id_salt(id).width(110.0).selected_text(label).show_ui(ui, |ui| {
+        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+            if ui.selectable_label(current.is_none(), "Par défaut").clicked() {
+                picked = Some(None);
+            }
+            for (name, path) in fonts {
+                if ui.selectable_label(current.as_ref() == Some(path), name).clicked() {
+                    picked = Some(Some(path.clone()));
+                }
+            }
+        });
+    });
+    match picked {
+        Some(choice) => {
+            *current = choice;
+            true
+        }
+        None => false,
     }
-    let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) else { return };
-    let on_button = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("gear-rect"))).is_some_and(|r| r.contains(pos));
-    let inside = ctx.layer_id_at(pos).is_some_and(|l| matches!(l.order, egui::Order::Foreground | egui::Order::Tooltip));
-    if !inside && !on_button {
-        ui.close();
-    }
+}
+
+/// A color button (the picker has its own popup); true when the color was changed
+fn picker(ui: &mut egui::Ui, color: &mut egui::Color32, alpha: egui::color_picker::Alpha) -> bool {
+    egui::color_picker::color_edit_button_srgba(ui, color, alpha).changed()
 }
 
 /// The native backdrop put behind the window when the glass is on
@@ -138,6 +201,14 @@ struct Saved {
     show_dock: bool,
     show_terminal: bool,
     terminal_opacity: f32,
+    /// the font files chosen for the interface and for the terminal (None: the default ones)
+    font_ui: Option<PathBuf>,
+    font_terminal: Option<PathBuf>,
+    /// the size of the texts of the interface (the body, 14 by default) and of the terminal (13)
+    font_size: f32,
+    terminal_font_size: f32,
+    /// the widths of the columns of the list and of the tree, by view and column key
+    column_widths: std::collections::BTreeMap<String, std::collections::BTreeMap<String, f32>>,
     /// the look of the light theme and of the dark theme, kept apart
     looks: [Look; 2],
     /// an accent chosen with the color picker
@@ -162,6 +233,11 @@ impl Default for Saved {
             show_dock: true,
             show_terminal: true,
             terminal_opacity: 0.2,
+            font_ui: None,
+            font_terminal: None,
+            font_size: 14.0,
+            terminal_font_size: 13.0,
+            column_widths: Default::default(),
             looks: Default::default(),
             accent_custom: None,
             show_hidden: false,
@@ -184,13 +260,18 @@ pub struct FinderApp {
     show_dock: bool,
     show_terminal: bool,
     pub terminal_opacity: f32,
+    pub font_ui: Option<PathBuf>,
+    pub font_terminal: Option<PathBuf>,
+    pub font_size: f32,
+    pub terminal_font_size: f32,
+    pub column_widths: std::collections::BTreeMap<String, std::collections::BTreeMap<String, f32>>,
     pub looks: [Look; 2],
     pub accent_custom: Option<[u8; 3]>,
     /// the picture behind the glasses, blurred: the file, the blur and its texture
-    bg_texture: Option<(PathBuf, u32, egui::TextureHandle)>,
-    applied_blur: u32,
+    bg_texture: Option<(PathBuf, [u32; 3], egui::TextureHandle)>,
+    applied_filter: [u32; 3],
     /// the blur once the slider is let go (while it is dragged the window server and the picture are not asked again at each frame)
-    settled_blur: Option<[u32; 2]>,
+    settled_blur: Option<[[u32; 3]; 2]>,
     title: String,
     /// a window opened by the first one: it has no native backdrop and closes on its own
     secondary: bool,
@@ -390,13 +471,12 @@ impl FinderApp {
 
     pub fn new(cc: &eframe::CreationContext<'_>, start: Option<PathBuf>, custom_titlebar: bool) -> Self {
         egui_extras::install_image_loaders(&cc.egui_ctx);
-        let font_path = terminals::nerd_font();
-        cc.egui_ctx.set_fonts(fonts(font_path.as_deref()));
         let saved: Saved = cc
             .storage
             .and_then(|s| s.get_string(STATE_KEY))
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
+        cc.egui_ctx.set_fonts(fonts(terminals::nerd_font().as_deref(), saved.font_ui.as_deref(), saved.font_terminal.as_deref()));
         Self::build(&cc.egui_ctx, saved, start, custom_titlebar)
     }
 
@@ -420,6 +500,11 @@ impl FinderApp {
             show_dock: false,
             show_terminal: false,
             terminal_opacity: self.terminal_opacity,
+            font_ui: self.font_ui.clone(),
+            font_terminal: self.font_terminal.clone(),
+            font_size: self.font_size,
+            terminal_font_size: self.terminal_font_size,
+            column_widths: self.column_widths.clone(),
             ..Saved::default()
         };
         let mut app = Self::build(ctx, saved, Some(folder), false);
@@ -441,7 +526,8 @@ impl FinderApp {
         let folder_for_terminal = folder.clone();
         pyegui_core::icons::set_blue(saved.blue_folders);
         let core = default_core();
-        let views = Views::new(&core, &folder, saved.show_hidden);
+        let mut views = Views::new(&core, &folder, saved.show_hidden);
+        views.set_column_widths(&saved.column_widths);
         views.open_in_tree(&saved.open_folders);
         let app = FinderApp {
             core,
@@ -455,10 +541,15 @@ impl FinderApp {
             show_dock: saved.show_dock,
             show_terminal: saved.show_terminal,
             terminal_opacity: saved.terminal_opacity.clamp(0.0, 1.0),
+            font_ui: saved.font_ui,
+            font_terminal: saved.font_terminal,
+            font_size: saved.font_size.clamp(9.0, 24.0),
+            terminal_font_size: saved.terminal_font_size.clamp(8.0, 30.0),
+            column_widths: saved.column_widths.clone(),
             looks: saved.looks,
             accent_custom: saved.accent_custom,
             bg_texture: None,
-            applied_blur: 0,
+            applied_filter: [0, 100, 100],
             settled_blur: None,
             title: String::new(),
             secondary: false,
@@ -607,9 +698,10 @@ impl FinderApp {
         (look.outline_width[k], color)
     }
 
-    /// The blur of both looks, kept as it was while the pointer is down (a slider being dragged)
-    fn settled_blur(&mut self, ctx: &egui::Context) -> [u32; 2] {
-        let wanted = [self.looks[0].blur, self.looks[1].blur];
+    /// The blur, the contrast and the saturation of both looks, kept as they were while the pointer is
+    /// down (a slider being dragged)
+    fn settled_blur(&mut self, ctx: &egui::Context) -> [[u32; 3]; 2] {
+        let wanted = [0, 1].map(|d| [self.looks[d].blur, self.looks[d].contrast, self.looks[d].saturation]);
         let dragging = ctx.input(|i| i.pointer.any_down());
         match self.settled_blur {
             Some(old) if dragging => old,
@@ -651,6 +743,13 @@ impl FinderApp {
                 let c = egui::Color32::from_rgb(r, g, b);
                 s.visuals.widgets.noninteractive.fg_stroke.color = c;
                 s.visuals.widgets.inactive.fg_stroke.color = c;
+            }
+            // the size of the texts of the interface: every size of the style follows the body one (14)
+            let scale = self.font_size / 14.0;
+            if (scale - 1.0).abs() > 0.001 {
+                for font in s.text_styles.values_mut() {
+                    font.size *= scale;
+                }
             }
             ctx.set_style_of(theme, s);
         }
@@ -1116,6 +1215,13 @@ impl FinderApp {
             return;
         }
         actions::run_shortcuts(self, ctx);
+        // a file open in the viewer: Backspace closes it, like Escape (it does not go up a folder)
+        if self.viewer.is_some() {
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace) | i.consume_key(Modifiers::NONE, Key::Escape)) {
+                self.viewer = None;
+            }
+            return;
+        }
         // the arrows, Enter and the letters are read by the views
         let (parent, clear) = ctx.input_mut(|i| (i.consume_key(Modifiers::NONE, Key::Backspace), i.consume_key(Modifiers::NONE, Key::Escape)));
         if parent {
@@ -1139,6 +1245,8 @@ impl FinderApp {
     pub fn terminal_pane(&mut self, ui: &mut egui::Ui, shell: bool) {
         let folder = self.folder().to_path_buf();
         let opacity = self.terminal_opacity;
+        self.terminals.shell.font_size = self.terminal_font_size;
+        self.terminals.python.font_size = self.terminal_font_size;
         if shell {
             self.terminals.shell_ui(ui, &folder, opacity);
         } else {
@@ -1325,23 +1433,23 @@ impl FinderApp {
         });
     }
 
-    /// Light, dark or the system theme (a segmented control), and the menu of the look
+    /// Light, dark or the system theme, and the settings of the look: the four cells of one segmented
+    /// control, the last one opens the popup of the appearance
     fn theme_control(&mut self, ui: &mut egui::Ui) {
         let before = self.theme;
-        let (response, _) = egui::containers::menu::MenuButton::from_button(glyphs::button_of(ui, glyphs::GEAR, 14.0, false))
-            // a click in the color popup of a glass must not close the menu that holds it
-            .config(egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::IgnoreClicks))
-            .ui(ui, |ui| {
-                self.appearance_menu(ui);
-                close_on_click_outside(ui);
-            });
-        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("gear-rect"), response.rect));
-        response.on_hover_text("Apparence");
-        ui.add_space(4.0);
+        // the panel is not a popup of egui (only one is open at a time: the picker of a color would close
+        // it): it stays open until the gear or its cross is clicked
+        let open_id = egui::Id::new("appearance-open");
+        let mut open = ui.ctx().data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+        // for the checks of the look (FINDER_SHOT): the panel opened by itself
+        if std::env::var_os("FINDER_APPEARANCE").is_some() && ui.ctx().cumulative_frame_nr() == 20 {
+            open = true;
+        }
         let choice = glyphs::segmented(ui, "theme", 14.0, &[
-            glyphs::cell(glyphs::SUN, self.theme == ThemeChoice::Light, "Clair"),
-            glyphs::cell(glyphs::MOON, self.theme == ThemeChoice::Dark, "Sombre"),
-            glyphs::cell(glyphs::THEME_SYSTEM, self.theme == ThemeChoice::System, "Thème du système"),
+            glyphs::cell(glyphs::SUN, self.theme == ThemeChoice::Light, "Clair (⌘7)"),
+            glyphs::cell(glyphs::MOON, self.theme == ThemeChoice::Dark, "Sombre (⌘8)"),
+            glyphs::cell(glyphs::THEME_SYSTEM, self.theme == ThemeChoice::System, "Thème du système (⌘9)"),
+            glyphs::cell(glyphs::GEAR, open, if open { "" } else { "Apparence" }),
         ]);
         match choice.clicked {
             Some(0) => self.theme = ThemeChoice::Light,
@@ -1352,130 +1460,189 @@ impl FinderApp {
         if before != self.theme {
             self.apply_theme(ui.ctx());
         }
+        let gear = &choice.responses[3];
+        let mut open = open ^ gear.clicked();
+        if open {
+            let pos = egui::pos2(gear.rect.right(), gear.rect.top() - 8.0);
+            egui::Area::new(egui::Id::new("appearance-panel"))
+                .order(egui::Order::Foreground)
+                .pivot(egui::Align2::RIGHT_BOTTOM)
+                .fixed_pos(pos)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            if glyphs::button(ui, glyphs::CLOSE, 12.0, false, "Fermer").clicked() {
+                                open = false;
+                            }
+                            ui.label(RichText::new("Apparence").heading());
+                        });
+                        ui.separator();
+                        self.appearance_menu(ui);
+                    });
+                });
+        }
+        ui.ctx().data_mut(|d| d.insert_temp(open_id, open));
     }
 
+    /// The popup of the appearance: the accent, then the settings of the theme shown (light and dark
+    /// are kept apart). Every color is a picker with its transparency
     pub fn appearance_menu(&mut self, ui: &mut egui::Ui) {
-        ui.set_min_width(180.0);
-        ui.label(RichText::new("Thème").strong());
-        let before = (self.theme, self.accent);
-        let mut changed_accent = false;
+        use egui::color_picker::Alpha;
+        ui.set_width(250.0);
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
+        ui.spacing_mut().slider_width = 120.0;
+        // the rail of a slider is drawn with this fill, transparent in the glass look
+        let rail = ui.visuals().text_color().gamma_multiply(0.18);
+        ui.visuals_mut().widgets.inactive.bg_fill = rail;
+        // the accent is one color
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.theme, ThemeChoice::System, "Système");
-            ui.selectable_value(&mut self.theme, ThemeChoice::Light, "Clair");
-            ui.selectable_value(&mut self.theme, ThemeChoice::Dark, "Sombre");
-        });
-        ui.label(RichText::new("Accent").strong());
-        ui.horizontal(|ui| {
-            for (i, (name, color)) in ACCENTS.iter().enumerate() {
-                let on = self.accent_custom.is_none() && self.accent == i;
-                let text = RichText::new(if on { "●" } else { "○" }).color(*color).size(18.0);
-                if ui.add(egui::Button::new(text).frame(false)).on_hover_text(*name).clicked() {
-                    self.accent = i;
-                    self.accent_custom = None;
-                    changed_accent = true;
+            ui.label(RichText::new("Accent").strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let mut color = self.accent_color();
+                if picker(ui, &mut color, Alpha::Opaque) {
+                    self.accent_custom = Some([color.r(), color.g(), color.b()]);
+                    self.apply_theme(ui.ctx());
                 }
-            }
-            let mut color = self.accent_color();
-            if egui::color_picker::color_edit_button_srgba(ui, &mut color, egui::color_picker::Alpha::Opaque).on_hover_text("Autre couleur").changed() {
-                self.accent_custom = Some([color.r(), color.g(), color.b()]);
-                changed_accent = true;
-            }
+            });
         });
-        if before != (self.theme, self.accent) || changed_accent {
+        // the fonts: one for the interface, one for the terminal
+        let installed = installed_fonts();
+        let mut fonts_changed = false;
+        let mut size_changed = false;
+        egui::Grid::new("font-grid").num_columns(2).spacing([10.0, 6.0]).min_col_width(70.0).show(ui, |ui| {
+            ui.label("Police");
+            ui.horizontal(|ui| {
+                fonts_changed |= font_combo(ui, "font-ui", &mut self.font_ui, installed);
+                size_changed |= ui.add(size_drag(&mut self.font_size, 9.0..=24.0)).on_hover_text("Taille").changed();
+            });
+            ui.end_row();
+            ui.label("Terminal");
+            ui.horizontal(|ui| {
+                fonts_changed |= font_combo(ui, "font-terminal", &mut self.font_terminal, installed);
+                ui.add(size_drag(&mut self.terminal_font_size, 8.0..=30.0)).on_hover_text("Taille");
+            });
+            ui.end_row();
+        });
+        if size_changed {
             self.apply_theme(ui.ctx());
         }
-        // the settings below are those of the theme shown: the light and the dark ones are kept apart
+        if fonts_changed {
+            ui.ctx().set_fonts(fonts(terminals::nerd_font().as_deref(), self.font_ui.as_deref(), self.font_terminal.as_deref()));
+        }
         let dark = ui.visuals().dark_mode;
         let d = dark as usize;
-        ui.separator();
-        ui.label(RichText::new(if dark { "Thème sombre" } else { "Thème clair" }).strong());
-        ui.label(RichText::new("Fond").strong());
         let mut look = self.looks[d].clone();
+        ui.separator();
         ui.horizontal(|ui| {
-            if backdrop_name().is_some() {
-                ui.selectable_value(&mut look.background, Background::Glass, "Vitre");
-            }
-            ui.selectable_value(&mut look.background, Background::Image, "Image");
-            ui.selectable_value(&mut look.background, Background::Color, "Couleur");
+            ui.label(RichText::new(if dark { "Thème sombre" } else { "Thème clair" }).strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("Par défaut").on_hover_text("Remet le fond, les vitres, les contours et le texte de ce thème").clicked() {
+                    look = Look::default();
+                }
+            });
         });
-        if look.background != Background::Color {
-            // the blur of the glass of the system is only set on macOS
-            let unavailable = look.background == Background::Glass && !cfg!(target_os = "macos");
-            let slider = ui.add_enabled(!unavailable, egui::Slider::new(&mut look.blur, 0..=40).text("Flou"));
-            if unavailable {
-                slider.on_disabled_hover_text("Non disponible");
-            }
-        }
-        match look.background {
-            Background::Image => {
-                let mut path = look.image.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
-                if ui.add(egui::TextEdit::singleline(&mut path).hint_text("Chemin de l'image").desired_width(f32::INFINITY)).changed() {
-                    look.image = if path.trim().is_empty() { None } else { Some(expand(Path::new(path.trim()))) };
+        egui::Grid::new("look-grid").num_columns(2).spacing([10.0, 6.0]).min_col_width(70.0).show(ui, |ui| {
+            ui.label("Fond");
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if backdrop_name().is_some() {
+                    ui.selectable_value(&mut look.background, Background::Glass, "Vitre");
                 }
-                let selection = self.selected.iter().next().filter(|p| is_image(p)).cloned();
-                if ui.add_enabled(selection.is_some(), egui::Button::new("Utiliser la sélection")).clicked() {
-                    look.image = selection;
+                ui.selectable_value(&mut look.background, Background::Image, "Image");
+                ui.selectable_value(&mut look.background, Background::Color, "Couleur");
+            });
+            ui.end_row();
+            if look.background != Background::Color {
+                // the blur of the glass of the system is only set on macOS
+                let unavailable = look.background == Background::Glass && !cfg!(target_os = "macos");
+                ui.label("Flou");
+                let slider = ui.add_enabled(!unavailable, egui::Slider::new(&mut look.blur, 0..=40));
+                if unavailable {
+                    slider.on_disabled_hover_text("Non disponible");
                 }
+                ui.end_row();
+                let percent = |v: f64, _: std::ops::RangeInclusive<usize>| format!("{v:.0} %");
+                ui.label("Contraste");
+                ui.add_enabled(!unavailable, egui::Slider::new(&mut look.contrast, 50..=200).custom_formatter(percent));
+                ui.end_row();
+                ui.label("Saturation");
+                ui.add_enabled(!unavailable, egui::Slider::new(&mut look.saturation, 0..=200).custom_formatter(percent));
+                ui.end_row();
             }
-            Background::Color => {
-                let (_, default) = (0, if dark { egui::Color32::from_rgb(22, 24, 30) } else { egui::Color32::from_rgb(235, 235, 240) });
-                let mut color = look.color.map(|[r, g, b]| egui::Color32::from_rgb(r, g, b)).unwrap_or(default);
-                ui.horizontal(|ui| {
-                    if egui::color_picker::color_edit_button_srgba(ui, &mut color, egui::color_picker::Alpha::Opaque).changed() {
+            match look.background {
+                Background::Image => {
+                    ui.label("Image");
+                    ui.horizontal(|ui| {
+                        let mut path = look.image.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
+                        if ui.add(egui::TextEdit::singleline(&mut path).hint_text("Chemin").desired_width(100.0)).changed() {
+                            look.image = if path.trim().is_empty() { None } else { Some(expand(Path::new(path.trim()))) };
+                        }
+                        let selection = self.selected.iter().next().filter(|p| is_image(p)).cloned();
+                        if ui.add_enabled(selection.is_some(), egui::Button::new("Sélection")).on_hover_text("Utiliser l'image sélectionnée").clicked() {
+                            look.image = selection;
+                        }
+                    });
+                    ui.end_row();
+                }
+                Background::Color => {
+                    let default = if dark { egui::Color32::from_rgb(22, 24, 30) } else { egui::Color32::from_rgb(235, 235, 240) };
+                    let mut color = look.color.map(|[r, g, b]| egui::Color32::from_rgb(r, g, b)).unwrap_or(default);
+                    ui.label("Couleur");
+                    if picker(ui, &mut color, Alpha::Opaque) {
                         look.color = Some([color.r(), color.g(), color.b()]);
                     }
-                    ui.label("Couleur du fond");
-                });
-            }
-            Background::Glass => {}
-        }
-        ui.add_space(4.0);
-        ui.label(RichText::new("Vitres").strong());
-        for (i, (layer, name)) in LAYERS.iter().enumerate() {
-            let (tint, opacity) = style::layer_values(*layer, dark);
-            let (mut color, mut alpha) = (tint, opacity);
-            ui.horizontal(|ui| {
-                if egui::color_picker::color_edit_button_srgba(ui, &mut color, egui::color_picker::Alpha::Opaque).changed() {
-                    look.layers[i].tint = Some([color.r(), color.g(), color.b()]);
+                    ui.end_row();
                 }
+                Background::Glass => {}
+            }
+            // the glasses: tint and opacity in one picker
+            for (i, (layer, name)) in LAYERS.iter().enumerate() {
+                let (tint, opacity) = style::layer_values(*layer, dark);
+                let mut color = egui::Color32::from_rgba_unmultiplied(tint.r(), tint.g(), tint.b(), (opacity * 255.0).round() as u8);
                 ui.label(*name);
-            });
-            if ui.add(egui::Slider::new(&mut alpha, 0.0..=1.0).text("Opacité")).changed() {
-                look.layers[i].opacity = Some(alpha);
-            }
-        }
-        ui.add_space(4.0);
-        ui.label(RichText::new("Contours et texte").strong());
-        for (k, name) in ["actifs", "inactifs"].into_iter().enumerate() {
-            ui.add(egui::Slider::new(&mut look.outline_width[k], 0.0..=6.0).text(format!("Épaisseur {name}")));
-            let (_, current) = self.outline(&ui.visuals().clone(), k == 0);
-            let mut color = look.outline[k].map(|[r, g, b, a]| egui::Color32::from_rgba_unmultiplied(r, g, b, a)).unwrap_or(current);
-            ui.horizontal(|ui| {
-                if egui::color_picker::color_edit_button_srgba(ui, &mut color, egui::color_picker::Alpha::OnlyBlend).changed() {
+                if picker(ui, &mut color, Alpha::OnlyBlend) {
                     let [r, g, b, a] = color.to_srgba_unmultiplied();
-                    look.outline[k] = Some([r, g, b, a]);
+                    // a fully transparent color has lost its tint: the old one is kept
+                    if a > 0 {
+                        look.layers[i].tint = Some([r, g, b]);
+                    }
+                    look.layers[i].opacity = Some(a as f32 / 255.0);
                 }
-                ui.label(format!("Contour {name}"));
-            });
-        }
-        let mut text = look.text.map(|[r, g, b]| egui::Color32::from_rgb(r, g, b)).unwrap_or(ui.visuals().text_color());
-        ui.horizontal(|ui| {
-            if egui::color_picker::color_edit_button_srgba(ui, &mut text, egui::color_picker::Alpha::Opaque).changed() {
+                ui.end_row();
+            }
+            // the outlines: color with its alpha, and thickness
+            for (k, name) in ["Contour actif", "Contour inactif"].into_iter().enumerate() {
+                let (_, current) = self.outline(&ui.visuals().clone(), k == 0);
+                let mut color = look.outline[k].map(|[r, g, b, a]| egui::Color32::from_rgba_unmultiplied(r, g, b, a)).unwrap_or(current);
+                ui.label(name);
+                ui.horizontal(|ui| {
+                    if picker(ui, &mut color, Alpha::OnlyBlend) {
+                        let [r, g, b, a] = color.to_srgba_unmultiplied();
+                        look.outline[k] = Some([r, g, b, a]);
+                    }
+                    ui.add(egui::DragValue::new(&mut look.outline_width[k]).range(0.0..=6.0).speed(0.05).max_decimals(1).suffix(" pt"))
+                        .on_hover_text("Épaisseur");
+                });
+                ui.end_row();
+            }
+            let mut text = look.text.map(|[r, g, b]| egui::Color32::from_rgb(r, g, b)).unwrap_or(ui.visuals().text_color());
+            ui.label("Texte");
+            if picker(ui, &mut text, Alpha::Opaque) {
                 look.text = Some([text.r(), text.g(), text.b()]);
             }
-            ui.label("Couleur du texte");
+            ui.end_row();
         });
-        if ui.button("Valeurs par défaut").on_hover_text("Remet le fond, les vitres, les contours et le texte de ce thème").clicked() {
-            look = Look::default();
-        }
         if look != self.looks[d] {
             self.looks[d] = look;
             self.apply_layers();
             self.apply_theme(ui.ctx());
         }
-        ui.add_space(4.0);
-        ui.label(RichText::new("Terminal").strong());
-        ui.add(egui::Slider::new(&mut self.terminal_opacity, 0.0..=1.0).text("Opacité"));
+        ui.separator();
+        egui::Grid::new("look-terminal").num_columns(2).spacing([10.0, 6.0]).min_col_width(70.0).show(ui, |ui| {
+            ui.label("Terminal");
+            ui.add(egui::Slider::new(&mut self.terminal_opacity, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0} %", v * 100.0)));
+            ui.end_row();
+        });
         ui.checkbox(&mut self.show_terminal, "Afficher le terminal (⌘T)");
         if cfg!(windows) && ui.checkbox(&mut self.blue_folders, "Dossiers bleus").changed() {
             pyegui_core::icons::set_blue(self.blue_folders);
@@ -1815,6 +1982,11 @@ impl eframe::App for FinderApp {
             show_dock: self.show_dock,
             show_terminal: self.show_terminal,
             terminal_opacity: self.terminal_opacity,
+            font_ui: self.font_ui.clone(),
+            font_terminal: self.font_terminal.clone(),
+            font_size: self.font_size,
+            terminal_font_size: self.terminal_font_size,
+            column_widths: self.column_widths.clone(),
             looks: self.looks.clone(),
             accent_custom: self.accent_custom,
             show_hidden: self.show_hidden,
@@ -1861,10 +2033,10 @@ impl eframe::App for FinderApp {
         // the blur of the glass: the one of the window server
         #[cfg(target_os = "macos")]
         {
-            let blur = if background == Background::Glass { self.settled_blur(ui.ctx())[dark] } else { 0 };
-            if blur != self.applied_blur {
-                self.applied_blur = blur;
-                let _ = pyegui_core::window::set_window_blur(&*frame, blur);
+            let filter = if background == Background::Glass { self.settled_blur(ui.ctx())[dark] } else { [0, 100, 100] };
+            if filter != self.applied_filter {
+                self.applied_filter = filter;
+                let _ = pyegui_core::window::set_window_filter(&*frame, filter[0], filter[1] as f32 / 100.0, filter[2] as f32 / 100.0);
             }
         }
         self.draw(ui);
@@ -1890,9 +2062,9 @@ impl FinderApp {
                     painter.rect_filled(screen, 0.0, if dark { egui::Color32::from_rgb(22, 24, 30) } else { egui::Color32::from_rgb(235, 235, 240) });
                     return;
                 };
-                let blur = self.settled_blur(ctx)[usize::from(dark)];
-                if self.bg_texture.as_ref().is_none_or(|(p, b, _)| *p != path || *b != blur) {
-                    self.bg_texture = blurred_texture(ctx, &path, blur).map(|t| (path.clone(), blur, t));
+                let filter = self.settled_blur(ctx)[usize::from(dark)];
+                if self.bg_texture.as_ref().is_none_or(|(p, f, _)| *p != path || *f != filter) {
+                    self.bg_texture = blurred_texture(ctx, &path, filter).map(|t| (path.clone(), filter, t));
                 }
                 match &self.bg_texture {
                     Some((_, _, texture)) => {
@@ -2113,7 +2285,7 @@ fn open_with_system(path: &Path) {
 }
 
 /// Inter for the texts, with a semibold family for the titles (the style of pyegui needs it)
-fn fonts(nerd: Option<&Path>) -> egui::FontDefinitions {
+fn fonts(nerd: Option<&Path>, ui_font: Option<&Path>, terminal_font: Option<&Path>) -> egui::FontDefinitions {
     use egui::{FontData, FontFamily};
     let mut fonts = egui::FontDefinitions::default();
     let proportional = fonts.families[&FontFamily::Proportional].clone();
@@ -2126,12 +2298,21 @@ fn fonts(nerd: Option<&Path>) -> egui::FontDefinitions {
     fonts.families.get_mut(&FontFamily::Proportional).unwrap().insert(0, "Inter-Regular".to_owned());
     let bold = std::iter::once("Inter-SemiBold".to_owned()).chain(proportional).collect();
     fonts.families.insert(style::bold_family(), bold);
-    // the font of the prompt, with the monospace fonts behind it for the characters it does not have
-    if let Some(data) = nerd.and_then(|p| std::fs::read(p).ok()) {
-        fonts.font_data.insert("nerd".to_owned(), Arc::new(FontData::from_owned(data)));
-        let family = std::iter::once("nerd".to_owned()).chain(fonts.families[&FontFamily::Monospace].clone()).collect();
-        fonts.families.insert(FontFamily::Name("nerd".into()), family);
+    // the font chosen for the interface comes first (the titles keep Inter semibold: a file has no bold)
+    if let Some(data) = ui_font.and_then(|p| std::fs::read(p).ok()) {
+        fonts.font_data.insert("chosen".to_owned(), Arc::new(FontData::from_owned(data)));
+        fonts.families.get_mut(&FontFamily::Proportional).unwrap().insert(0, "chosen".to_owned());
+        fonts.families.get_mut(&style::bold_family()).unwrap().insert(1, "chosen".to_owned());
     }
+    // the font of the terminal (the one chosen, else the Nerd Font of the prompt), with the monospace
+    // fonts behind it for the characters it does not have
+    let mut family: Vec<String> = Vec::new();
+    if let Some(data) = terminal_font.or(nerd).and_then(|p| std::fs::read(p).ok()) {
+        fonts.font_data.insert("nerd".to_owned(), Arc::new(FontData::from_owned(data)));
+        family.push("nerd".to_owned());
+    }
+    family.extend(fonts.families[&FontFamily::Monospace].clone());
+    fonts.families.insert(FontFamily::Name("nerd".into()), family);
     fonts
 }
 
@@ -2159,11 +2340,24 @@ fn screenshot_for_checks(ctx: &egui::Context) {
     }
 }
 
-/// The picture, made smaller and blurred (a radius in points of the window), as a texture
-fn blurred_texture(ctx: &egui::Context, path: &Path, blur: u32) -> Option<egui::TextureHandle> {
+/// The picture, made smaller, blurred (a radius in points of the window) and with its contrast and its
+/// saturation changed (percent), as a texture. `filter` is [blur, contrast, saturation]
+fn blurred_texture(ctx: &egui::Context, path: &Path, filter: [u32; 3]) -> Option<egui::TextureHandle> {
+    let [blur, contrast, saturation] = filter;
     let img = image::open(path).ok()?;
     let img = img.thumbnail(1280, 1280).to_rgba8();
-    let img = if blur > 0 { image::imageops::blur(&img, blur as f32 / 2.0) } else { img };
+    let mut img = if blur > 0 { image::imageops::blur(&img, blur as f32 / 2.0) } else { img };
+    if contrast != 100 || saturation != 100 {
+        let (c, s) = (contrast as f32 / 100.0, saturation as f32 / 100.0);
+        for px in img.pixels_mut() {
+            let [r, g, b] = [px[0] as f32, px[1] as f32, px[2] as f32];
+            let luma = 0.299 * r + 0.587 * g + 0.114 * b;
+            for (k, v) in [r, g, b].into_iter().enumerate() {
+                let v = luma + (v - luma) * s;
+                px[k] = ((v - 127.5) * c + 127.5).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
     let size = [img.width() as usize, img.height() as usize];
     let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
     Some(ctx.load_texture("finder-background", color, egui::TextureOptions::LINEAR))

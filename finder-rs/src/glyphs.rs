@@ -24,6 +24,9 @@ pub const SUN: Glyph = glyph!("sun");
 pub const MOON: Glyph = glyph!("moon");
 pub const THEME_SYSTEM: Glyph = glyph!("theme-system");
 pub const GEAR: Glyph = glyph!("gear");
+pub const LINK: Glyph = glyph!("link");
+pub const FOLDER_ENTER: Glyph = glyph!("folder-enter");
+pub const REFRESH: Glyph = glyph!("refresh");
 pub const CLOSE: Glyph = glyph!("close");
 pub const TAG: Glyph = glyph!("tag");
 pub const DRIVE: Glyph = glyph!("drive");
@@ -106,6 +109,8 @@ pub fn by_name(name: &str) -> Glyph {
         "zoom-in" => glyph!("zoom-in"),
         "zoom-out" => glyph!("zoom-out"),
         "bookmark" => glyph!("bookmark"),
+        "link" => glyph!("link"),
+        "folder-enter" => glyph!("folder-enter"),
         "sidebar-open" => glyph!("sidebar-open"),
         "sidebar-closed" => glyph!("sidebar-closed"),
         "dock-open" => glyph!("dock-open"),
@@ -157,8 +162,11 @@ pub fn segmented(ui: &mut egui::Ui, id: &str, size: f32, cells: &[Cell]) -> Segm
     let cell_size = egui::vec2(size + 16.0, CONTROL_H);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(cell_size.x * cells.len() as f32, cell_size.y), egui::Sense::hover());
     let visuals = ui.visuals().clone();
-    ui.painter().rect_filled(rect, 8.0, visuals.widgets.inactive.weak_bg_fill.gamma_multiply(0.9));
-    ui.painter().rect_stroke(rect, 8.0, egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color), egui::StrokeKind::Inside);
+    // like segmented_control of pyegui: the cells have the radius of the widgets, the frame two more
+    let inner = f32::from(visuals.widgets.inactive.corner_radius.nw).clamp(6.0, 12.0);
+    let outer = (inner + 2.0).min(CONTROL_H / 2.0);
+    ui.painter().rect_filled(rect, outer, visuals.widgets.inactive.weak_bg_fill.gamma_multiply(0.9));
+    ui.painter().rect_stroke(rect, outer, egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color), egui::StrokeKind::Inside);
     let mut out = Segments { clicked: None, responses: Vec::new() };
     for (i, c) in cells.iter().enumerate() {
         let cell_rect = egui::Rect::from_min_size(rect.min + egui::vec2(cell_size.x * i as f32, 0.0), cell_size);
@@ -168,9 +176,9 @@ pub fn segmented(ui: &mut egui::Ui, id: &str, size: f32, cells: &[Cell]) -> Segm
             response = response.on_hover_text(c.tip);
         }
         if c.on {
-            ui.painter().rect_filled(cell_rect.shrink(2.0), 6.0, visuals.selection.bg_fill);
+            ui.painter().rect_filled(cell_rect.shrink(2.0), inner, visuals.selection.bg_fill);
         } else if response.hovered() && c.enabled {
-            ui.painter().rect_filled(cell_rect.shrink(2.0), 6.0, visuals.widgets.hovered.weak_bg_fill);
+            ui.painter().rect_filled(cell_rect.shrink(2.0), inner, visuals.widgets.hovered.weak_bg_fill);
         }
         let tint = if c.on {
             Color32::WHITE
