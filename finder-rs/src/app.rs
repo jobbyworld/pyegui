@@ -283,6 +283,8 @@ pub struct FinderApp {
     pub new_window: Option<PathBuf>,
     window_serial: u64,
     backdrop_applied: bool,
+    #[cfg(target_os = "macos")]
+    native: Option<pyegui_core::window::NativeWindow>,
     corners_applied: bool,
     /// the keyboard goes back to the view (after a navigation, a search field that is still focused lets it go)
     focus_view: bool,
@@ -341,6 +343,7 @@ pub struct FinderApp {
     opened_loaded: std::cell::Cell<bool>,
     /// every tag, read once per version of the store (not once per row)
     all_tags: std::cell::RefCell<(u64, Vec<crate::tagstore::Tag>)>,
+    tag_counts: std::cell::RefCell<(u64, std::collections::HashMap<i64, usize>)>,
     /// the favorites of the sidebar as drawn at the last frame: their ids, the middle of their rows, the
     /// area of the section (where a folder can be dropped to add one)
     fav_ids: Vec<i64>,
@@ -595,6 +598,8 @@ impl FinderApp {
             new_window: None,
             window_serial: 0,
             backdrop_applied: false,
+            #[cfg(target_os = "macos")]
+            native: None,
             corners_applied: false,
             focus_view: false,
             custom_titlebar,
@@ -637,6 +642,7 @@ impl FinderApp {
             opened_cache: Default::default(),
             opened_loaded: Default::default(),
             all_tags: Default::default(),
+            tag_counts: Default::default(),
             fav_ids: Vec::new(),
             fav_rows: Vec::new(),
             fav_rect: None,
@@ -1623,10 +1629,10 @@ impl FinderApp {
         drag_window(ui, band);
         let row = band.width();
         let search_width = (row - TOOLBAR_FIXED).min(SEARCH_WIDTH);
-        let show_search = search_width >= SEARCH_MIN;
+        let mut show_search = search_width >= SEARCH_MIN;
         let show_view = row >= TOOLBAR_FIXED - 120.0;
         // what the right part takes, to keep the name of the folder out of it
-        let right_part = 2.0 * 34.0 + 12.0 + if show_search { search_width + 8.0 } else { 0.0 } + if show_view { 3.0 * 32.0 + 8.0 } else { 0.0 };
+        let right_of = |search: bool| 2.0 * 34.0 + 12.0 + if search { search_width + 8.0 } else { 0.0 } + if show_view { 3.0 * 32.0 + 8.0 } else { 0.0 };
         let height = band.height();
         ui.spacing_mut().interact_size.y = glyphs::CONTROL_H;
         ui.allocate_ui_with_layout(egui::vec2(row, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -1670,7 +1676,17 @@ impl FinderApp {
                 self.open_in_system();
             }
             ui.add_space(8.0);
-            let room = (ui.available_width() - right_part).max(60.0);
+            // the search is hidden as soon as the whole combo of the folder no longer fits
+            if show_search {
+                let folder = self.viewer_path().map(Path::to_path_buf).unwrap_or_else(|| self.folder().to_path_buf());
+                let name = folder.file_name().map_or_else(|| folder.display().to_string(), |n| n.to_string_lossy().into_owned());
+                let text = ui.painter().layout_no_wrap(name, egui::FontId::proportional(15.0), egui::Color32::WHITE).size().x;
+                let natural = text + 6.0 + 16.0 + 6.0 + 6.0 + 12.0 + 6.0 + 8.0;
+                if ui.available_width() - right_of(true) < natural {
+                    show_search = false;
+                }
+            }
+            let room = (ui.available_width() - right_of(show_search)).max(60.0);
             self.folder_name(ui, room);
             // the right part, from the edge: the terminal and the panes, the search, the view
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2071,6 +2087,17 @@ impl FinderApp {
     }
 
     /// The tags of the store, read once per version of the store
+    /// The number of items tagged with each tag (or a tag under it), kept until the store changes
+    fn tag_count(&self, id: i64) -> usize {
+        let Some(store) = &self.tags else { return 0 };
+        let mut known = self.tag_counts.borrow_mut();
+        if known.0 != store.version + 1 {
+            let counts = store.all().iter().map(|t| (t.id, store.tagged_with(t.id).len())).collect();
+            *known = (store.version + 1, counts);
+        }
+        known.1.get(&id).copied().unwrap_or(0)
+    }
+
     pub fn tag_list(&self) -> Vec<crate::tagstore::Tag> {
         let Some(store) = &self.tags else { return Vec::new() };
         let mut known = self.all_tags.borrow_mut();
@@ -2214,7 +2241,13 @@ impl FinderApp {
                 // deletes the tag, and it is gray again as soon as the pointer leaves it
                 let armed = self.tag_armed == Some(tag.id);
                 let mut over_trash = false;
-                if (ui.rect_contains_pointer(rect) && self.tag_drag.is_none()) || armed {
+                let shown_trash = (ui.rect_contains_pointer(rect) && self.tag_drag.is_none()) || armed;
+                if !shown_trash {
+                    let count = self.tag_count(tag.id);
+                    let tint = if on { Color32::from_white_alpha(200) } else { ui.visuals().weak_text_color() };
+                    ui.painter().text(egui::pos2(rect.right() - 10.0, rect.center().y), egui::Align2::RIGHT_CENTER, count.to_string(), egui::TextStyle::Small.resolve(ui.style()), tint);
+                }
+                if shown_trash {
                     let trash = egui::Rect::from_center_size(egui::pos2(rect.right() - 16.0, rect.center().y), egui::vec2(24.0, 22.0));
                     let trash_response = ui.interact(trash, ui.id().with(("tag-trash", tag.id)), egui::Sense::click());
                     over_trash = trash_response.hovered();
@@ -2662,6 +2695,8 @@ impl eframe::App for FinderApp {
             self.open_in_new_tab(self.folder().to_path_buf()); // for the checks with two tabs of folder
         }
         pyegui_core::native_dnd::set_window(&*frame);
+        #[cfg(target_os = "macos")]
+        pyegui_core::window::mark_window(&*frame);
         // the window buttons centered in the top band
         #[cfg(target_os = "macos")]
         pyegui_core::window::place_window_buttons(&*frame, 20.0, TOP_H as f64 / 2.0, 20.0);
@@ -2733,6 +2768,29 @@ impl FinderApp {
         }
     }
 
+    /// The native glass of a second window: found among the windows of the app (its viewport gives no handle),
+    /// then the blur like the first window
+    #[cfg(target_os = "macos")]
+    fn native_backdrop(&mut self, ctx: &egui::Context, glass: bool, dark: bool) {
+        if self.native.is_none() && glass && ctx.cumulative_frame_nr() > 2 {
+            if let Some(native) = pyegui_core::window::claim_new_window() {
+                if let Some(name) = backdrop_name() {
+                    let _ = pyegui_core::window::apply_backdrop(&native, name);
+                }
+                self.native = Some(native);
+            }
+        }
+        if self.native.is_some() {
+            let filter = if glass { self.settled_blur(ctx)[usize::from(dark)] } else { [0, 100, 100] };
+            if filter != self.applied_filter {
+                self.applied_filter = filter;
+                if let Some(native) = &self.native {
+                    let _ = pyegui_core::window::set_window_filter(native, filter[0], filter[1] as f32 / 100.0, filter[2] as f32 / 100.0);
+                }
+            }
+        }
+    }
+
     /// Opens the windows asked for and draws them; the closed ones are dropped
     fn other_windows(&mut self, ctx: &egui::Context) {
         if let Some(folder) = self.new_window.take() {
@@ -2756,9 +2814,17 @@ impl FinderApp {
             let mut keep = true;
             ctx.show_viewport_immediate(*id, builder, |ui, _class| {
                 ui.push_id(*id, |ui| {
-                    // no native backdrop here: the window is filled
-                    let rect = ui.ctx().content_rect();
-                    ui.painter().rect_filled(rect, 0.0, style::glass_base(ui.visuals().dark_mode, None));
+                    // no native backdrop here (no handle of the window): the layers keep their own opacity over a
+                    // light base, not over an opaque fill that hides them. A color or a picture is painted by `draw`
+                    let dark = ui.visuals().dark_mode;
+                    let glass = window.looks[usize::from(dark)].background == Background::Glass;
+                    #[cfg(target_os = "macos")]
+                    window.native_backdrop(ui.ctx(), glass, dark);
+                    if glass && window.native.is_none() {
+                        let rect = ui.ctx().content_rect();
+                        let base = style::glass_base(dark, None);
+                        ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 60));
+                    }
                     window.draw(ui);
                 });
                 if ui.ctx().input(|i| i.viewport().close_requested()) {
