@@ -318,7 +318,11 @@ pub struct FinderApp {
     palette_cursor: usize,
     /// what is typed in the field of the page of the tags (a name or a path a/b/c)
     palette_tag_query: String,
+    /// the Base SQL pane
+    pub sql: crate::sqlpane::SqlState,
     pub notice: Option<String>,
+    /// the walk of "Indexer le dossier" running in a thread: the folder, the count so far, the result when done
+    indexing: Option<(PathBuf, Arc<std::sync::atomic::AtomicUsize>, Arc<Mutex<Option<Option<usize>>>>)>,
     dock: Option<egui_tiles::Tree<Pane>>,
     /// what the system told about the disk, newest last
     pub activity: std::collections::VecDeque<String>,
@@ -624,7 +628,9 @@ impl FinderApp {
             palette_tags: false,
             palette_cursor: 0,
             palette_tag_query: String::new(),
+            sql: Default::default(),
             notice: None,
+            indexing: None,
             dock: Some(dock::restore(saved.dock.as_deref())),
             activity: Default::default(),
             select_after: Vec::new(),
@@ -677,6 +683,46 @@ impl FinderApp {
         }
     }
 
+    /// Records the folder and everything it contains in the database, in a thread (one walk at a time);
+    /// the result goes to the Activités pane
+    pub fn index_folder(&mut self, folder: PathBuf) {
+        if self.indexing.is_some() {
+            self.activity.push_back("Indexation déjà en cours".into());
+            return;
+        }
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let result = Arc::new(Mutex::new(None));
+        self.activity.push_back(format!("Indexation de {}…", folder.display()));
+        let (c, r, f) = (count.clone(), result.clone(), folder.clone());
+        std::thread::spawn(move || {
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            let n = crate::tagstore::index_tree(None, &f, &cancel, &c);
+            *r.lock().unwrap() = Some(n);
+        });
+        self.indexing = Some((folder, count, result));
+    }
+
+    /// Called at each frame: reports the end of the walk
+    pub fn is_indexing(&self) -> bool {
+        self.indexing.is_some()
+    }
+
+    fn poll_indexing(&mut self, ctx: &egui::Context) {
+        let Some((folder, _, result)) = &self.indexing else { return };
+        let done = *result.lock().unwrap();
+        match done {
+            Some(n) => {
+                let text = match n {
+                    Some(n) => format!("{n} éléments indexés dans {}", folder.display()),
+                    None => format!("Indexation de {} impossible", folder.display()),
+                };
+                self.activity.push_back(text);
+                self.indexing = None;
+            }
+            None => ctx.request_repaint_after(std::time::Duration::from_millis(250)),
+        }
+    }
+
     fn after_navigation(&mut self) {
         // leaving a tag view: going to a folder shows the folder
         self.tag_filter = None;
@@ -685,6 +731,13 @@ impl FinderApp {
         self.search.clear();
         self.path_text = None;
         self.focus_view = true;
+        // navigation records the folder and its files in the database, in a thread: the window never waits for it
+        if self.tags.is_some() {
+            let folder = self.folder().to_path_buf();
+            std::thread::spawn(move || {
+                crate::tagstore::index_children(None, &folder);
+            });
+        }
     }
 
     /// The markdown file to export: the one selected, else the one open in the central view
@@ -1205,6 +1258,7 @@ impl FinderApp {
             }
         }
         self.palette_modal(ctx);
+        self.poll_indexing(ctx);
         if let Some(text) = self.notice.clone() {
             let mut close = false;
             egui::Modal::new(egui::Id::new("notice")).show(ctx, |ui| {

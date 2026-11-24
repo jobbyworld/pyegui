@@ -126,6 +126,10 @@ pub static ACTIONS: &[Action] = &[
     Action { category: "Outils", label: "Exporter en PDF", icon: "page", shortcut: None, enabled: |a| a.markdown_target().is_some(), in_menu: true, run: |app, _| {
         if let Some(source) = app.markdown_target() { export_markdown_pdf(source); }
     }},
+    Action { category: "Outils", label: "Indexer le dossier", icon: "search", shortcut: None, enabled: |a| !a.is_indexing(), in_menu: true, run: |app, _| {
+        let folder = target_directory(app);
+        app.index_folder(folder);
+    }},
     Action { category: "Chemin", label: "Copier le chemin", icon: "copy", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::C)), enabled: has_selection, in_menu: true, run: |app, ctx| {
         let text = app.selected_paths().iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>().join("\n");
         ctx.copy_text(text);

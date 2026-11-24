@@ -33,6 +33,7 @@ import pyegui
 
 from pyegui import (
     RGB,
+    table,
     FileTransfer,
     drop_operation,
     dropped_files,
@@ -699,6 +700,65 @@ class TagStore:
             if db is not self.db:
                 db.close()
 
+    def index_children(self, folder):
+        """records a folder and its direct entries (no walk below) in the table files: what
+        navigation does when a folder is shown. The entries that vanished from it are dropped.
+        Meant for a thread (its own connection); returns the number of entries, or None when the
+        folder cannot be read or the base is busy (a walk holds the write lock): nothing is lost,
+        the next visit tries again"""
+        folder = Path(folder)
+        key = tag_key(folder)
+        started = time.time()
+        try:
+            entries = list(os.scandir(folder))
+            rows = []
+            for item in entries:
+                try:
+                    is_dir = item.is_dir(follow_symlinks=False)
+                    info = item.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                rows.append(
+                    (os.path.normcase(item.path), item.name, key, int(is_dir),
+                     0 if is_dir else info.st_size, info.st_mtime, None if is_dir else started)
+                )
+            if self.path == ":memory:":
+                db = self.db
+            else:
+                db = sqlite3.connect(str(self.path), timeout=2)
+        except OSError:
+            return None
+        try:
+            db.execute(
+                """INSERT INTO files (path, name, parent, is_dir, size, modified, last_full_scan)
+                   VALUES (?, ?, ?, 1, 0, ?, ?)
+                   ON CONFLICT(path) DO UPDATE SET name = excluded.name, parent = excluded.parent,
+                       is_dir = 1, modified = excluded.modified, last_full_scan = excluded.last_full_scan""",
+                (key, folder.name or str(folder), tag_key(folder.parent), folder.stat().st_mtime, started),
+            )
+            db.executemany(
+                """INSERT INTO files (path, name, parent, is_dir, size, modified, last_seen)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(path) DO UPDATE SET name = excluded.name, parent = excluded.parent,
+                       is_dir = excluded.is_dir, size = excluded.size,
+                       modified = excluded.modified, last_seen = excluded.last_seen""",
+                rows,
+            )
+            found = {r[0] for r in rows}
+            for path, is_dir in db.execute("SELECT path, is_dir FROM files WHERE parent = ? AND path != ?", (key, key)).fetchall():
+                if path in found:
+                    continue
+                db.execute("DELETE FROM files WHERE path = ?", (path,))
+                if is_dir:  # a vanished folder takes what was recorded below it
+                    db.execute("DELETE FROM files WHERE path LIKE ? ESCAPE '\\'", (like_inside(path),))
+            db.commit()
+            return len(rows)
+        except (sqlite3.Error, OSError):
+            return None
+        finally:
+            if db is not self.db:
+                db.close()
+
     @staticmethod
     def _checkpoint(db):
         """gives the write-ahead log back to the base file and empties it (it grows with a long
@@ -1102,7 +1162,11 @@ WATCH_COLORS = {
     CREATED: (34, 197, 94), MODIFIED: (234, 179, 8), DELETED: (239, 68, 68), RENAMED: (59, 130, 246),
 }
 WATCH_PANES = ("Dossiers surveillés", "Activités")  # closed until a folder is watched
-JOB_PANES = ("Indexation",)  # closed until an indexation starts
+JOB_PANES = ("Indexation", "Base SQL")  # closed until an indexation starts / until opened from the palette
+DEBUG_LIMIT = 200  # rows shown by the Base SQL pane
+debug_choice = Int(0)  # the Base SQL pane: the table picked,
+debug_query = Str("")  # the query shown (a SELECT: the base is opened read-only),
+debug_state = {"choice": -1, "headers": [], "rows": [], "error": "", "more": False, "ms": 0.0}  # and what it gave
 indexing = {"running": False, "count": 0, "folder": "", "result": None}  # the folder index job
 note_text = Str("")  # the text of the Notes pane, for the item it holds
 note_of = {"path": ""}  # the item the Notes pane holds
@@ -1466,6 +1530,18 @@ def is_dir_within(path, seconds=1.5):
     return bool(answer and answer[0])
 
 
+def record_visit():
+    """navigation records the folder shown and its files in the SQLite base (a thread, so the
+    window never waits for the disk or the write lock)"""
+    folder = current()
+
+    def work():
+        if tags.index_children(folder) is not None:
+            tags.index_pdfs(folder)  # the page count and the metadata of the new or changed PDF
+
+    threading.Thread(target=work, daemon=True).start()
+
+
 def go(folder):
     folder = Path(folder)
     close_reader()  # moving to a folder shows its files
@@ -1478,6 +1554,7 @@ def go(folder):
     deselect()
     search.value = ""
     tags.opened(folder)
+    record_visit()
 
 
 def back():
@@ -1487,6 +1564,7 @@ def back():
     if position.value > 0:
         position.value -= 1
         deselect()
+        record_visit()
 
 
 def up():
@@ -1502,6 +1580,7 @@ def forward():
     if position.value < len(history) - 1:
         position.value += 1
         deselect()
+        record_visit()
 
 
 def open_file(path):
@@ -2458,6 +2537,81 @@ def find_params():
         find_pdf_text.value,
     )
     return (find_name.value, find_ext.value, root, find_folders.value, pdf)
+
+
+def run_debug_query(sql):
+    """runs a query on the base, opened read-only (nothing can be changed from the pane), and keeps
+    the first DEBUG_LIMIT rows for the Base SQL pane"""
+    started = time.time()
+    debug_state.update(headers=[], rows=[], error="", more=False)
+    db = None
+    try:
+        if tags.path == ":memory:":
+            db = tags.db
+        else:
+            db = sqlite3.connect(Path(tags.path).as_uri() + "?mode=ro", uri=True, timeout=2)
+        cursor = db.execute(sql)
+        debug_state["headers"] = [d[0] for d in cursor.description or []]
+        got = cursor.fetchmany(DEBUG_LIMIT + 1)
+        debug_state["more"] = len(got) > DEBUG_LIMIT
+
+        def cell(value):
+            if value is None:
+                return "NULL"
+            if isinstance(value, bytes):
+                return f"<{len(value)} octets>"
+            return str(value).replace("\n", " ")[:300]
+
+        debug_state["rows"] = [[cell(v) for v in row] for row in got[:DEBUG_LIMIT]]
+    except sqlite3.Error as error:
+        debug_state["error"] = str(error)
+    finally:
+        if db is not None and db is not tags.db:
+            db.close()
+    debug_state["ms"] = (time.time() - started) * 1000
+
+
+def debug_panel():
+    """the Base SQL pane: the tables of the base of the tags and of the index, the rows of the one picked
+    or of any query (read only), to see what the apps record"""
+    names = [
+        n for (n,) in tags.db.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        )
+    ]
+    if not names:
+        weak("La base est vide")
+        return
+    small(str(tags.path))
+    debug_choice.value = min(debug_choice.value, len(names) - 1)
+    combo_box(debug_choice, list(range(len(names))), names, "Table")
+    if debug_state["choice"] != debug_choice.value:  # another table: its first rows
+        debug_state["choice"] = debug_choice.value
+        debug_query.value = f'SELECT * FROM "{names[debug_choice.value]}" LIMIT {DEBUG_LIMIT}'
+        run_debug_query(debug_query.value)
+    text_edit_singleline(debug_query, hint_text="SELECT ...")
+
+    def buttons():
+        if button_clicked("Exécuter"):
+            run_debug_query(debug_query.value)
+        if button_clicked("Compter"):
+            debug_query.value = f'SELECT COUNT(*) AS lignes FROM "{names[debug_choice.value]}"'
+            run_debug_query(debug_query.value)
+        if button_clicked("Schéma"):
+            debug_query.value = f'PRAGMA table_info("{names[debug_choice.value]}")'
+            run_debug_query(debug_query.value)
+
+    horizontal(buttons)
+    if debug_state["error"]:
+        colored_label((239, 68, 68), debug_state["error"])
+        return
+    count = len(debug_state["rows"])
+    weak(f"{count}{'+' if debug_state['more'] else ''} lignes · {debug_state['ms']:.0f} ms")
+    if debug_state["headers"]:
+        table(
+            debug_state["headers"], debug_state["rows"], id="debug_sql",
+            column_widths=[120] * len(debug_state["headers"]),
+        )
 
 
 def run_find(params):
@@ -5423,6 +5577,7 @@ PANES = {
     "Dossiers surveillés": zone_pane("dock", lambda: scroll_area_vertical(watched_panel)),
     "Activités": zone_pane("dock", lambda: scroll_area_vertical(activity_panel)),
     "Indexation": zone_pane("dock", lambda: scroll_area_vertical(index_panel)),
+    "Base SQL": zone_pane("dock", lambda: scroll_area_both(debug_panel)),
 }
 # the dock at the bottom, under the files
 BOTTOM_PANES = {

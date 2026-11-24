@@ -17,6 +17,8 @@ pub enum Pane {
     Actions,
     Appearance,
     Activity,
+    /// the rows of the database, read only
+    Sql,
     Tags,
     Recent,
     Search,
@@ -25,7 +27,7 @@ pub enum Pane {
     Python,
 }
 
-pub const PANES: [Pane; 9] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::Recent, Pane::Search, Pane::Appearance, Pane::Activity, Pane::Shell, Pane::Python];
+pub const PANES: [Pane; 10] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::Recent, Pane::Search, Pane::Appearance, Pane::Activity, Pane::Sql, Pane::Shell, Pane::Python];
 /// the panes of the first dock at the right of the folder, and those of the terminals below
 const SIDE: [Pane; 7] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::Recent, Pane::Search, Pane::Appearance, Pane::Activity];
 const TERMINALS: [Pane; 2] = [Pane::Shell, Pane::Python];
@@ -43,6 +45,7 @@ impl Pane {
             Pane::Actions => "panes",
             Pane::Appearance => "sun",
             Pane::Activity => "refresh",
+            Pane::Sql => "list",
             Pane::Tags => "tag",
             Pane::Recent => "list",
             Pane::Search => "search",
@@ -58,6 +61,7 @@ impl Pane {
             Pane::Actions => "Actions",
             Pane::Appearance => "Apparence",
             Pane::Activity => "Activités",
+            Pane::Sql => "Base SQL",
             Pane::Shell => "Shell",
             Pane::Python => "Python",
             Pane::Tags => "Étiquettes",
@@ -438,6 +442,7 @@ impl Behavior<'_> {
             Pane::Actions => actions_pane(self.app, ui),
             Pane::Appearance => self.app.appearance_menu(ui),
             Pane::Activity => activity_pane(self.app, ui),
+            Pane::Sql => crate::sqlpane::pane(&mut self.app.sql, ui),
             Pane::Tags => crate::tagsui::pane(self.app, ui),
             Pane::Recent => crate::tagsui::recent_pane(self.app, ui),
             Pane::Search => crate::search::pane(self.app, ui),

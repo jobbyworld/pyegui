@@ -33,6 +33,15 @@ CREATE TABLE IF NOT EXISTS files (
     open_count INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS files_last_opened ON files(last_opened);
+CREATE TABLE IF NOT EXISTS pdf_info (
+    path TEXT PRIMARY KEY,
+    size INTEGER, mtime REAL,  -- of the file when it was read: another one means read again
+    pages INTEGER, encrypted INTEGER, needs_password INTEGER,
+    can_print INTEGER, can_copy INTEGER, can_modify INTEGER,
+    can_annotate INTEGER, can_fill_forms INTEGER, can_assemble INTEGER,
+    title TEXT, author TEXT, subject TEXT, keywords TEXT, creator TEXT, producer TEXT,
+    created REAL, modified REAL, pdf_version TEXT, error TEXT, read_at REAL
+);
 CREATE TABLE IF NOT EXISTS favorites (
     id INTEGER PRIMARY KEY,
     path TEXT NOT NULL UNIQUE,
@@ -151,6 +160,164 @@ pub fn key(path: &Path) -> String {
     if cfg!(windows) { text.to_lowercase() } else { text }
 }
 
+/// The columns of `files` filled by the index (the same as `INDEX_COLUMNS` of finder.py), added to the bases made before it
+const INDEX_COLUMNS: [(&str, &str); 7] = [
+    ("name", "TEXT"),
+    ("parent", "TEXT"),
+    ("is_dir", "INTEGER"),
+    ("size", "INTEGER"),
+    ("modified", "REAL"),
+    ("last_seen", "REAL"),
+    ("last_full_scan", "REAL"),
+];
+
+fn add_index_columns(db: &Connection) {
+    let have: HashSet<String> = db
+        .prepare("PRAGMA table_info(files)")
+        .and_then(|mut s| s.query_map([], |r| r.get::<_, String>(1)).map(|rows| rows.flatten().collect()))
+        .unwrap_or_default();
+    for (column, kind) in INDEX_COLUMNS {
+        if !have.contains(column) {
+            let _ = db.execute_batch(&format!("ALTER TABLE files ADD COLUMN {column} {kind}"));
+        }
+    }
+}
+
+fn secs(time: std::io::Result<SystemTime>) -> f64 {
+    time.ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+}
+
+/// Records a folder and its direct entries (no walk below) in the table `files`, what navigation does
+/// when a folder is shown; the entries that vanished from it are dropped. It opens its own connection,
+/// so it is meant for a thread. `None` when the folder cannot be read or the base is busy: the next visit tries again.
+pub fn index_children(db_path: Option<&Path>, folder: &Path) -> Option<usize> {
+    let mut db = open_index(db_path)?;
+    record_folder(&mut db, folder).map(|(n, _)| n)
+}
+
+/// Reads the metadata (page count first) of the PDF among `rows` that are new or changed since they were
+/// last read (their size or date is not the one of `pdf_info`), into the table `pdf_info` of finder.py.
+#[cfg(feature = "pdf")]
+fn read_pdfs(db: &mut Connection, rows: &[(String, String, bool, i64, f64)]) {
+    use pyegui_core::pdf::{info_of_path, PERMISSIONS};
+    for (path, name, is_dir, size, modified) in rows {
+        if *is_dir || !name.to_lowercase().ends_with(".pdf") {
+            continue;
+        }
+        let up_to_date = db
+            .query_row("SELECT size, mtime FROM pdf_info WHERE path = ?", params![path], |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, Option<f64>>(1)?)))
+            .optional()
+            .ok()
+            .flatten()
+            .is_some_and(|(s, m)| s == Some(*size) && m == Some(*modified));
+        if up_to_date {
+            continue;
+        }
+        let info = info_of_path(path);
+        // a file that could not be read tells nothing about its encryption and its rights
+        let known = info.error.is_none();
+        let flag = |v: bool| known.then_some(i64::from(v));
+        let allowed = |bit: u32| flag(info.permissions.is_none_or(|p| p & (1 << (bit - 1)) != 0));
+        let rights: Vec<Option<i64>> = PERMISSIONS.iter().map(|(_, bit)| allowed(*bit)).collect();
+        let _ = db.execute(
+            "INSERT OR REPLACE INTO pdf_info (path, size, mtime, pages, encrypted, needs_password, can_print, can_copy, can_modify,
+                 can_annotate, can_fill_forms, can_assemble, title, author, subject, keywords, creator, producer,
+                 created, modified, pdf_version, error, read_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            params![
+                path, size, modified, info.pages.map(|n| n as i64), flag(info.encrypted), flag(info.needs_password),
+                rights[0], rights[1], rights[2], rights[3], rights[4], rights[5],
+                info.title, info.author, info.subject, info.keywords, info.creator, info.producer,
+                info.created, info.modified, info.pdf_version, info.error, now()
+            ],
+        );
+    }
+}
+
+fn open_index(db_path: Option<&Path>) -> Option<Connection> {
+    let path = db_path.map(Path::to_path_buf).unwrap_or_else(default_path);
+    let db = Connection::open(path).ok()?;
+    db.busy_timeout(std::time::Duration::from_secs(2)).ok()?;
+    add_index_columns(&db);
+    Some(db)
+}
+
+/// Records everything under `root` (the action "Indexer le dossier"): one connection, one transaction
+/// per folder, symbolic links listed but not followed. Returns the number of entries, `None` if `cancel` was set.
+pub fn index_tree(db_path: Option<&Path>, root: &Path, cancel: &std::sync::atomic::AtomicBool, count: &std::sync::atomic::AtomicUsize) -> Option<usize> {
+    use std::sync::atomic::Ordering;
+    let mut db = open_index(db_path)?;
+    let mut todo = vec![root.to_path_buf()];
+    let mut total = 0;
+    while let Some(folder) = todo.pop() {
+        if cancel.load(Ordering::Relaxed) {
+            return None;
+        }
+        if let Some((n, subfolders)) = record_folder(&mut db, &folder) {
+            total += n;
+            count.store(total, Ordering::Relaxed);
+            todo.extend(subfolders);
+        }
+    }
+    Some(total)
+}
+
+fn record_folder(db: &mut Connection, folder: &Path) -> Option<(usize, Vec<PathBuf>)> {
+    let started = now();
+    let parent = key(folder);
+    let mut rows = Vec::new();
+    let mut subfolders = Vec::new();
+    for entry in std::fs::read_dir(folder).ok()?.flatten() {
+        let Ok(info) = std::fs::symlink_metadata(entry.path()) else { continue };
+        let is_dir = info.is_dir();
+        if is_dir {
+            subfolders.push(entry.path());
+        }
+        rows.push((key(&entry.path()), entry.file_name().to_string_lossy().into_owned(), is_dir, if is_dir { 0 } else { info.len() as i64 }, secs(info.modified())));
+    }
+    let tx = db.transaction().ok()?;
+    let folder_modified = secs(std::fs::metadata(folder).and_then(|m| m.modified()));
+    let name = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| folder.to_string_lossy().into_owned());
+    let up = folder.parent().map(key).unwrap_or_else(|| parent.clone());
+    tx.execute(
+        "INSERT INTO files (path, name, parent, is_dir, size, modified, last_full_scan) VALUES (?, ?, ?, 1, 0, ?, ?)
+         ON CONFLICT(path) DO UPDATE SET name = excluded.name, parent = excluded.parent, is_dir = 1,
+             modified = excluded.modified, last_full_scan = excluded.last_full_scan",
+        params![parent, name, up, folder_modified, started],
+    )
+    .ok()?;
+    for (path, name, is_dir, size, modified) in &rows {
+        tx.execute(
+            "INSERT INTO files (path, name, parent, is_dir, size, modified, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(path) DO UPDATE SET name = excluded.name, parent = excluded.parent, is_dir = excluded.is_dir,
+                 size = excluded.size, modified = excluded.modified, last_seen = excluded.last_seen",
+            params![path, name, parent, is_dir, size, modified, if *is_dir { None } else { Some(started) }],
+        )
+        .ok()?;
+    }
+    let found: HashSet<&String> = rows.iter().map(|r| &r.0).collect();
+    let known: Vec<(String, bool)> = {
+        let mut statement = tx.prepare("SELECT path, COALESCE(is_dir, 0) FROM files WHERE parent = ? AND path != ?").ok()?;
+        let all = statement.query_map(params![parent, parent], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0))).ok()?;
+        all.flatten().collect()
+    };
+    for (path, is_dir) in known {
+        if found.contains(&path) {
+            continue;
+        }
+        let _ = tx.execute("DELETE FROM files WHERE path = ?", params![path]);
+        if is_dir {
+            // a vanished folder takes what was recorded below it
+            let escaped = path.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+            let _ = tx.execute("DELETE FROM files WHERE path LIKE ? ESCAPE '\\'", params![format!("{escaped}{}%", std::path::MAIN_SEPARATOR)]);
+        }
+    }
+    tx.commit().ok()?;
+    #[cfg(feature = "pdf")]
+    read_pdfs(db, &rows);
+    Some((rows.len(), subfolders))
+}
+
 fn now() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
@@ -178,6 +345,7 @@ impl TagStore {
             .map(|n| n > 0)
             .unwrap_or(true);
         db.execute_batch(SCHEMA)?;
+        add_index_columns(&db);
         let store = TagStore { db, version: 0 };
         if !had_favorites && path.is_none_or(|p| p.as_os_str() != ":memory:") {
             for (label, icon, path) in default_favorites() {
@@ -665,5 +833,39 @@ mod tests {
         let t = s.all().into_iter().find(|t| t.id == id).unwrap();
         assert_eq!((t.name.as_str(), t.color.as_str()), ("C", "#123456"));
         assert_eq!(s.find_path(&p("a/c")), Some(id));
+    }
+}
+
+#[cfg(test)]
+mod index_children_tests {
+    use super::*;
+
+    #[test]
+    fn records_and_drops_direct_entries() {
+        let dir = std::env::temp_dir().join(format!("idxkids{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("x.txt"), "hi").unwrap();
+        std::fs::write(dir.join("y.txt"), "").unwrap();
+        let db = std::env::temp_dir().join(format!("idxkids{}.db", std::process::id()));
+        TagStore::open(Some(&db)).unwrap();
+        assert_eq!(index_children(Some(&db), &dir), Some(3));
+        #[cfg(feature = "pdf")]
+        {
+            std::fs::write(dir.join("bad.pdf"), "not a pdf").unwrap();
+            index_children(Some(&db), &dir);
+            let c = Connection::open(&db).unwrap();
+            let n: i64 = c.query_row("SELECT COUNT(*) FROM pdf_info WHERE path = ?", params![key(&dir.join("bad.pdf"))], |r| r.get(0)).unwrap();
+            assert_eq!(n, 1, "a PDF is read into pdf_info (here with an error)");
+            std::fs::remove_file(dir.join("bad.pdf")).unwrap();
+            index_children(Some(&db), &dir);
+        }
+        std::fs::remove_file(dir.join("y.txt")).unwrap();
+        std::fs::remove_dir(dir.join("sub")).unwrap();
+        assert_eq!(index_children(Some(&db), &dir), Some(1));
+        let c = Connection::open(&db).unwrap();
+        let n: i64 = c.query_row("SELECT COUNT(*) FROM files WHERE parent = ?", params![key(&dir)], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
