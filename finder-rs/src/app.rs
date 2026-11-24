@@ -2820,7 +2820,12 @@ impl FinderApp {
                     let glass = window.looks[usize::from(dark)].background == Background::Glass;
                     #[cfg(target_os = "macos")]
                     window.native_backdrop(ui.ctx(), glass, dark);
-                    if glass && window.native.is_none() {
+                    // the native backdrop exists on macOS only
+                    #[cfg(target_os = "macos")]
+                    let has_native = window.native.is_some();
+                    #[cfg(not(target_os = "macos"))]
+                    let has_native = false;
+                    if glass && !has_native {
                         let rect = ui.ctx().content_rect();
                         let base = style::glass_base(dark, None);
                         ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 60));
