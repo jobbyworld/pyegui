@@ -93,6 +93,17 @@ pub fn is_markdown(path: &Path) -> bool {
     path.extension().is_some_and(|e| matches!(e.to_string_lossy().to_lowercase().as_str(), "md" | "markdown"))
 }
 
+/// Opens an URL with the application the OS registered for its scheme. eframe's native backends
+/// ignore `Context::open_url` for a custom scheme such as `claude://`, so the OS is asked directly.
+pub fn open_url(url: &str) {
+    #[cfg(target_os = "macos")]
+    let _ = Command::new("open").arg(url).spawn();
+    #[cfg(windows)]
+    let _ = Command::new("rundll32").arg("url.dll,FileProtocolHandler").arg(url).spawn();
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let _ = Command::new("xdg-open").arg(url).spawn();
+}
+
 /// `claude://code/new?folder=...` or `claude://cowork/new?folder=...`
 pub fn claude_url(mode: &str, folder: &Path) -> String {
     let mut out = String::new();

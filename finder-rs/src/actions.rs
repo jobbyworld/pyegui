@@ -97,10 +97,10 @@ pub static ACTIONS: &[Action] = &[
         if let Some(command) = openapps::typora_command() { openapps::launch(command, &typora_targets(app)); }
     }},
     Action { category: "Fichier", label: "Ouvrir avec Claude (Code)", icon: "claude", shortcut: None, enabled: claude_available, in_menu: true, run: |app, ctx| {
-        ctx.open_url(egui::OpenUrl::same_tab(openapps::claude_url("code", &target_directory(app))));
+        openapps::open_url(&openapps::claude_url("code", &target_directory(app)));
     }},
     Action { category: "Fichier", label: "Ouvrir avec Claude (Cowork)", icon: "claude", shortcut: None, enabled: claude_available, in_menu: true, run: |app, ctx| {
-        ctx.open_url(egui::OpenUrl::same_tab(openapps::claude_url("cowork", &target_directory(app))));
+        openapps::open_url(&openapps::claude_url("cowork", &target_directory(app)));
     }},
     Action { category: "Fichier", label: "Ajouter aux favoris", icon: "bookmark", shortcut: None, enabled: always, in_menu: true, run: |app, _| app.add_favorites() },
     Action { category: "Fichier", label: "Nouvelle fenêtre", icon: "dock", shortcut: cmd(Key::N), enabled: always, in_menu: true, run: |app, _| app.new_window = Some(app.new_target()) },
