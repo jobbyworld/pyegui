@@ -53,7 +53,7 @@ THEMES = [
       "vertical_centered", "vertical_centered_justified", "centered_and_justified", "columns",
       "grid", "end_row", "group", "Group", "indent", "scope", "Scope", "Layout", "LayoutType",
       "frame", "collapsing", "add_space", "separator", "set_width", "set_min_width",
-      "set_max_width", "set_height", "set_min_height", "set_max_height", "available_width",
+      "set_max_width", "set_height", "set_min_height", "set_max_height", "available_width", "text_width",
       "available_height", "scroll_area_vertical", "scroll_area_horizontal", "scroll_area_both",
       "scroll_to_cursor", "scroll_to_rect", "disable", "add_enabled", "is_enabled", "set_invisible", "is_visible",
       "set_opacity"]),

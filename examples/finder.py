@@ -128,6 +128,7 @@ from pyegui import (
     terminal,
     text_edit_multiline,
     text_edit_singleline,
+    text_width,
     toggle_value,
     tooltip,
     top_panel,
@@ -210,6 +211,13 @@ CREATE TABLE IF NOT EXISTS pdf_info (
     title TEXT, author TEXT, subject TEXT, keywords TEXT, creator TEXT, producer TEXT,
     created REAL, modified REAL, pdf_version TEXT, error TEXT, read_at REAL
 );
+CREATE TABLE IF NOT EXISTS favorites (
+    id INTEGER PRIMARY KEY,
+    path TEXT NOT NULL UNIQUE,
+    label TEXT NOT NULL,
+    icon TEXT NOT NULL DEFAULT 'folder',
+    position INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS notes (
     path TEXT PRIMARY KEY,
     text TEXT NOT NULL,
@@ -229,6 +237,26 @@ def default_path():
     else:
         base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
     return base / "Finder" / "tags.db"
+
+
+def default_favorites():
+    """what a new database starts with: the home folder and its usual folders that exist, as (label, icon, path)"""
+    home = Path.home()
+    favorites = [(home.name or "Départ", "home", str(home))]
+    movies = "Movies" if sys.platform == "darwin" else "Videos"
+    for title, icon, name in (
+        ("Bureau", "desktop", "Desktop"),
+        ("Documents", "document", "Documents"),
+        ("Téléchargements", "download", "Downloads"),
+        ("Images", "image", "Pictures"),
+        ("Musique", "folder", "Music"),
+        ("Vidéos", "folder", movies),
+    ):
+        if (home / name).is_dir():
+            favorites.append((title, icon, str(home / name)))
+    if sys.platform == "darwin":
+        favorites.append(("Applications", "folder", "/Applications"))
+    return favorites
 
 
 def like_inside(stored):
@@ -253,7 +281,18 @@ class TagStore:
             # no longer blocks the commit of the walk ("database is locked" with the default journal)
             self.db.execute("PRAGMA journal_mode = WAL")
         self.db.execute("PRAGMA foreign_keys = ON")
+        # a base without the table of the favorites (new, or older) starts with the usual ones
+        had_favorites = bool(
+            self.db.execute("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'favorites'").fetchone()[0]
+        )
         self.db.executescript(SCHEMA)
+        if not had_favorites and self.path != ":memory:":
+            for title, icon, path in default_favorites():
+                self.db.execute(
+                    "INSERT OR IGNORE INTO favorites (path, label, icon, position) VALUES (?, ?, ?, "
+                    "(SELECT COALESCE(MAX(position) + 1, 0) FROM favorites))",
+                    (path, title, icon),
+                )
         # bases made before the index have only the first columns of files
         have = {row[1] for row in self.db.execute("PRAGMA table_info(files)")}
         for column, kind in INDEX_COLUMNS.items():
@@ -269,6 +308,37 @@ class TagStore:
     def changed(self):
         self.db.commit()
         self.version += 1
+
+    # the favorites of the sidebar: a folder or a file with the name and the icon it is shown with
+
+    def favorites(self):
+        """the favorites in the order of the sidebar, as dicts with id, path, label and icon"""
+        rows = self.db.execute("SELECT id, path, label, icon FROM favorites ORDER BY position, id").fetchall()
+        return [{"id": i, "path": path, "label": label, "icon": icon} for i, path, label, icon in rows]
+
+    def add_favorite(self, path):
+        """a folder or a file added last, named after it; None if it already is a favorite"""
+        path = Path(path)
+        cursor = self.db.execute(
+            "INSERT OR IGNORE INTO favorites (path, label, icon, position) VALUES (?, ?, ?, "
+            "(SELECT COALESCE(MAX(position) + 1, 0) FROM favorites))",
+            (str(path), path.name or str(path), "folder" if path.is_dir() else "document"),
+        )
+        if cursor.rowcount == 0:
+            return None
+        self.changed()
+        return cursor.lastrowid
+
+    def remove_favorite(self, favorite_id):
+        self.db.execute("DELETE FROM favorites WHERE id = ?", (favorite_id,))
+        self.changed()
+
+    def set_favorite_order(self, ids):
+        """puts the favorites in this order; the ones that are not named follow, in their order"""
+        order = list(ids) + [f["id"] for f in self.favorites() if f["id"] not in ids]
+        for position, favorite_id in enumerate(order):
+            self.db.execute("UPDATE favorites SET position = ? WHERE id = ?", (position, favorite_id))
+        self.changed()
 
     # the tags
 
@@ -302,6 +372,24 @@ class TagStore:
         self.db.execute(
             "UPDATE tags SET parent_id = ?, position = ? WHERE id = ?", (parent, last, tag)
         )
+        self.changed()
+        return True
+
+    def move_at(self, tag, parent=None, before=None):
+        """puts a tag under a parent (None: at the root), before one of its children (None: last); the
+        siblings are numbered again. False if that would make a loop"""
+        if (parent is not None and parent in self.subtree(tag)) or before == tag:
+            return False
+        siblings = [
+            row[0]
+            for row in self.db.execute(
+                "SELECT id FROM tags WHERE parent_id IS ? AND id != ? ORDER BY position, id", (parent, tag)
+            )
+        ]
+        siblings.insert(siblings.index(before) if before in siblings else len(siblings), tag)
+        self.db.execute("UPDATE tags SET parent_id = ? WHERE id = ?", (parent, tag))
+        for position, tag_id in enumerate(siblings):
+            self.db.execute("UPDATE tags SET position = ? WHERE id = ?", (position, tag_id))
         self.changed()
         return True
 
@@ -1439,6 +1527,7 @@ def open_item(item):
 
 
 def open_palette():
+    palette_pointer["tags"] = False
     palette_query.value = ""
     palette_index.value = 0
     palette_open.value = True
@@ -1684,6 +1773,7 @@ def snapshot():
         "view": view.value,
         "show_sidebar": show_sidebar.value,
         "show_dock": show_dock.value,
+        "closed_sections": sorted(closed_sections),
         "show_hidden": show_hidden.value,
         "blue_folders": blue_folders.value,
         "background": {
@@ -1730,6 +1820,7 @@ def restore(saved):
     view.value = saved.get("view", view.value)
     show_sidebar.value = saved.get("show_sidebar", show_sidebar.value)
     show_dock.value = saved.get("show_dock", show_dock.value)
+    closed_sections.update(s for s in saved.get("closed_sections", []) if isinstance(s, str))
     set_hidden(bool(saved.get("show_hidden", show_hidden.value)))
     set_blue(bool(saved.get("blue_folders", blue_folders.value)))
     background = saved.get("background")
@@ -2028,10 +2119,23 @@ def tags_tree():
     sync_library()
     paths = {i: path for path, i in library_state["ids"].items()}
     tag_tree.selected = paths.get(tag_filter.value)
-    # removable=False: deleting a tag takes it off all its items, that is done in the tag manager
-    clicked = tag_tree_view(tag_tree, library, counts=library_state["counts"], removable=False)
-    if clicked:
-        tag_filter.value = library_state["ids"][clicked]
+    # the right click keeps the colors; the trash (a second click deletes the tag, and what it was put on)
+    # and the mouse move the tags, in the order of the base
+    clicked = tag_tree_view(
+        tag_tree, library, counts=library_state["counts"], removable=False, deletable=True, movable=True, keep_order=True
+    )
+    ids = library_state["ids"]
+    for path in tag_tree.take_deleted():
+        if path in ids:
+            tags.delete(ids[path])
+            if tag_filter.value == ids[path]:
+                tag_filter.value = 0
+    moved = tag_tree.take_moved()
+    if moved and moved[0] in ids:
+        path, parent, before = moved
+        tags.move_at(ids[path], ids.get(parent) if parent else None, ids.get(before) if before else None)
+    if clicked and clicked in ids:
+        tag_filter.value = ids[clicked]
         deselect()
     store_colors(library)
 
@@ -2763,17 +2867,107 @@ def tag_manager():
         tag_manager_open.value = False
 
 
+fav_cache = {"version": -1, "items": []}
+
+
+def favorite_rows():
+    """the favorites of the database that exist, read again when the base changed"""
+    if fav_cache["version"] != tags.version:
+        fav_cache.update(version=tags.version, items=tags.favorites())
+    return [f for f in fav_cache["items"] if exists_fast(f["path"])]
+
+
 def favorites():
-    entries = [
-        ("home", HOME.name, HOME),
-        ("desktop", "Desktop", HOME / "Desktop"),
-        ("document", "Documents", HOME / "Documents"),
-        ("download", "Downloads", HOME / "Downloads"),
-        ("folder", "pyegui", Path(__file__).resolve().parent.parent),
-        ("folder", "Developpement", Path(r"C:\developpement")),
-        ("folder", "Tech", Path(r"C:\Users\Joachim\tech")),
-    ]
-    return [e for e in entries if is_dir_fast(e[2])]
+    """(icon, name, path) of each favorite"""
+    return [(f["icon"], f["label"], Path(f["path"])) for f in favorite_rows()]
+
+
+# the favorites being moved with the mouse, where they would go, and the area of the section as drawn
+fav_view = {"moving": None, "insert": None, "area": None, "rows": [], "ids": []}
+
+
+def over_favorites():
+    """the place (an index among the rows) under the pointer when it is over the section, else None"""
+    pointer, area = pointer_pos(), fav_view["area"]
+    if pointer is None or area is None:
+        return None
+    left, top, right, bottom = area
+    if not (left <= pointer[0] <= right and top <= pointer[1] <= bottom):
+        return None
+    return sum(1 for y in fav_view["rows"] if y < pointer[1])
+
+
+def favorites_section(accent):
+    """the favorites, kept in the database like the ones of finder-rs: a click opens it, a right click
+    opens the menu (new window, remove), a drag reorders them and a folder dropped on the section is added"""
+    items = favorite_rows()
+    width = available_width()
+    rows, stopped, bounds = [], False, None
+    for fav in items:
+        path = Path(fav["path"])
+        on = current() == path
+
+        def line(fav=fav):
+            set_width(width)
+            image(svg(fav["icon"]), size=16, tint=accent)
+            label(fav["label"], selectable=False)
+
+        def menu(fav=fav, path=path):
+            if button_clicked("Ouvrir dans une nouvelle fenêtre"):
+                new_window(path if path.is_dir() else path.parent)
+                close_menu()
+            separator()
+            if button_clicked("Retirer des favoris"):
+                tags.remove_favorite(fav["id"])
+                close_menu()
+
+        response = interactive(lambda line=line: horizontal(line), drag=True, menu=menu)
+        left, top, right, bottom = response.rect
+        rows.append((top + bottom) / 2)
+        bounds = (left, bounds[1] if bounds else top, right, bottom)
+        if on:
+            draw_rect(response.rect, fill=accent + "40", rounding=6)
+        elif response.hovered:
+            draw_rect(response.rect, fill=(127, 127, 127, 30), rounding=6)
+        if response.clicked:
+            go_or_select(path)
+        if response.drag_started:
+            fav_view["moving"] = fav["id"]
+        stopped |= response.drag_stopped
+    ids = [f["id"] for f in items]
+    fav_view.update(area=bounds, rows=rows, ids=ids)
+
+    # moving a favorite with the mouse: the place is under the pointer, the release puts it there
+    moving = fav_view["moving"]
+    if moving is not None:
+        pointer = pointer_pos()
+        if not stopped and pointer is not None:
+            fav_view["insert"] = sum(1 for y in rows if y < pointer[1])
+        elif stopped:
+            at = fav_view["insert"]
+            if moving in ids and at is not None:
+                order = ids[:]
+                start = order.index(moving)
+                order.pop(start)
+                order.insert(min(at - 1 if at > start else at, len(order)), moving)
+                if order != ids:
+                    tags.set_favorite_order(order)
+            fav_view.update(moving=None, insert=None)
+    elif hovered_files():
+        fav_view["insert"] = over_favorites()  # files dragged over the section: they go where the line is
+    else:
+        fav_view["insert"] = None
+    # the line where the favorite goes
+    at = fav_view["insert"]
+    if at is not None and rows and bounds:
+        y = rows[0] - 14 if at == 0 else rows[-1] + 14 if at >= len(rows) else (rows[at - 1] + rows[at]) / 2
+        draw_rect((bounds[0] + 6, y - 1, bounds[2] - 6, y + 1), fill=accent)
+
+
+def add_favorites():
+    """puts the selected items among the favorites, or the item shown (the file of the viewer, else the folder)"""
+    for path in chosen() or [Path(reading.value) if reading.value else current()]:
+        tags.add_favorite(Path(path))
 
 
 def locations():
@@ -2836,6 +3030,30 @@ def theme_control():
         apply_style()
 
 
+closed_sections = set()  # the sections of the sidebar that are folded
+section_hovered = {}  # the sections whose title was under the pointer at the last frame
+
+
+def section_header(title):
+    """the title of a section of the sidebar: a click folds or unfolds it, a chevron shows at the right while
+    the title is under the pointer. Returns whether the section is open"""
+    opened = title not in closed_sections
+    width = available_width()
+
+    def line():
+        set_width(width)
+        weak(title)
+        add_space(max(width - text_width(title, size=12) - 26, 0))
+        if section_hovered.get(title):
+            image(svg("chevron-down" if opened else "chevron-right"), size=14, tint=icon_tint())
+
+    response = interactive(lambda: horizontal(line))
+    section_hovered[title] = response.hovered
+    if response.clicked:
+        closed_sections.symmetric_difference_update({title})
+    return opened
+
+
 def sidebar_content():
     accent = ACCENTS[accent_name.value]
 
@@ -2855,18 +3073,20 @@ def sidebar_content():
         ):
             go(path)
 
-    weak("Favorites")
-    for icon_name, name, path in favorites():
-        place(icon_name, name, path)
+    if section_header("Favorites"):
+        favorites_section(accent)
+    else:
+        fav_view.update(area=None, rows=[], ids=[], moving=None, insert=None)
 
     add_space(12)
-    weak("Locations")
-    for icon_name, name, path in locations():
-        place(icon_name, name, path)
+    if section_header("Locations"):
+        for icon_name, name, path in locations():
+            place(icon_name, name, path)
     add_space(12)
 
-    weak("Tags")  # created in the preview, the Tags pane and the tag picker ("Gérer les tags…")
-    tags_tree()
+    # the tags are created in the preview, the Tags pane and the tag picker ("Gérer les tags…")
+    if section_header("Tags"):
+        tags_tree()
 
 
 # toolbar
@@ -2966,6 +3186,14 @@ def toolbar():
     search_width = min(row - TOOLBAR_FIXED, SEARCH_WIDTH)
     show_search = search_width >= SEARCH_MIN
     show_view = row >= TOOLBAR_FIXED - 120
+    if show_search:
+        # what the right part takes (panes, search, view), and the left part before the name (navigation,
+        # system open, and the buttons of the window and the toggle of the sidebar when it is hidden)
+        right_of = 2 * 34 + 12 + search_width + 8 + (3 * 32 + 8 if show_view else 0)
+        left_of = 3 * 34 + 8 + 34 + 8 + (0 if show_sidebar.value else (76 if CUSTOM_TITLEBAR else 0) + 36)
+        name = (Path(reading.value) if reading.value else current()).name or str(current())
+        if row - left_of - right_of < text_width(name, size=15) + 60:  # the name, its icon, its chevron and its spacing
+            show_search = False
 
     def left():
         if MACOS and not show_sidebar.value:
@@ -3687,7 +3915,14 @@ def receive_drops():
     # a folder of the views under the pointer takes the files (the value of the last frame, drawn
     # while the files hovered), else the folder shown
     folder = drop_folder()
-    sources = [p for p in dropped_files() if Path(p).parent != folder]
+    dropped = dropped_files()
+    at = over_favorites() if dropped else None
+    if at is not None:  # dropped on the favorites: added there, at the place of the line
+        ids = fav_view["ids"]
+        new = [tags.add_favorite(Path(p)) for p in dropped]
+        tags.set_favorite_order(ids[:at] + [i for i in new if i] + ids[at:])
+        dropped = []
+    sources = [p for p in dropped if Path(p).parent != folder]
     if sources:
         # decided now, with the keys held at the drop
         transfer.start(sources, str(folder), operation=drop_operation(sources, str(folder)))
@@ -4484,6 +4719,7 @@ ACTIONS = [
         lambda: start_rename(Path(selected.value)),
     ),
     ("Édition", "Taguer…", "tag", "Cmd+T", has_selection, open_tag_picker),
+    ("Édition", "Ajouter aux favoris", "bookmark", None, lambda: True, add_favorites),
     (
         "Édition",
         "Copier",
@@ -4752,14 +4988,139 @@ palette_pointer = {
 }  # the pointer position of the previous frame of the palette
 
 
+def open_palette_tags():
+    """the page of the tags of the palette: the search of the tags is emptied, the first row highlighted"""
+    palette_pointer["tags"] = True
+    tag_query.value = ""
+    tag_index.value = 0
+
+
+# the entry of the palette that opens the page of the tags (it runs nothing, the palette stays open)
+TAGS_ENTRY = ("", "Étiquettes", "tag", "›", lambda: True, open_palette_tags)
+
+
 def palette_actions():
     query = palette_query.value.lower()
-    return [a for a in ACTIONS if a[4]() and query in a[1].lower()]
+    found = [a for a in ACTIONS if a[4]() and query in a[1].lower()]
+    # the entry of the tags first, for "étiquettes" and "tags" (accents and case ignored)
+    if any(word.startswith(query.strip()) for word in ("etiquettes", "étiquettes", "tags")):
+        found.insert(0, TAGS_ENTRY)
+    return found
 
 
 def run_palette_action(action):
+    if action is TAGS_ENTRY:
+        action[5]()
+        return
     palette_open.value = False
     action[5]()
+
+
+def palette_tags_ui():
+    """the page of the tags of the palette: a field to search or create a tag, the tags of the base with
+    their state for the selection (all of the items have it, none, some), and the keyboard: the arrows
+    move, Enter or Space ticks, Left goes back to the actions"""
+    paths = chosen()
+    accent = ACCENTS[accent_name.value]
+    tint = icon_tint()
+    parts = split_tag_path(tag_query.value)
+    typing = bool(tag_query.value)
+    rows = [("tag", t) for t in (matching_tags(parts) if parts else tag_data()["all"])]
+    if can_create_tag(parts):
+        rows.append(("create", parts))
+    if tag_query.value != tag_picker_state["query"]:  # a new search starts at its first row
+        tag_picker_state["query"] = tag_query.value
+        tag_index.value = 0
+    tag_index.value = min(tag_index.value, max(len(rows) - 1, 0))
+
+    def back():
+        palette_pointer["tags"] = False
+        palette_query.value = ""
+        palette_index.value = 0
+
+    def activate(row):
+        kind, value = row
+        if kind == "create":
+            leaf = create_tag_path(value)
+            for p in paths:
+                tags.tag(p, leaf)
+            tag_query.value = ""
+        elif paths:
+            toggle_tags(paths, value["id"])
+
+    def header():
+        if image_button_clicked(svg("chevron-left"), size=14, tint=tint, tooltip="Retour (←)", frame=False):
+            back()
+        strong("Étiquettes")
+        add_space(max(available_width() - 220, 0))
+        weak("↑↓  Espace : cocher  ←  Échap")
+
+    horizontal(header)
+    text_edit_singleline(tag_query, hint_text="Chercher ou créer une étiquette (a/b/c)", request_focus=True)
+    if not paths:
+        weak("Aucun élément sélectionné : les cases sont inactives")
+
+    moved_by_key = False
+    if key_pressed("ArrowDown", when_typing=True):
+        tag_index.value = min(tag_index.value + 1, max(len(rows) - 1, 0))
+        moved_by_key = True
+    if key_pressed("ArrowUp", when_typing=True):
+        tag_index.value = max(tag_index.value - 1, 0)
+        moved_by_key = True
+    if not typing and (key_pressed("ArrowLeft", when_typing=True) or key_pressed("Backspace", when_typing=True)):
+        back()
+        return
+    if rows and key_pressed("Enter", when_typing=True):
+        activate(rows[tag_index.value])
+    elif rows and not typing and key_pressed("Space", when_typing=True):
+        activate(rows[tag_index.value])
+        tag_query.value = ""  # the space went into the field too
+
+    add_space(4)
+    owned = [tags.own(p) for p in paths]
+    row_width = available_width() - 14  # measured here, inside the scroll area it is unreliable
+
+    def list_ui():
+        for i, (kind, value) in enumerate(rows):
+
+            def row(kind=kind, value=value):
+                def line():
+                    set_width(row_width)  # the highlight covers the whole row, not just the text
+                    if kind == "create":
+                        label(f"Créer « {' / '.join(value)} »  ↵", selectable=False)
+                        return
+                    on = sum(value["id"] in o for o in owned)
+                    state = "off" if not paths or on == 0 else "on" if on == len(paths) else "mixed"
+                    if not parts:
+                        add_space(14 * value["depth"])
+                    image(svg(f"checkbox-{state}"), size=16, tint=tint if state == "off" else accent)
+                    dot(hex_color(value["color"]) + (255,))
+                    label(" / ".join(tag_path(value["id"])) if parts else value["name"], selectable=False)
+
+                horizontal(line)
+
+            response = interactive(row)
+            if i == tag_index.value:
+                draw_rect(response.rect, fill=accent + "40", rounding=6)
+                if moved_by_key:
+                    scroll_to_rect(response.rect)
+            elif response.hovered:
+                draw_rect(response.rect, fill=(127, 127, 127, 30), rounding=6)
+            if response.hovered and pointer_pos() != tag_picker_state["pointer"]:
+                tag_index.value = i  # the mouse takes over the highlight when it moves
+            if response.clicked:
+                tag_index.value = i
+                activate((kind, value))
+        tag_picker_state["pointer"] = pointer_pos()
+
+    if not rows:
+        weak("Aucune étiquette")
+
+    def bounded():
+        set_max_height(300)
+        scroll_area_vertical(list_ui)
+
+    vertical(bounded)
 
 
 def palette_ui():
@@ -4769,6 +5130,9 @@ def palette_ui():
     set_width(
         460
     )  # a fixed width, so available_width() stays bounded inside this auto-sized modal
+    if palette_pointer.get("tags"):
+        palette_tags_ui()
+        return
     row_width = (
         available_width()
     )  # measured once here: inside the scroll area below it is unreliable
@@ -4796,6 +5160,8 @@ def palette_ui():
         moved_by_key = True
     if key_pressed("Enter", when_typing=True):
         run_palette_action(actions[palette_index.value])
+    elif not palette_query.value and key_pressed("ArrowRight", when_typing=True) and actions[palette_index.value] is TAGS_ENTRY:
+        open_palette_tags()
 
     add_space(4)
 

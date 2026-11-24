@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::ops::{Deref, DerefMut};
 
-use eframe::egui::{self, vec2, Color32, Id, Rect, Sense, Stroke, TextStyle};
+use eframe::egui::{self, vec2, Color32, Id, Rect, Sense, Stroke, StrokeKind, TextStyle};
 use pyegui_core::tags::{color_row, last_level, level_paths, normalize, path_ui, to_hex, Tags as CoreTags, TagsOptions};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -269,6 +269,14 @@ pub(crate) struct TagTreeView {
     #[pyo3(get, set)]
     selected: Option<String>,
     folded: std::collections::HashSet<String>,
+    /// the level being moved with the mouse
+    dragging: Option<String>,
+    /// the level whose trash was clicked once: a second click deletes it
+    armed: Option<String>,
+    /// the levels deleted with the trash, until take_deleted()
+    deleted: Vec<String>,
+    /// the move asked for with the mouse, until take_moved()
+    moved: Option<(String, Option<String>, Option<String>)>,
 }
 
 #[pymethods]
@@ -279,7 +287,24 @@ impl TagTreeView {
         TagTreeView {
             selected: selected.map(|s| normalize(&s)).filter(|s| !s.is_empty()),
             folded: folded.unwrap_or_default().iter().map(|s| normalize(s)).collect(),
+            dragging: None,
+            armed: None,
+            deleted: vec![],
+            moved: None,
         }
+    }
+
+    /// The levels deleted with the trash since the last call (see `deletable` of tag_tree_view): the app
+    /// removes them from its own data, they are not removed from the Tags.
+    fn take_deleted(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.deleted)
+    }
+
+    /// The move asked for with the mouse since the last call (see `movable` of tag_tree_view), as
+    /// (path, parent, before): the level goes under `parent` (None: at the top), before the level `before`
+    /// of that parent (None: last). The app moves it in its own data.
+    fn take_moved(&mut self) -> Option<(String, Option<String>, Option<String>)> {
+        self.moved.take()
     }
 
     /// The paths of the levels folded shut, sorted: what to save to restore them. Setting it
@@ -314,7 +339,7 @@ impl TagTreeView {
 }
 
 /// The levels of the tags as a tree: the children of each level ("" for the top), sorted by name
-fn tag_children(tags: &[String]) -> BTreeMap<String, Vec<String>> {
+fn tag_children(tags: &[String], keep_order: bool) -> BTreeMap<String, Vec<String>> {
     let mut children: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for tag in tags {
         let mut parent = String::new();
@@ -326,8 +351,10 @@ fn tag_children(tags: &[String]) -> BTreeMap<String, Vec<String>> {
             parent = path;
         }
     }
-    for siblings in children.values_mut() {
-        siblings.sort_by_key(|path| last_level(path).to_lowercase());
+    if !keep_order {
+        for siblings in children.values_mut() {
+            siblings.sort_by_key(|path| last_level(path).to_lowercase());
+        }
     }
     children
 }
@@ -337,6 +364,10 @@ fn tag_children(tags: &[String]) -> BTreeMap<String, Vec<String>> {
 struct Menu {
     editable: bool,
     removable: bool,
+    /// a trash at the right of the row under the pointer: a first click arms it, a second one deletes the level
+    deletable: bool,
+    /// the rows can be dragged to move a level
+    movable: bool,
 }
 
 /// What can be done to a node of the tree
@@ -345,7 +376,14 @@ enum NodeAction {
     Toggle(String),
     Color(String, Option<Color32>),
     Remove(String),
+    DragStart(String),
+    Arm(String),
+    Disarm,
+    Delete(String),
 }
+
+/// The rows drawn, in order, with their depth: where a level being moved can be dropped
+type Rows = Vec<(String, Rect, usize)>;
 
 /// A row of the tree: the arrow of a level with children, the dot, the name, the count at the right
 #[allow(clippy::too_many_arguments)]
@@ -359,10 +397,23 @@ fn tree_row(
     count: Option<i64>,
     menu: Menu,
     actions: &mut Vec<NodeAction>,
+    rows: &mut Rows,
 ) {
     let font = TextStyle::Body.resolve(ui.style());
     let height = ui.text_style_height(&TextStyle::Body) + 8.0;
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
+    let sense = if menu.movable { Sense::click_and_drag() } else { Sense::click() };
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), sense);
+    rows.push((path.to_owned(), rect, depth));
+    if response.drag_started() && menu.movable {
+        actions.push(NodeAction::DragStart(path.to_owned()));
+    }
+    // the trash: seen while the row is under the pointer (or armed), not while a level is being moved
+    let armed = view.armed.as_deref() == Some(path);
+    let moving = view.dragging.is_some();
+    let trash_rect = Rect::from_center_size(egui::pos2(rect.right() - 16.0, rect.center().y), vec2(24.0, 22.0));
+    let show_trash = menu.deletable && ((ui.rect_contains_pointer(rect) && !moving) || armed);
+    let trash = show_trash.then(|| ui.interact(trash_rect, response.id.with("trash"), Sense::click()));
+    let over_trash = trash.as_ref().is_some_and(|t| t.hovered());
     let indent = 14.0 * depth as f32;
     let arrow_rect = Rect::from_center_size(egui::pos2(rect.left() + indent + 8.0, rect.center().y), vec2(14.0, height));
     let arrow = has_children.then(|| ui.interact(arrow_rect, response.id.with("arrow"), Sense::click()));
@@ -396,22 +447,56 @@ fn tree_row(
         let galley = painter.layout_no_wrap(last_level(path).to_owned(), font.clone(), text_color);
         let text_pos = egui::pos2(dot_center.x + 10.0, rect.center().y - galley.size().y / 2.0);
         let mut right = rect.right() - 8.0;
-        if let Some(count) = count {
+        if let Some(count) = count.filter(|_| !show_trash) {
             let weak = if selected { text_color.gamma_multiply(0.7) } else { visuals.weak_text_color() };
             let count_galley = painter.layout_no_wrap(count.to_string(), font, weak);
             right -= count_galley.size().x;
             painter.galley(egui::pos2(right, rect.center().y - count_galley.size().y / 2.0), count_galley, weak);
             right -= 8.0;
         }
-        // the name is cut where the count begins
+        // the name is cut where the count (or the trash) begins
+        if show_trash {
+            right = trash_rect.left() - 4.0;
+        }
         painter.with_clip_rect(Rect::from_min_max(rect.min, egui::pos2(right, rect.max.y))).galley(text_pos, galley, text_color);
+        if view.dragging.as_deref() == Some(path) {
+            painter.rect_filled(rect, 5.0, visuals.panel_fill.gamma_multiply(0.6));
+        }
+        if show_trash {
+            let red = Color32::from_rgb(230, 60, 60);
+            let tint = if armed { red } else { visuals.weak_text_color() };
+            if armed || over_trash {
+                let fill = if armed { Color32::from_rgba_unmultiplied(230, 60, 60, 36) } else { Color32::from_rgba_unmultiplied(127, 127, 127, 40) };
+                painter.rect_filled(trash_rect, 6.0, fill);
+            }
+            // a trash can drawn with lines: a lid, a handle and a body
+            let c = trash_rect.center();
+            let stroke = Stroke::new(1.3, tint);
+            painter.line_segment([c + vec2(-5.0, -3.5), c + vec2(5.0, -3.5)], stroke);
+            painter.line_segment([c + vec2(-1.8, -3.5), c + vec2(-1.8, -5.5)], stroke);
+            painter.line_segment([c + vec2(1.8, -3.5), c + vec2(1.8, -5.5)], stroke);
+            painter.line_segment([c + vec2(-1.8, -5.5), c + vec2(1.8, -5.5)], stroke);
+            painter.line_segment([c + vec2(-4.0, -3.5), c + vec2(-3.3, 5.5)], stroke);
+            painter.line_segment([c + vec2(4.0, -3.5), c + vec2(3.3, 5.5)], stroke);
+            painter.line_segment([c + vec2(-3.3, 5.5), c + vec2(3.3, 5.5)], stroke);
+        }
+    }
+    if let Some(trash) = &trash {
+        if trash.clicked() {
+            actions.push(if armed { NodeAction::Delete(path.to_owned()) } else { NodeAction::Arm(path.to_owned()) });
+        }
+        let tip = if armed { "Click again to delete" } else { "Delete" };
+        trash.clone().on_hover_text(tip);
+    }
+    if armed && !over_trash {
+        actions.push(NodeAction::Disarm);
     }
 
     if arrow.as_ref().is_some_and(|a| a.clicked()) {
         actions.push(NodeAction::Toggle(path.to_owned()));
     } else if response.double_clicked() && has_children {
         actions.push(NodeAction::Toggle(path.to_owned()));
-    } else if response.clicked() {
+    } else if response.clicked() && !over_trash {
         actions.push(NodeAction::Select(path.to_owned()));
     }
     let response = response.on_hover_ui(|ui| path_ui(ui, tags, path));
@@ -444,13 +529,100 @@ fn tree_rows(
     depth: usize,
     menu: Menu,
     actions: &mut Vec<NodeAction>,
+    rows: &mut Rows,
 ) {
     for path in children.get(parent).into_iter().flatten() {
         let has_children = children.contains_key(path);
-        tree_row(ui, tags, view, path, depth, has_children, counts.get(path).copied(), menu, actions);
+        tree_row(ui, tags, view, path, depth, has_children, counts.get(path).copied(), menu, actions, rows);
         if has_children && !view.folded.contains(path) {
-            tree_rows(ui, tags, view, children, counts, path, depth + 1, menu, actions);
+            tree_rows(ui, tags, view, children, counts, path, depth + 1, menu, actions, rows);
         }
+    }
+}
+
+/// The parent of a path: "a/b/c" -> Some("a/b"), "a" -> None
+fn parent_of(path: &str) -> Option<String> {
+    path.rsplit_once('/').map(|(parent, _)| parent.to_owned())
+}
+
+/// Moving a level with the mouse: dropped on the middle of another it goes under it, on its upper or lower edge
+/// it goes before or after it (same level), below the last row it goes to the top. Draws where it goes and
+/// returns the move once the button is let go
+fn dragging(ui: &mut egui::Ui, view: &mut TagTreeView, rows: &Rows, area: Rect) {
+    let Some(moving) = view.dragging.clone() else { return };
+    let Some(from) = rows.iter().position(|(p, _, _)| *p == moving) else {
+        view.dragging = None;
+        return;
+    };
+    let depth = rows[from].2;
+    // the level and what is under it cannot receive it
+    let end = rows[from + 1..].iter().position(|(_, _, d)| *d <= depth).map_or(rows.len(), |n| from + 1 + n);
+    let inside = |i: usize| i >= from && i < end;
+    enum Drop {
+        Into(usize),
+        Before(usize),
+        After(usize),
+        TopEnd,
+    }
+    let pointer = ui.ctx().pointer_latest_pos();
+    let mut drop = None;
+    if let Some(p) = pointer.filter(|p| area.x_range().contains(p.x)) {
+        if let Some((i, (_, rect, _))) = rows.iter().enumerate().find(|(_, (_, r, _))| r.y_range().contains(p.y)) {
+            if !inside(i) {
+                let f = (p.y - rect.top()) / rect.height();
+                drop = Some(if f < 0.25 { Drop::Before(i) } else if f > 0.75 { Drop::After(i) } else { Drop::Into(i) });
+            }
+        } else if rows.last().is_some_and(|(_, r, _)| p.y > r.bottom() && p.y < r.bottom() + 60.0) {
+            drop = Some(Drop::TopEnd);
+        }
+    }
+    if ui.ctx().input(|i| i.pointer.primary_down()) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        let stroke = Stroke::new(2.0, ui.visuals().selection.bg_fill);
+        let indent = |i: usize| 6.0 + 14.0 * rows[i].2 as f32;
+        match &drop {
+            Some(Drop::Into(i)) => {
+                ui.painter().rect_stroke(rows[*i].1, 5.0, stroke, StrokeKind::Inside);
+            }
+            Some(Drop::Before(i)) => {
+                let r = rows[*i].1;
+                ui.painter().line_segment([egui::pos2(r.left() + indent(*i), r.top()), egui::pos2(r.right() - 6.0, r.top())], stroke);
+            }
+            Some(Drop::After(i)) => {
+                let r = rows[*i].1;
+                ui.painter().line_segment([egui::pos2(r.left() + indent(*i), r.bottom()), egui::pos2(r.right() - 6.0, r.bottom())], stroke);
+            }
+            Some(Drop::TopEnd) => {
+                if let Some((_, r, _)) = rows.last() {
+                    ui.painter().line_segment([egui::pos2(r.left() + 6.0, r.bottom() + 2.0), egui::pos2(r.right() - 6.0, r.bottom() + 2.0)], stroke);
+                }
+            }
+            None => {}
+        }
+        if let Some(p) = pointer {
+            // the name follows the pointer
+            let layer = egui::LayerId::new(egui::Order::Tooltip, Id::unique("tag-tree-ghost"));
+            let font = TextStyle::Body.resolve(ui.style());
+            ui.ctx().layer_painter(layer).text(p + vec2(14.0, 0.0), egui::Align2::LEFT_CENTER, last_level(&moving), font, ui.visuals().text_color());
+        }
+        return;
+    }
+    // let go: the level goes where the line was
+    view.dragging = None;
+    let Some(drop) = drop else { return };
+    // the next level of the same parent, after a level and what is under it
+    let after = |i: usize| {
+        let stop = rows[i + 1..].iter().position(|(_, _, d)| *d <= rows[i].2).map_or(rows.len(), |n| i + 1 + n);
+        rows.get(stop).filter(|(p, _, d)| *d == rows[i].2 && parent_of(p) == parent_of(&rows[i].0)).map(|(p, _, _)| p.clone())
+    };
+    let (parent, before) = match drop {
+        Drop::Into(i) => (Some(rows[i].0.clone()), None),
+        Drop::Before(i) => (parent_of(&rows[i].0), Some(rows[i].0.clone())),
+        Drop::After(i) => (parent_of(&rows[i].0), after(i)),
+        Drop::TopEnd => (None, None),
+    };
+    if parent_of(&moving) != parent || before.is_some() || parent.is_some() {
+        view.moved = Some((moving, parent, before));
     }
 }
 
@@ -471,6 +643,17 @@ fn tree_rows(
 ///
 ///     removable (bool): the Remove entry of that menu, True by default; False keeps only the
 ///         colors, e.g. when removing a tag would take it off many items
+///
+///     deletable (bool): a trash at the right of the row under the pointer: a first click turns it red,
+///         a second one deletes the level (it is given by `view.take_deleted()`, the app removes it
+///         from its data). False by default
+///
+///     movable (bool): the rows can be dragged: dropped on the middle of another level it goes under it,
+///         on its upper or lower edge it goes before or after it. The move is given by
+///         `view.take_moved()` as (path, parent, before), the app moves it in its data. False by default
+///
+///     keep_order (bool): the levels stay in the order of the tags instead of being sorted by name,
+///         so that a move before or after another level shows. False by default
 ///
 /// Returns:
 ///     str | None: the path of the level clicked during the frame (it is now view.selected)
@@ -501,17 +684,24 @@ unsafe fn tag_tree_view(
         .collect::<HashMap<_, _>>();
     let editable = kwarg::<bool>(kwargs, "editable")?.unwrap_or(true);
     let removable = kwarg::<bool>(kwargs, "removable")?.unwrap_or(true);
+    let deletable = kwarg::<bool>(kwargs, "deletable")?.unwrap_or(false);
+    let movable = kwarg::<bool>(kwargs, "movable")?.unwrap_or(false);
+    let keep_order = kwarg::<bool>(kwargs, "keep_order")?.unwrap_or(false);
     let mut actions = vec![];
+    let mut rows: Rows = vec![];
+    let area;
     {
         let state = tags.borrow();
         let tree = view.borrow();
-        let children = tag_children(&state.tags);
-        ui.vertical(|ui| {
+        let children = tag_children(&state.tags, keep_order);
+        let inner = ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 1.0;
-            let menu = Menu { editable, removable };
-            tree_rows(ui, &state, &tree, &children, &counts, "", 0, menu, &mut actions);
+            let menu = Menu { editable, removable, deletable, movable };
+            tree_rows(ui, &state, &tree, &children, &counts, "", 0, menu, &mut actions, &mut rows);
         });
+        area = inner.response.rect;
     }
+    dragging(ui, &mut view.borrow_mut(), &rows, area);
 
     let mut clicked = None;
     let mut state = tags.borrow_mut();
@@ -532,6 +722,19 @@ unsafe fn tag_tree_view(
             }
             NodeAction::Color(path, None) => {
                 state.colors.remove(&path);
+            }
+            NodeAction::DragStart(path) => {
+                tree.dragging = Some(path);
+            }
+            NodeAction::Arm(path) => {
+                tree.armed = Some(path);
+            }
+            NodeAction::Disarm => {
+                tree.armed = None;
+            }
+            NodeAction::Delete(path) => {
+                tree.armed = None;
+                tree.deleted.push(path);
             }
             NodeAction::Remove(path) => {
                 let below = format!("{path}/");

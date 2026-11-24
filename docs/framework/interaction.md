@@ -95,7 +95,7 @@ horizontal(row)
 ```
 
 
-## `interactive(update_fun, drag=False)`
+## `interactive(update_fun, drag=False, menu=None)`
 
 Runs update_fun in a child ui that reacts to the mouse as a whole: the widgets inside keep
 their own clicks, the rest of the area is clickable. Returns a Response with the position of
@@ -106,6 +106,7 @@ tested against a rectangle drawn with the mouse.
 
 - `update_fun` (Callable[[], None]): draws the contents
 - `drag` (bool): also react to dragging, shown in dragged, drag_started and drag_stopped. Default is False
+- `menu` (Callable[[], None]): draws a menu shown when the area is right-clicked. Default is none
 
 **Example:**
 

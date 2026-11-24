@@ -220,6 +220,29 @@ unsafe fn available_width() -> PyResult<f32> {
     Ok(current_ui(&UI)?.available_width())
 }
 
+/// The width a text takes on one line with the font of the ui, in points: to know whether it fits
+/// before drawing it.
+///
+/// Args:
+///     text (str): the text
+///
+///     size (float): font size of the text. Default is the size of the body text
+///
+/// Example::
+///
+///     if text_width(name, size=15) + 60 > available_width():
+///         label("…")
+#[pyfunction]
+#[pyo3(signature = (text, size=None))]
+unsafe fn text_width(text: &str, size: Option<f32>) -> PyResult<f32> {
+    let ui = current_ui(&UI)?;
+    let font = match size {
+        Some(size) => egui::FontId::proportional(size),
+        None => egui::TextStyle::Body.resolve(ui.style()),
+    };
+    Ok(ui.painter().layout_no_wrap(text.to_owned(), font, egui::Color32::WHITE).size().x)
+}
+
 /// Height left for the next widgets, in points.
 #[pyfunction]
 unsafe fn available_height() -> PyResult<f32> {
@@ -654,6 +677,8 @@ impl From<egui::Response> for Response {
 ///     drag (bool): also react to dragging, shown in dragged, drag_started and drag_stopped.
 ///         Default is False
 ///
+///     menu (Callable[[], None]): draws a menu shown when the area is right-clicked. Default is none
+///
 /// Example::
 ///
 ///     def tile():
@@ -664,14 +689,23 @@ impl From<egui::Response> for Response {
 ///     if response.clicked:
 ///         select(name)
 #[pyfunction]
-#[pyo3(signature = (update_fun, drag=false))]
-unsafe fn interactive(update_fun: Bound<'_, PyAny>, drag: bool) -> PyResult<Response> {
+#[pyo3(signature = (update_fun, drag=false, menu=None))]
+unsafe fn interactive(update_fun: Bound<'_, PyAny>, drag: bool, menu: Option<Bound<'_, PyAny>>) -> PyResult<Response> {
     let ui = current_ui(&UI)?;
     let sense = if drag { egui::Sense::click_and_drag() } else { egui::Sense::click() };
     let output = ui.scope_builder(egui::UiBuilder::new().sense(sense), |ui| {
         run_nested_update_func(ui, update_fun)
     });
     output.inner?;
+    if let Some(menu_fun) = menu {
+        let mut result = Ok(());
+        egui::Popup::context_menu(&output.response)
+            .style(crate::style::menu_style())
+            .show(|ui| {
+                result = run_nested_update_func(ui, menu_fun);
+            });
+        result?;
+    }
     Ok(output.response.into())
 }
 
@@ -1069,6 +1103,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(interactive, m)?)?;
     m.add_function(wrap_pyfunction!(segmented_control, m)?)?;
     m.add_function(wrap_pyfunction!(segmented_buttons, m)?)?;
+    m.add_function(wrap_pyfunction!(text_width, m)?)?;
     m.add_function(wrap_pyfunction!(pointer_pos, m)?)?;
     m.add_function(wrap_pyfunction!(pointer_pressed, m)?)?;
     m.add_function(wrap_pyfunction!(typed_text, m)?)?;

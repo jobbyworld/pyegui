@@ -576,6 +576,15 @@ def update_func(ctx):
   replaces them.
 
 - `TagTreeView.selected` (attribute): The path of the level selected, or None
+- `TagTreeView.take_deleted()` (method): The levels deleted with the trash since the last call (see `deletable` of tag_tree_view): the app
+
+  removes them from its own data, they are not removed from the Tags.
+
+- `TagTreeView.take_moved()` (method): The move asked for with the mouse since the last call (see `movable` of tag_tree_view), as
+
+  (path, parent, before): the level goes under `parent` (None: at the top), before the level `before`
+  of that parent (None: last). The app moves it in its own data.
+
 
 ## `tag_tree_view(view, tags, **kwargs)`
 
@@ -594,6 +603,9 @@ under it.
 - `counts` (dict[str, int]): a number shown at the right of a level, e.g. the items tagged
 - `editable` (bool): the menu of the right click, True by default
 - `removable` (bool): the Remove entry of that menu, True by default; False keeps only the colors, e.g. when removing a tag would take it off many items
+- `deletable` (bool): a trash at the right of the row under the pointer: a first click turns it red, a second one deletes the level (it is given by `view.take_deleted()`, the app removes it from its data). False by default
+- `movable` (bool): the rows can be dragged: dropped on the middle of another level it goes under it, on its upper or lower edge it goes before or after it. The move is given by `view.take_moved()` as (path, parent, before), the app moves it in its data. False by default
+- `keep_order` (bool): the levels stay in the order of the tags instead of being sorted by name, so that a move before or after another level shows. False by default
 
 **Returns**
 
