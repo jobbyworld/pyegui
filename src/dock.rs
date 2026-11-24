@@ -741,7 +741,9 @@ fn tab_outline(rect: egui::Rect, radius: f32) -> Vec<egui::Pos2> {
     corner(rect.left_top() + egui::vec2(radius, radius), 2.0 * FRAC_PI_2);
     corner(rect.right_top() + egui::vec2(-radius, radius), 3.0 * FRAC_PI_2);
     points.push(rect.right_bottom());
-    points
+    // the end of an arc is the start of the next one when the tab is as wide as two radii: a stroke of egui
+    // doubles its width at a repeated point, which shows as a dot when the color is semi transparent
+    pyegui_core::dock_draw::dedup(points, false)
 }
 
 /// The sheet of a pane: its own color if it has one, else the one of the dock, with the opacity of the dock
@@ -845,8 +847,7 @@ fn pane_outline(
         // joins the bottom of the right side of the tab
         points.push(pos2(gap_right, rect.top() - width / 2.0));
     }
-    points.dedup_by(|a, b| a.distance(*b) < 0.01);
-    points
+    pyegui_core::dock_draw::dedup(points, false)
 }
 
 /// Applies a change asked from a tab bar callback

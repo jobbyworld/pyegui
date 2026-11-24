@@ -1,5 +1,5 @@
 //! The tags of the Finder, and the files it knows, kept in a SQLite database. The schema is the one of
-//! `examples/finder_tags.py`: the Python and the Rust Finders can share one `tags.db`.
+//! `TagStore` of `examples/finder.py`: the Python and the Rust Finders can share one `tags.db`.
 //!
 //! A tag has a name, a color and an optional parent tag, so the tags form a tree. A tag is put on files
 //! and folders. Two rules of inheritance, both computed when asked, never copied in the base:

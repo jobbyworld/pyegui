@@ -41,7 +41,7 @@ THEMES = [
      "clicked, the other widgets write into the holder they were given.",
      ["button_clicked", "small_button_clicked", "checkbox", "radio_clicked", "radio_value",
       "selectable_label_clicked", "selectable_label_response", "selectable_value",
-      "toggle_value", "switch", "segmented_control", "combo_box", "slider_int", "slider_float", "drag_int",
+      "toggle_value", "switch", "segmented_control", "segmented_buttons", "combo_box", "slider_int", "slider_float", "drag_int",
       "drag_float", "drag_angle", "text_edit_singleline", "text_edit_multiline", "code_editor",
       "date_picker_button", "color_edit_button_rgb", "color_edit_button_rgba", "progress",
       "spinner", "Tags", "tags_edit", "TagTreeView", "tag_tree_view"]),

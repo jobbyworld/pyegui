@@ -23,6 +23,8 @@ pub mod columns;
 pub mod files;
 pub mod terminal;
 pub mod tags;
+pub mod dock_draw;
+pub mod segmented;
 pub mod markdown;
 #[cfg(feature = "pdf")]
 pub mod pdf_view;

@@ -199,6 +199,36 @@ def update_func(ctx):
 ```
 
 
+## `segmented_buttons(options, id, size=16.0)`
+
+A row of icon buttons in one rounded frame, like the controls of the top and bottom bands of the
+Finder: the cells that are on are filled with the accent color, a cell can be disabled, have a
+tooltip and a menu opened by a right click. Unlike segmented_control it holds no selection: it
+returns the index of the cell clicked, and the app decides what is on.
+
+**Args**
+
+- `options` (list[dict]): one dict per cell: "icon" (the uri of an image, like for image()), and optionally "tooltip" (str), "on" (bool, filled with the accent color), "enabled" (bool, True by default) and "menu" (Callable[[], None], draws the menu of a right click)
+- `id` (str): tells apart two controls of one ui
+- `size` (float): size of the icons. Default is 16
+
+Returns the index of the cell clicked during the frame, or None.
+
+**Example:**
+
+```python
+picked = segmented_buttons(
+    [
+        {"icon": "file://icons/chevron-left.svg", "enabled": can_back, "tooltip": "Back"},
+        {"icon": "file://icons/chevron-right.svg", "enabled": can_forward, "tooltip": "Forward"},
+    ],
+    id="nav",
+)
+if picked == 0:
+    back()
+```
+
+
 ## `combo_box(current_value, alternatives, names, label)`
 
 Shows a combo box with values defined in "alternatives" and their corresponding names
