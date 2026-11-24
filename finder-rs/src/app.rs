@@ -218,6 +218,8 @@ struct Saved {
     blue_folders: bool,
     dock: Option<String>,
     open_folders: Vec<PathBuf>,
+    /// the sections of the sidebar that are folded (Favoris, Emplacements, Étiquettes)
+    closed_sections: Vec<String>,
 }
 
 impl Default for Saved {
@@ -244,6 +246,7 @@ impl Default for Saved {
             blue_folders: !cfg!(target_os = "macos"),
             dock: None,
             open_folders: Vec::new(),
+            closed_sections: Vec::new(),
         }
     }
 }
@@ -280,6 +283,8 @@ pub struct FinderApp {
     pub new_window: Option<PathBuf>,
     window_serial: u64,
     backdrop_applied: bool,
+    #[cfg(target_os = "macos")]
+    native: Option<pyegui_core::window::NativeWindow>,
     corners_applied: bool,
     /// the keyboard goes back to the view (after a navigation, a search field that is still focused lets it go)
     focus_view: bool,
@@ -287,6 +292,7 @@ pub struct FinderApp {
     terminals: Terminals,
     pub show_hidden: bool,
     blue_folders: bool,
+    closed_sections: std::collections::BTreeSet<String>,
     pub search: String,
     /// the items shown at the last frame, in their order (what the views show: filters and sort included)
     pub items: Vec<Entry>,
@@ -303,8 +309,15 @@ pub struct FinderApp {
     pasted_cut: bool,
     rename: Option<(PathBuf, String)>,
     confirm_delete: Option<Vec<PathBuf>>,
+    /// the tag asked to be deleted (its name, until the answer)
+    confirm_tag_delete: Option<(i64, String)>,
     /// the action palette: (query, highlighted row)
     palette: Option<(String, usize)>,
+    /// the palette shows the tree of the tags (the page that slides in) and its highlighted row
+    palette_tags: bool,
+    palette_cursor: usize,
+    /// what is typed in the field of the page of the tags (a name or a path a/b/c)
+    palette_tag_query: String,
     pub notice: Option<String>,
     dock: Option<egui_tiles::Tree<Pane>>,
     /// what the system told about the disk, newest last
@@ -330,6 +343,20 @@ pub struct FinderApp {
     opened_loaded: std::cell::Cell<bool>,
     /// every tag, read once per version of the store (not once per row)
     all_tags: std::cell::RefCell<(u64, Vec<crate::tagstore::Tag>)>,
+    tag_counts: std::cell::RefCell<(u64, std::collections::HashMap<i64, usize>)>,
+    /// the favorites of the sidebar as drawn at the last frame: their ids, the middle of their rows, the
+    /// area of the section (where a folder can be dropped to add one)
+    fav_ids: Vec<i64>,
+    fav_rows: Vec<f32>,
+    fav_rect: Option<egui::Rect>,
+    /// the place (an index among the rows) where a favorite being moved, or a folder being dragged over, goes
+    fav_insert: Option<usize>,
+    /// the favorite being moved with the mouse
+    fav_drag: Option<i64>,
+    /// the tag being moved with the mouse in the sidebar
+    tag_drag: Option<i64>,
+    /// the tag whose trash was clicked once in the sidebar (red: a second click deletes it)
+    tag_armed: Option<i64>,
     viewer: Option<Viewer>,
     /// the tabs of folders that are not shown: their state, by number of tab
     parked_tabs: std::collections::HashMap<u64, TabState>,
@@ -375,6 +402,20 @@ impl FinderApp {
             path_text: None,
             tag_filter: None,
             viewer: None,
+        }
+    }
+
+    /// Puts the selected items among the favorites, or the item shown (the file of the viewer, else the
+    /// folder) when nothing is selected
+    pub fn add_favorites(&mut self) {
+        let mut paths = self.selected_paths();
+        if paths.is_empty() {
+            paths.push(self.viewer_path().map(Path::to_path_buf).unwrap_or_else(|| self.folder().to_path_buf()));
+        }
+        if let Some(store) = &mut self.tags {
+            for path in paths {
+                store.add_favorite(&path);
+            }
         }
     }
 
@@ -557,12 +598,15 @@ impl FinderApp {
             new_window: None,
             window_serial: 0,
             backdrop_applied: false,
+            #[cfg(target_os = "macos")]
+            native: None,
             corners_applied: false,
             focus_view: false,
             custom_titlebar,
             terminals: Terminals::new(&folder_for_terminal, font_path.as_deref()),
             show_hidden: saved.show_hidden,
             blue_folders: saved.blue_folders,
+            closed_sections: saved.closed_sections.iter().cloned().collect(),
             search: String::new(),
             items: Vec::new(),
             views,
@@ -575,7 +619,11 @@ impl FinderApp {
             pasted_cut: false,
             rename: None,
             confirm_delete: None,
+            confirm_tag_delete: None,
             palette: None,
+            palette_tags: false,
+            palette_cursor: 0,
+            palette_tag_query: String::new(),
             notice: None,
             dock: Some(dock::restore(saved.dock.as_deref())),
             activity: Default::default(),
@@ -594,6 +642,14 @@ impl FinderApp {
             opened_cache: Default::default(),
             opened_loaded: Default::default(),
             all_tags: Default::default(),
+            tag_counts: Default::default(),
+            fav_ids: Vec::new(),
+            fav_rows: Vec::new(),
+            fav_rect: None,
+            fav_insert: None,
+            fav_drag: None,
+            tag_drag: None,
+            tag_armed: None,
             viewer: None,
             parked_tabs: Default::default(),
             current_tab: 0,
@@ -1025,6 +1081,10 @@ impl FinderApp {
             let m = ctx.input(|i| i.modifiers);
             (m.shift, m.ctrl, m.alt, m.command)
         });
+        // over the favorites of the sidebar: the folders are added there
+        if self.favorites_drop(ctx, &hovered, &dropped) {
+            return;
+        }
         // a folder of the view under the pointer takes the files, else the folder shown
         let folder = self.views.drop_target(self.view).unwrap_or_else(|| self.folder().to_path_buf());
         if !hovered.is_empty() {
@@ -1097,6 +1157,31 @@ impl FinderApp {
                 self.rename = Some((path, name));
             }
         }
+        if let Some((id, name)) = self.confirm_tag_delete.take() {
+            let mut keep = true;
+            let mut yes = false;
+            egui::Modal::new(egui::Id::new("delete-tag")).show(ctx, |ui| {
+                ui.set_width(360.0);
+                ui.heading("Supprimer l'étiquette ?");
+                ui.label(format!("« {name} » est retirée de tous les éléments. Les fichiers et les sous-étiquettes sont conservés."));
+                ui.horizontal(|ui| {
+                    if ui.button("Annuler").clicked() {
+                        keep = false;
+                    }
+                    if ui.button(RichText::new("Supprimer").color(Color32::from_rgb(220, 60, 60))).clicked() {
+                        yes = true;
+                    }
+                });
+            });
+            if yes {
+                if let Some(store) = self.tags.as_mut() {
+                    store.delete(id);
+                }
+                self.set_tag_filter(None);
+            } else if keep {
+                self.confirm_tag_delete = Some((id, name));
+            }
+        }
         if let Some(paths) = self.confirm_delete.take() {
             let mut keep = true;
             let mut yes = false;
@@ -1137,61 +1222,297 @@ impl FinderApp {
 
     /// The palette: a search field over the enabled actions (case and accents ignored), the arrows
     /// choose, Enter runs on the current selection, Escape closes
+    /// Opens the palette (a right click does too: it replaces the context menu)
+    pub fn open_palette(&mut self) {
+        if self.palette.is_none() {
+            self.palette = Some((String::new(), 0));
+            self.palette_tags = false;
+            self.palette_cursor = 0;
+            self.palette_tag_query.clear();
+        }
+    }
+
+    /// The palette: the actions to search and run, and the entry "Étiquettes", a page that slides in with the
+    /// tree of the tags, each with a box to check for the selected items. Up and Down move, Enter or Space
+    /// checks, Left or Backspace goes back, Esc closes the whole popup
     fn palette_modal(&mut self, ctx: &egui::Context) {
-        let Some((mut query, mut index)) = self.palette.take() else { return };
+        let page_id = egui::Id::new("palette-page");
+        let Some((mut query, mut index)) = self.palette.take() else {
+            // closed: everything is reset, so that the next opening (a key, a right click) starts on the main
+            // page, with empty fields, and does not slide
+            self.palette_tags = false;
+            self.palette_cursor = 0;
+            self.palette_tag_query.clear();
+            ctx.animate_bool_with_time(page_id, false, 0.0);
+            return;
+        };
+        let slide = ctx.animate_bool_with_time_and_easing(page_id, self.palette_tags, 0.22, egui::emath::easing::cubic_out);
+        let on_tags = self.palette_tags;
         let needle = crate::search::fold(query.trim());
-        let shown: Vec<usize> = actions::ACTIONS.iter().enumerate().filter(|(_, a)| (a.enabled)(self) && crate::search::fold(a.label).contains(&needle)).map(|(i, _)| i).collect();
-        let (down, up, enter, escape) = ctx.input_mut(|i| {
-            (i.consume_key(Modifiers::NONE, Key::ArrowDown), i.consume_key(Modifiers::NONE, Key::ArrowUp), i.consume_key(Modifiers::NONE, Key::Enter), i.consume_key(Modifiers::NONE, Key::Escape))
+        let mut rows: Vec<Option<usize>> = Vec::new(); // None: the entry of the tags
+        if crate::search::fold("Étiquettes").contains(&needle) || "tags".contains(&needle) {
+            rows.push(None);
+        }
+        rows.extend(actions::ACTIONS.iter().enumerate().filter(|(_, a)| (a.enabled)(self) && crate::search::fold(a.label).contains(&needle)).map(|(i, _)| i).map(Some));
+        // the rows of the page of the tags: the tags (the tree, or what the field finds), and the
+        // creation of what the field holds when it does not exist yet
+        enum TagItem {
+            Tag(usize),
+            Create(Vec<String>),
+        }
+        let parts = tagsui_split(&self.palette_tag_query);
+        let (tags, can_create): (Vec<(crate::tagstore::Tag, Vec<String>)>, bool) = match &self.tags {
+            Some(store) if slide > 0.0 || on_tags => {
+                if parts.is_empty() {
+                    (self.tag_list().into_iter().map(|t| (t, Vec::new())).collect(), false)
+                } else {
+                    (store.matching(&parts).into_iter().map(|t| { let path = store.tag_path(t.id); (t, path) }).collect(), store.can_create(&parts))
+                }
+            }
+            _ => (Vec::new(), false),
+        };
+        let mut items: Vec<TagItem> = Vec::new();
+        items.extend((0..tags.len()).map(TagItem::Tag));
+        if can_create {
+            items.push(TagItem::Create(parts.clone()));
+        }
+        let selection = self.selected_paths();
+        let owned: Vec<_> = match &self.tags {
+            Some(store) if slide > 0.0 || on_tags => selection.iter().map(|p| store.own(p)).collect(),
+            _ => Vec::new(),
+        };
+        let state_of = |id: i64| -> u8 {
+            let have = owned.iter().filter(|o| o.contains(&id)).count();
+            if owned.is_empty() || have == 0 { 0 } else if have == owned.len() { 2 } else { 1 }
+        };
+        self.palette_cursor = self.palette_cursor.min(items.len().saturating_sub(1));
+        let typing = !self.palette_tag_query.is_empty();
+        let (down, up, enter, escape, left, right, space, backspace) = ctx.input_mut(|i| {
+            let n = Modifiers::NONE;
+            let both = on_tags;
+            (
+                i.consume_key(n, Key::ArrowDown),
+                i.consume_key(n, Key::ArrowUp),
+                i.consume_key(n, Key::Enter),
+                i.consume_key(n, Key::Escape),
+                both && !typing && i.consume_key(n, Key::ArrowLeft),
+                !on_tags && query.is_empty() && i.consume_key(n, Key::ArrowRight),
+                both && !typing && i.consume_key(n, Key::Space),
+                both && !typing && i.consume_key(n, Key::Backspace),
+            )
         });
-        index = index.min(shown.len().saturating_sub(1));
-        if down {
-            index = (index + 1).min(shown.len().saturating_sub(1));
-        }
-        if up {
-            index = index.saturating_sub(1);
-        }
-        let mut chosen = if enter { shown.get(index).copied() } else { None };
         let mut close = escape;
-        let shortcuts: Vec<String> = shown.iter().map(|&i| actions::ACTIONS[i].shortcut.as_ref().map(|s| ctx.format_shortcut(s)).unwrap_or_default()).collect();
-        let response = egui::Modal::new(egui::Id::new("palette")).show(ctx, |ui| {
-            ui.set_width(460.0);
-            let edit = ui.add(egui::TextEdit::singleline(&mut query).hint_text("Rechercher une action…").desired_width(f32::INFINITY));
-            if !edit.has_focus() {
-                edit.request_focus();
+        let mut chosen: Option<usize> = None;
+        let mut open_tags = false;
+        let mut toggled: Option<(i64, bool)> = None;
+        let mut create: Option<Vec<String>> = None;
+        if on_tags {
+            if down {
+                self.palette_cursor = (self.palette_cursor + 1).min(items.len().saturating_sub(1));
             }
-            if edit.changed() {
-                index = 0;
+            if up {
+                self.palette_cursor = self.palette_cursor.saturating_sub(1);
             }
-            ui.add_space(4.0);
-            if shown.is_empty() {
-                ui.weak("Aucune action");
+            if left || backspace {
+                self.palette_tags = false;
             }
-            egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                for (row, &i) in shown.iter().enumerate() {
-                    let action = &actions::ACTIONS[i];
-                    let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
-                    if row == index {
-                        ui.painter().rect_filled(rect, 6.0, ui.visuals().selection.bg_fill.gamma_multiply(0.45));
-                        if down || up {
-                            ui.scroll_to_rect(rect, None);
+            if enter || (space && !typing) {
+                match items.get(self.palette_cursor) {
+                    Some(TagItem::Tag(k)) => {
+                        let tag = &tags[*k].0;
+                        if !selection.is_empty() {
+                            toggled = Some((tag.id, state_of(tag.id) != 2));
                         }
-                    } else if r.hovered() {
-                        ui.painter().rect_filled(rect, 6.0, Color32::from_rgba_unmultiplied(127, 127, 127, 30));
                     }
-                    let color = ui.visuals().text_color();
-                    glyphs::image(glyphs::by_name(action.icon), 16.0, color).paint_at(ui, egui::Rect::from_center_size(rect.left_center() + egui::vec2(18.0, 0.0), egui::vec2(16.0, 16.0)));
-                    ui.painter().text(rect.left_center() + egui::vec2(34.0, 0.0), egui::Align2::LEFT_CENTER, action.label, egui::FontId::proportional(14.0), color);
-                    ui.painter().text(rect.right_center() - egui::vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, &shortcuts[row], egui::FontId::proportional(12.0), ui.visuals().weak_text_color());
-                    if r.hovered() && ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO) {
-                        index = row;
+                    Some(TagItem::Create(parts)) => create = Some(parts.clone()),
+                    None => {}
+                }
+            }
+        } else {
+            index = index.min(rows.len().saturating_sub(1));
+            if down {
+                index = (index + 1).min(rows.len().saturating_sub(1));
+            }
+            if up {
+                index = index.saturating_sub(1);
+            }
+            if enter || right {
+                match rows.get(index) {
+                    Some(None) => open_tags = true,
+                    Some(Some(i)) if enter => chosen = Some(*i),
+                    _ => {}
+                }
+            }
+        }
+        let shortcuts: Vec<String> = rows.iter().map(|r| r.and_then(|i| actions::ACTIONS[i].shortcut.as_ref().map(|s| ctx.format_shortcut(s))).unwrap_or_default()).collect();
+        let accent = self.accent_color();
+        let page_size = egui::vec2(460.0, 360.0);
+        let mut cursor = self.palette_cursor;
+        let mut tag_query = self.palette_tag_query.clone();
+        let mut go_back = false;
+        let response = egui::Modal::new(egui::Id::new("palette")).show(ctx, |ui| {
+            ui.set_width(page_size.x);
+            let (area, _) = ui.allocate_exact_size(page_size, egui::Sense::hover());
+            // the main page leaves to the left while the tags come in from the right, and back
+            if slide < 1.0 {
+                let mut page = ui.new_child(egui::UiBuilder::new().max_rect(area.translate(egui::vec2(-slide * area.width(), 0.0))));
+                page.set_clip_rect(area);
+                let edit = page.add(egui::TextEdit::singleline(&mut query).hint_text("Rechercher une action…").desired_width(f32::INFINITY));
+                if !on_tags && !edit.has_focus() {
+                    edit.request_focus();
+                }
+                if edit.changed() {
+                    index = 0;
+                }
+                page.add_space(4.0);
+                if rows.is_empty() {
+                    page.weak("Aucune action");
+                }
+                egui::ScrollArea::vertical().max_height(page_size.y - 40.0).show(&mut page, |ui| {
+                    for (row, entry) in rows.iter().enumerate() {
+                        let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
+                        if row == index && !on_tags {
+                            ui.painter().rect_filled(rect, 6.0, ui.visuals().selection.bg_fill.gamma_multiply(0.45));
+                            if down || up {
+                                ui.scroll_to_rect(rect, None);
+                            }
+                        } else if r.hovered() {
+                            ui.painter().rect_filled(rect, 6.0, Color32::from_rgba_unmultiplied(127, 127, 127, 30));
+                        }
+                        let color = ui.visuals().text_color();
+                        let (icon, label) = match entry {
+                            None => ("tag", "Étiquettes"),
+                            Some(i) => (actions::ACTIONS[*i].icon, actions::ACTIONS[*i].label),
+                        };
+                        glyphs::image(glyphs::by_name(icon), 16.0, color).paint_at(ui, egui::Rect::from_center_size(rect.left_center() + egui::vec2(18.0, 0.0), egui::vec2(16.0, 16.0)));
+                        ui.painter().text(rect.left_center() + egui::vec2(34.0, 0.0), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(14.0), color);
+                        let right_text = if entry.is_none() { "›" } else { shortcuts[row].as_str() };
+                        ui.painter().text(rect.right_center() - egui::vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, right_text, egui::FontId::proportional(12.0), ui.visuals().weak_text_color());
+                        if r.hovered() && ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO) {
+                            index = row;
+                        }
+                        if r.clicked() {
+                            match entry {
+                                None => open_tags = true,
+                                Some(i) => chosen = Some(*i),
+                            }
+                        }
                     }
-                    if r.clicked() {
-                        chosen = Some(i);
+                });
+            }
+            if slide > 0.0 {
+                let mut page = ui.new_child(egui::UiBuilder::new().max_rect(area.translate(egui::vec2((1.0 - slide) * area.width(), 0.0))));
+                page.set_clip_rect(area);
+                page.horizontal(|ui| {
+                    ui.set_min_width(area.width() - 8.0);
+                    if glyphs::button(ui, glyphs::CHEVRON_LEFT, 14.0, false, "Retour (←)").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                        go_back = true;
+                    }
+                    ui.label(RichText::new("Étiquettes").strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.weak(RichText::new("↑↓  Espace : cocher  ←  Échap").small());
+                    });
+                });
+                let edit = page.add(egui::TextEdit::singleline(&mut tag_query).hint_text("Chercher ou créer une étiquette (a/b/c)").desired_width(f32::INFINITY));
+                if on_tags && !edit.has_focus() {
+                    edit.request_focus();
+                }
+                if edit.changed() {
+                    cursor = 0;
+                }
+                if selection.is_empty() {
+                    page.weak("Aucun élément sélectionné : les cases sont inactives");
+                }
+                egui::ScrollArea::vertical().max_height(page_size.y - 84.0).show(&mut page, |ui| {
+                    let highlighted = cursor;
+                    let row = |ui: &mut egui::Ui, n: usize, depth: usize, glyph: glyphs::Glyph, tint: Color32, label: &str, state: Option<u8>| {
+                        let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click());
+                        if n == highlighted {
+                            ui.painter().rect_filled(rect, 6.0, ui.visuals().selection.bg_fill.gamma_multiply(0.45));
+                            if down || up {
+                                ui.scroll_to_rect(rect, None);
+                            }
+                        } else if r.hovered() {
+                            ui.painter().rect_filled(rect, 6.0, Color32::from_rgba_unmultiplied(127, 127, 127, 30));
+                        }
+                        let x = rect.left() + 10.0 + depth as f32 * 18.0;
+                        let text_x;
+                        if let Some(state) = state {
+                            let name = ["checkbox-off", "checkbox-mixed", "checkbox-on"][state as usize];
+                            let box_tint = if state > 0 { accent } else { ui.visuals().weak_text_color() };
+                            glyphs::image(glyphs::by_name(name), 16.0, box_tint).paint_at(ui, egui::Rect::from_center_size(egui::pos2(x + 8.0, rect.center().y), egui::vec2(16.0, 16.0)));
+                            ui.painter().circle_filled(egui::pos2(x + 30.0, rect.center().y), 5.0, tint);
+                            text_x = x + 42.0;
+                        } else {
+                            glyphs::image(glyph, 16.0, tint).paint_at(ui, egui::Rect::from_center_size(egui::pos2(x + 8.0, rect.center().y), egui::vec2(16.0, 16.0)));
+                            text_x = x + 26.0;
+                        }
+                        let color = if state.is_some() && selection.is_empty() { ui.visuals().weak_text_color() } else { ui.visuals().text_color() };
+                        ui.painter().text(egui::pos2(text_x, rect.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(14.0), color);
+                        r
+                    };
+                    for (n, item) in items.iter().enumerate() {
+                        match item {
+                            TagItem::Tag(k) => {
+                                let (tag, path) = &tags[*k];
+                                let state = state_of(tag.id);
+                                // the tree when nothing is typed, else the full path of what is found
+                                let (depth, label) = if parts.is_empty() { (tag.depth, tag.name.clone()) } else { (0, path.join(" / ")) };
+                                if row(ui, n, depth, glyphs::by_name("dot"), tagsui::parse_color(&tag.color), &label, Some(state)).clicked() {
+                                    cursor = n;
+                                    if !selection.is_empty() {
+                                        toggled = Some((tag.id, state != 2));
+                                    }
+                                }
+                            }
+                            TagItem::Create(new_parts) => {
+                                let label = format!("Créer « {} »  ↵", new_parts.join(" / "));
+                                if row(ui, n, 0, glyphs::FOLDER_ENTER, accent, &label, None).clicked() {
+                                    cursor = n;
+                                    create = Some(new_parts.clone());
+                                }
+                            }
+                        }
+                    }
+                    if items.is_empty() {
+                        ui.weak("Aucune étiquette");
+                    }
+                });
+            }
+        });
+        self.palette_cursor = cursor;
+        self.palette_tag_query = tag_query;
+        if open_tags {
+            self.palette_tags = true;
+            self.palette_cursor = 0;
+            self.palette_tag_query.clear();
+        }
+        if let Some(parts) = create {
+            // the new tag is put on the selection, and the field is emptied for the next one
+            if let Some(store) = self.tags.as_mut() {
+                if let Some(leaf) = store.create_path(&parts) {
+                    for path in &selection {
+                        store.tag(path, leaf);
                     }
                 }
-            });
-        });
+            }
+            self.palette_tag_query.clear();
+            self.palette_cursor = 0;
+        }
+        if go_back {
+            self.palette_tags = false;
+        }
+        if let Some((tag, on)) = toggled {
+            if let Some(store) = self.tags.as_mut() {
+                for path in &selection {
+                    if on {
+                        store.tag(path, tag)
+                    } else {
+                        store.untag(path, tag)
+                    }
+                }
+            }
+        }
         if response.should_close() {
             close = true;
         }
@@ -1203,6 +1524,22 @@ impl FinderApp {
     }
 
     fn keyboard(&mut self, ctx: &egui::Context) {
+        // for the checks of the look (FINDER_SHOT): the first tag shown
+        if std::env::var_os("FINDER_TAGHEADER").is_some() && ctx.cumulative_frame_nr() == 20 {
+            if let Some(tag) = self.tag_list().first() {
+                self.set_tag_filter(Some(tag.id));
+            }
+        }
+        // for the checks of the look (FINDER_SHOT): the palette opened by itself
+        if let Some(page) = std::env::var_os("FINDER_PALETTE") {
+            if ctx.cumulative_frame_nr() == 20 {
+                self.palette = Some((String::new(), 0));
+                self.palette_tags = page == "tags";
+                if let Some(q) = std::env::var_os("FINDER_TAGQUERY") {
+                    self.palette_tag_query = q.to_string_lossy().into_owned();
+                }
+            }
+        }
         if self.palette.is_none() && self.rename.is_none() && self.confirm_delete.is_none() && ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::P)) {
             self.palette = Some((String::new(), 0));
             return;
@@ -1292,10 +1629,10 @@ impl FinderApp {
         drag_window(ui, band);
         let row = band.width();
         let search_width = (row - TOOLBAR_FIXED).min(SEARCH_WIDTH);
-        let show_search = search_width >= SEARCH_MIN;
+        let mut show_search = search_width >= SEARCH_MIN;
         let show_view = row >= TOOLBAR_FIXED - 120.0;
         // what the right part takes, to keep the name of the folder out of it
-        let right_part = 2.0 * 34.0 + 12.0 + if show_search { search_width + 8.0 } else { 0.0 } + if show_view { 3.0 * 32.0 + 8.0 } else { 0.0 };
+        let right_of = |search: bool| 2.0 * 34.0 + 12.0 + if search { search_width + 8.0 } else { 0.0 } + if show_view { 3.0 * 32.0 + 8.0 } else { 0.0 };
         let height = band.height();
         ui.spacing_mut().interact_size.y = glyphs::CONTROL_H;
         ui.allocate_ui_with_layout(egui::vec2(row, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -1339,7 +1676,17 @@ impl FinderApp {
                 self.open_in_system();
             }
             ui.add_space(8.0);
-            let room = (ui.available_width() - right_part).max(60.0);
+            // the search is hidden as soon as the whole combo of the folder no longer fits
+            if show_search {
+                let folder = self.viewer_path().map(Path::to_path_buf).unwrap_or_else(|| self.folder().to_path_buf());
+                let name = folder.file_name().map_or_else(|| folder.display().to_string(), |n| n.to_string_lossy().into_owned());
+                let text = ui.painter().layout_no_wrap(name, egui::FontId::proportional(15.0), egui::Color32::WHITE).size().x;
+                let natural = text + 6.0 + 16.0 + 6.0 + 6.0 + 12.0 + 6.0 + 8.0;
+                if ui.available_width() - right_of(true) < natural {
+                    show_search = false;
+                }
+            }
+            let room = (ui.available_width() - right_of(show_search)).max(60.0);
             self.folder_name(ui, room);
             // the right part, from the edge: the terminal and the panes, the search, the view
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1702,24 +2049,55 @@ impl FinderApp {
         };
         let count = self.items.len();
         let mut close = false;
-        ui.horizontal(|ui| {
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-            ui.painter().circle_filled(rect.center(), 5.0, tagsui::parse_color(&tag.color));
-            ui.label(RichText::new(&tag.name).strong());
-            ui.weak(format!("{count} élément(s) avec cette étiquette ou ses sous-étiquettes"));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(egui::Button::image(glyphs::image(glyphs::CLOSE, 12.0, ui.visuals().text_color())).frame(false).min_size(egui::vec2(28.0, 22.0))).on_hover_text("Revenir au dossier").clicked() {
-                    close = true;
+        let mut ask_delete = false;
+        let mut new_color: Option<String> = None;
+        // a band as high as the toolbar, across the pane: the sheet of the pane is left clear behind it (see
+        // `pane_ui`), so it has the tint of the toolbar
+        let size = egui::vec2(ui.available_width(), TOP_H);
+        let band = ui
+            .allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                // the color of the tag: a picker in place of the dot
+                let mut color = tagsui::parse_color(&tag.color);
+                if egui::color_picker::color_edit_button_srgba(ui, &mut color, egui::color_picker::Alpha::Opaque).on_hover_text("Couleur de l'étiquette").changed() {
+                    new_color = Some(tagsui::to_hex(color));
                 }
-            });
-        });
-        ui.separator();
+                ui.label(RichText::new(&tag.name).strong());
+                ui.weak(format!("{count} élément(s) avec cette étiquette ou ses sous-étiquettes"));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add(egui::Button::image(glyphs::image(glyphs::CLOSE, 12.0, ui.visuals().text_color())).frame(false).min_size(egui::vec2(28.0, 22.0))).on_hover_text("Revenir au dossier").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                        close = true;
+                    }
+                    if ui.add(egui::Button::image(glyphs::image(glyphs::by_name("trash"), 14.0, ui.visuals().text_color())).frame(false).min_size(egui::vec2(28.0, 22.0))).on_hover_text("Supprimer l'étiquette").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                        ask_delete = true;
+                    }
+                });
+            })
+            .response
+            .rect;
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(TAG_BAND), band));
+        if ask_delete {
+            self.confirm_tag_delete = Some((tag.id, tag.name.clone()));
+        }
+        if let (Some(hex), Some(store)) = (new_color, self.tags.as_mut()) {
+            store.recolor(tag.id, &hex);
+        }
         if close {
             self.set_tag_filter(None);
         }
     }
 
     /// The tags of the store, read once per version of the store
+    /// The number of items tagged with each tag (or a tag under it), kept until the store changes
+    fn tag_count(&self, id: i64) -> usize {
+        let Some(store) = &self.tags else { return 0 };
+        let mut known = self.tag_counts.borrow_mut();
+        if known.0 != store.version + 1 {
+            let counts = store.all().iter().map(|t| (t.id, store.tagged_with(t.id).len())).collect();
+            *known = (store.version + 1, counts);
+        }
+        known.1.get(&id).copied().unwrap_or(0)
+    }
+
     pub fn tag_list(&self) -> Vec<crate::tagstore::Tag> {
         let Some(store) = &self.tags else { return Vec::new() };
         let mut known = self.all_tags.borrow_mut();
@@ -1731,7 +2109,11 @@ impl FinderApp {
 
     /// One row of the sidebar: the icon in the accent color (white when selected) and the name
     fn place_row(&self, ui: &mut egui::Ui, glyph: glyphs::Glyph, name: &str, on: bool) -> egui::Response {
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), egui::Sense::click());
+        self.place_row_with(ui, glyph, name, on, egui::Sense::click())
+    }
+
+    fn place_row_with(&self, ui: &mut egui::Ui, glyph: glyphs::Glyph, name: &str, on: bool, sense: egui::Sense) -> egui::Response {
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), sense);
         let accent = self.accent_color();
         if on {
             ui.painter().rect_filled(rect, 7.0, ui.visuals().selection.bg_fill);
@@ -1780,50 +2162,37 @@ impl FinderApp {
         });
         ui.style_mut().spacing.scroll.fade.strength = 0.0; // no light band at the edge of the list
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.label(RichText::new("Favoris").weak().small());
-            let home = home();
-            let mut places: Vec<(glyphs::Glyph, String, PathBuf)> = vec![(glyphs::HOME, home.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Départ".into()), home.clone())];
-            for (glyph, label, name) in [
-                (glyphs::DESKTOP, "Bureau", "Desktop"),
-                (glyphs::DOCUMENT, "Documents", "Documents"),
-                (glyphs::DOWNLOAD, "Téléchargements", "Downloads"),
-                (glyphs::IMAGE, "Images", "Pictures"),
-                (glyphs::FOLDER, "Musique", "Music"),
-                (glyphs::FOLDER, "Vidéos", if cfg!(target_os = "macos") { "Movies" } else { "Videos" }),
-            ] {
-                let path = home.join(name);
-                if path.is_dir() {
-                    places.push((glyph, label.into(), path));
-                }
-            }
-            if cfg!(target_os = "macos") {
-                places.push((glyphs::FOLDER, "Applications".into(), "/Applications".into()));
-            }
-            for (glyph, label, path) in places {
-                if self.place_row(ui, glyph, &label, folder == path).clicked() {
-                    self.go(path);
-                }
+            let (open, header) = self.section_header(ui, "Favoris");
+            if open {
+                self.favorites_section(ui, header.top(), &folder);
+            } else {
+                self.fav_rect = None;
+                self.fav_rows.clear();
             }
             ui.add_space(12.0);
-            ui.label(RichText::new("Emplacements").weak().small());
+            let (open, _) = self.section_header(ui, "Emplacements");
             let drives: Vec<(String, PathBuf)> = if cfg!(windows) {
                 ('A'..='Z').map(|c| (format!("{c}:"), PathBuf::from(format!("{c}:\\")))).filter(|(_, p)| p.is_dir()).collect()
             } else {
                 vec![(root_name(), PathBuf::from("/"))]
             };
-            for (name, path) in drives {
+            for (name, path) in drives.into_iter().filter(|_| open) {
                 if self.place_row(ui, glyphs::DRIVE, &name, folder == path).clicked() {
                     self.go(path);
                 }
             }
             ui.add_space(12.0);
-            ui.label(RichText::new("Étiquettes").weak().small());
-            let tags = self.tag_list();
-            if tags.is_empty() {
+            let (open, _) = self.section_header(ui, "Étiquettes");
+            // folded: no tag is drawn
+            let tags = if open { self.tag_list() } else { Vec::new() };
+            if open && tags.is_empty() {
                 ui.weak("Aucune étiquette");
             }
             let mut filter = None;
             let mut fold = None;
+            // the rows drawn (index in `tags`, rectangle): where a tag being moved can be dropped
+            let mut visible: Vec<(usize, egui::Rect)> = Vec::new();
+            let mut delete_tag: Option<i64> = None;
             // the tree: a tag folded hides what is under it
             let mut hidden_below: Option<usize> = None;
             for (index, tag) in tags.iter().enumerate() {
@@ -1839,7 +2208,14 @@ impl FinderApp {
                     hidden_below = Some(tag.depth);
                 }
                 let on = self.tag_filter == Some(tag.id);
-                let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click());
+                let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click_and_drag());
+                visible.push((index, rect));
+                if response.drag_started() {
+                    self.tag_drag = Some(tag.id);
+                }
+                if self.tag_drag == Some(tag.id) {
+                    ui.painter().rect_filled(rect, 7.0, ui.visuals().panel_fill.gamma_multiply(0.6));
+                }
                 if on {
                     ui.painter().rect_filled(rect, 7.0, ui.visuals().selection.bg_fill);
                 } else if response.hovered() {
@@ -1849,18 +2225,67 @@ impl FinderApp {
                 let color = if on { Color32::WHITE } else { ui.visuals().text_color() };
                 if has_children {
                     // the arrow: its own click folds, the rest of the row shows the tag
-                    let arrow = egui::Rect::from_center_size(egui::pos2(x + 6.0, rect.center().y), egui::vec2(16.0, 22.0));
+                    let arrow = egui::Rect::from_center_size(egui::pos2(x + 7.0, rect.center().y), egui::vec2(20.0, 24.0));
                     let arrow_response = ui.interact(arrow, ui.id().with(("tag-fold", tag.id)), egui::Sense::click());
-                    let text = if folded { "▸" } else { "▾" };
-                    ui.painter().text(arrow.center(), egui::Align2::CENTER_CENTER, text, egui::TextStyle::Small.resolve(ui.style()), color);
+                    // a large chevron: to the right when folded, down when open
+                    let chevron = if folded { glyphs::CHEVRON_RIGHT } else { glyphs::CHEVRON_DOWN };
+                    glyphs::image(chevron, 16.0, color).paint_at(ui, egui::Rect::from_center_size(arrow.center(), egui::vec2(16.0, 16.0)));
+                    arrow_response.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
                     if arrow_response.clicked() {
                         fold = Some(tag.id);
                     }
                 }
                 ui.painter().circle_filled(egui::pos2(x + 20.0, rect.center().y), 5.0, tagsui::parse_color(&tag.color));
                 ui.painter().text(egui::pos2(x + 34.0, rect.center().y), egui::Align2::LEFT_CENTER, &tag.name, egui::TextStyle::Body.resolve(ui.style()), color);
-                if response.clicked() && fold != Some(tag.id) {
+                // the trash, at the right: seen when the row is hovered; a first click turns it red, a second one
+                // deletes the tag, and it is gray again as soon as the pointer leaves it
+                let armed = self.tag_armed == Some(tag.id);
+                let mut over_trash = false;
+                let shown_trash = (ui.rect_contains_pointer(rect) && self.tag_drag.is_none()) || armed;
+                if !shown_trash {
+                    let count = self.tag_count(tag.id);
+                    let tint = if on { Color32::from_white_alpha(200) } else { ui.visuals().weak_text_color() };
+                    ui.painter().text(egui::pos2(rect.right() - 10.0, rect.center().y), egui::Align2::RIGHT_CENTER, count.to_string(), egui::TextStyle::Small.resolve(ui.style()), tint);
+                }
+                if shown_trash {
+                    let trash = egui::Rect::from_center_size(egui::pos2(rect.right() - 16.0, rect.center().y), egui::vec2(24.0, 22.0));
+                    let trash_response = ui.interact(trash, ui.id().with(("tag-trash", tag.id)), egui::Sense::click());
+                    over_trash = trash_response.hovered();
+                    let tint = if armed {
+                        Color32::from_rgb(230, 60, 60)
+                    } else if on {
+                        Color32::from_white_alpha(200)
+                    } else {
+                        ui.visuals().weak_text_color()
+                    };
+                    if armed || over_trash {
+                        ui.painter().rect_filled(trash, 6.0, if armed { Color32::from_rgba_unmultiplied(230, 60, 60, 36) } else { Color32::from_rgba_unmultiplied(127, 127, 127, 40) });
+                    }
+                    glyphs::image(glyphs::by_name("trash"), 14.0, tint).paint_at(ui, egui::Rect::from_center_size(trash.center(), egui::vec2(14.0, 14.0)));
+                    trash_response.clone().on_hover_text(if armed { "Cliquer encore pour supprimer" } else { "Supprimer l'étiquette" }).on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if trash_response.clicked() {
+                        if armed {
+                            delete_tag = Some(tag.id);
+                        } else {
+                            self.tag_armed = Some(tag.id);
+                        }
+                    }
+                }
+                if armed && !over_trash {
+                    self.tag_armed = None;
+                }
+                if response.clicked() && fold != Some(tag.id) && !over_trash {
                     filter = Some(tag.id);
+                }
+            }
+            self.tag_dragging(ui, &tags, &visible);
+            if let Some(id) = delete_tag {
+                if let Some(store) = self.tags.as_mut() {
+                    store.delete(id);
+                }
+                self.tag_armed = None;
+                if self.tag_filter == Some(id) {
+                    self.set_tag_filter(None);
                 }
             }
             if let Some(id) = fold {
@@ -1873,6 +2298,262 @@ impl FinderApp {
                 self.set_tag_filter(next);
             }
         });
+    }
+
+    /// Moving a tag of the sidebar with the mouse: dropped on the middle of another one it goes under it, on the
+    /// upper or lower edge it goes before or after it (same level), below the last row it goes to the root
+    fn tag_dragging(&mut self, ui: &mut egui::Ui, tags: &[crate::tagstore::Tag], visible: &[(usize, egui::Rect)]) {
+        let Some(moving) = self.tag_drag else { return };
+        let ctx = ui.ctx().clone();
+        let pointer = ctx.pointer_latest_pos();
+        let Some(from) = tags.iter().position(|t| t.id == moving) else {
+            self.tag_drag = None;
+            return;
+        };
+        // the tag and what is under it cannot receive it
+        let end = tags[from + 1..].iter().position(|t| t.depth <= tags[from].depth).map_or(tags.len(), |n| from + 1 + n);
+        let inside = |i: usize| i >= from && i < end;
+        enum Drop {
+            Into(usize),
+            Before(usize),
+            After(usize),
+            RootEnd,
+        }
+        let mut drop = None;
+        if let Some(p) = pointer.filter(|p| ui.max_rect().x_range().contains(p.x)) {
+            if let Some((i, rect)) = visible.iter().find(|(_, r)| r.y_range().contains(p.y)) {
+                if !inside(*i) {
+                    let f = (p.y - rect.top()) / rect.height();
+                    drop = Some(if f < 0.25 { Drop::Before(*i) } else if f > 0.75 { Drop::After(*i) } else { Drop::Into(*i) });
+                }
+            } else if visible.last().is_some_and(|(_, r)| p.y > r.bottom() && p.y < r.bottom() + 60.0) {
+                drop = Some(Drop::RootEnd);
+            }
+        }
+        if ctx.input(|i| i.pointer.primary_down()) {
+            ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+            let accent = self.accent_color();
+            let stroke = egui::Stroke::new(2.0, accent);
+            let row = |i: usize| visible.iter().find(|(k, _)| *k == i).map(|(_, r)| *r);
+            let indent = |i: usize| 6.0 + tags[i].depth as f32 * 14.0;
+            match &drop {
+                Some(Drop::Into(i)) => {
+                    if let Some(r) = row(*i) {
+                        ui.painter().rect_stroke(r, 7.0, stroke, egui::StrokeKind::Inside);
+                    }
+                }
+                Some(Drop::Before(i)) => {
+                    if let Some(r) = row(*i) {
+                        ui.painter().line_segment([egui::pos2(r.left() + indent(*i), r.top()), egui::pos2(r.right() - 6.0, r.top())], stroke);
+                    }
+                }
+                Some(Drop::After(i)) => {
+                    if let Some(r) = row(*i) {
+                        ui.painter().line_segment([egui::pos2(r.left() + indent(*i), r.bottom()), egui::pos2(r.right() - 6.0, r.bottom())], stroke);
+                    }
+                }
+                Some(Drop::RootEnd) => {
+                    if let Some((_, r)) = visible.last() {
+                        ui.painter().line_segment([egui::pos2(r.left() + 6.0, r.bottom() + 2.0), egui::pos2(r.right() - 6.0, r.bottom() + 2.0)], stroke);
+                    }
+                }
+                None => {}
+            }
+            if let Some(p) = pointer {
+                // the name follows the pointer
+                let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("tag-ghost"));
+                ctx.layer_painter(layer).text(p + egui::vec2(14.0, 0.0), egui::Align2::LEFT_CENTER, &tags[from].name, egui::TextStyle::Body.resolve(ui.style()), ui.visuals().text_color());
+            }
+            return;
+        }
+        // released: the tag goes where the line was
+        self.tag_drag = None;
+        let Some(drop) = drop else { return };
+        // the next tag of the same level, after a tag and what is under it
+        let after = |i: usize| {
+            let stop = tags[i + 1..].iter().position(|t| t.depth <= tags[i].depth).map_or(tags.len(), |n| i + 1 + n);
+            tags.get(stop).filter(|t| t.depth == tags[i].depth).map(|t| t.id)
+        };
+        let (parent, before) = match drop {
+            Drop::Into(i) => (Some(tags[i].id), None),
+            Drop::Before(i) => (tags[i].parent, Some(tags[i].id)),
+            Drop::After(i) => (tags[i].parent, after(i)),
+            Drop::RootEnd => (None, None),
+        };
+        if let Some(store) = self.tags.as_mut() {
+            store.move_tag_at(moving, parent, before);
+        }
+    }
+
+    /// The title of a section of the sidebar: a click folds or unfolds it, a chevron at the right shows when
+    /// the title is hovered (to the right: folded, down: open). Returns whether the section is open
+    fn section_header(&mut self, ui: &mut egui::Ui, title: &str) -> (bool, egui::Rect) {
+        let open = !self.closed_sections.contains(title);
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), egui::Sense::click());
+        let weak = ui.visuals().weak_text_color();
+        ui.painter().text(egui::pos2(rect.left() + 2.0, rect.center().y), egui::Align2::LEFT_CENTER, title, egui::TextStyle::Small.resolve(ui.style()), weak);
+        if response.hovered() {
+            let chevron = if open { glyphs::CHEVRON_DOWN } else { glyphs::CHEVRON_RIGHT };
+            glyphs::image(chevron, 16.0, weak).paint_at(ui, egui::Rect::from_center_size(egui::pos2(rect.right() - 14.0, rect.center().y), egui::vec2(16.0, 16.0)));
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if response.clicked() {
+            if open {
+                self.closed_sections.insert(title.to_owned());
+            } else {
+                self.closed_sections.remove(title);
+            }
+        }
+        (open, rect)
+    }
+
+    /// The favorites (folders and files), kept in the database: a click opens it, a right click opens the menu (new window,
+    /// new tab, remove), a drag reorders them, and a folder dropped on the section is added
+    fn favorites_section(&mut self, ui: &mut egui::Ui, top: f32, folder: &Path) {
+        enum Act {
+            Open(PathBuf),
+            Window(PathBuf),
+            Tab(PathBuf),
+            Remove(i64),
+            Order(Vec<i64>),
+        }
+        let favorites: Vec<crate::tagstore::Favorite> = self
+            .tags
+            .as_ref()
+            .map(|t| t.favorites())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| Path::new(&f.path).exists())
+            .collect();
+        let mut rows = Vec::new();
+        let mut act = None;
+        for favorite in favorites.iter() {
+            let path = PathBuf::from(&favorite.path);
+            let response = self.place_row_with(ui, glyphs::by_name(&favorite.icon), &favorite.label, folder == path, egui::Sense::click_and_drag());
+            rows.push(response.rect.center().y);
+            if self.fav_drag == Some(favorite.id) {
+                // the row being moved is faded
+                ui.painter().rect_filled(response.rect, 7.0, ui.visuals().panel_fill.gamma_multiply(0.6));
+            }
+            if response.clicked() {
+                act = Some(Act::Open(path.clone()));
+            }
+            if response.drag_started() {
+                self.fav_drag = Some(favorite.id);
+            }
+            response.context_menu(|ui| {
+                if ui.button("Ouvrir dans une nouvelle fenêtre").clicked() {
+                    act = Some(Act::Window(path.clone()));
+                    ui.close();
+                }
+                if ui.button("Ouvrir dans un nouvel onglet").clicked() {
+                    act = Some(Act::Tab(path.clone()));
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Retirer des favoris").clicked() {
+                    act = Some(Act::Remove(favorite.id));
+                    ui.close();
+                }
+            });
+        }
+        let ids: Vec<i64> = favorites.iter().map(|f| f.id).collect();
+        let bottom = ui.cursor().top();
+        let area = ui.max_rect();
+        self.fav_rect = Some(egui::Rect::from_min_max(egui::pos2(area.left(), top), egui::pos2(area.right(), bottom.max(top + 20.0))));
+        // moving a favorite with the mouse: the place is under the pointer, the drop puts it there
+        if let Some(moving) = self.fav_drag {
+            let pointer = ui.ctx().pointer_latest_pos();
+            if ui.ctx().input(|i| i.pointer.primary_down()) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                if let Some(p) = pointer {
+                    self.fav_insert = Some(rows.iter().filter(|y| **y < p.y).count());
+                    if let Some(favorite) = favorites.iter().find(|f| f.id == moving) {
+                        // the name follows the pointer
+                        let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("fav-ghost"));
+                        let painter = ui.ctx().layer_painter(layer);
+                        painter.text(p + egui::vec2(14.0, 0.0), egui::Align2::LEFT_CENTER, &favorite.label, egui::TextStyle::Body.resolve(ui.style()), ui.visuals().text_color());
+                    }
+                }
+            } else {
+                if let (Some(at), Some(from)) = (self.fav_insert, ids.iter().position(|i| *i == moving)) {
+                    let mut order = ids.clone();
+                    let id = order.remove(from);
+                    order.insert(if at > from { at - 1 } else { at }.min(order.len()), id);
+                    if order != ids {
+                        act = Some(Act::Order(order));
+                    }
+                }
+                self.fav_drag = None;
+                self.fav_insert = None;
+            }
+        }
+        // the line where the favorite goes
+        if let Some(at) = self.fav_insert {
+            if !rows.is_empty() {
+                let y = if at == 0 {
+                    rows[0] - 14.0
+                } else if at >= rows.len() {
+                    rows[rows.len() - 1] + 14.0
+                } else {
+                    (rows[at - 1] + rows[at]) / 2.0
+                };
+                ui.painter().line_segment([egui::pos2(area.left() + 6.0, y), egui::pos2(area.right() - 6.0, y)], egui::Stroke::new(2.0, self.accent_color()));
+            }
+        }
+        self.fav_ids = ids;
+        self.fav_rows = rows;
+        match act {
+            Some(Act::Open(path)) => self.open(&path),
+            Some(Act::Window(path)) => self.new_window = Some(path),
+            Some(Act::Tab(path)) => self.open_in_new_tab(path),
+            Some(Act::Remove(id)) => {
+                if let Some(store) = &mut self.tags {
+                    store.remove_favorite(id);
+                }
+            }
+            Some(Act::Order(order)) => {
+                if let Some(store) = &mut self.tags {
+                    store.set_favorite_order(&order);
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Folders and files dragged over the favorites are added there, at the place under the pointer; returns true
+    /// when the files were for the favorites (the folder shown does not take them)
+    fn favorites_drop(&mut self, ctx: &egui::Context, hovered: &[PathBuf], dropped: &[PathBuf]) -> bool {
+        let pointer = pyegui_core::native_dnd::native_pointer().or_else(|| ctx.pointer_latest_pos());
+        let over = pointer.zip(self.fav_rect).filter(|(p, r)| r.contains(*p));
+        let Some((pointer, _)) = over else {
+            if self.fav_drag.is_none() {
+                self.fav_insert = None;
+            }
+            return false;
+        };
+        if hovered.is_empty() && dropped.is_empty() {
+            return false;
+        }
+        let at = self.fav_rows.iter().filter(|y| **y < pointer.y).count();
+        if !hovered.is_empty() {
+            self.fav_insert = Some(at);
+        }
+        if !dropped.is_empty() {
+            self.fav_insert = None;
+            let mut order = self.fav_ids.clone();
+            let mut place = at.min(order.len());
+            if let Some(store) = &mut self.tags {
+                for folder in dropped.iter().filter(|p| p.exists()) {
+                    if let Some(id) = store.add_favorite(folder) {
+                        order.insert(place, id);
+                        place += 1;
+                    }
+                }
+                store.set_favorite_order(&order);
+            }
+        }
+        true
     }
 
     pub fn preview(&mut self, ui: &mut egui::Ui) {
@@ -1993,6 +2674,7 @@ impl eframe::App for FinderApp {
             blue_folders: self.blue_folders,
             dock: self.dock.as_ref().and_then(|d| serde_json::to_string(d).ok()),
             open_folders: self.open_folders.iter().cloned().collect(),
+            closed_sections: self.closed_sections.iter().cloned().collect(),
         };
         if let Ok(json) = serde_json::to_string(&saved) {
             storage.set_string(STATE_KEY, json);
@@ -2013,6 +2695,8 @@ impl eframe::App for FinderApp {
             self.open_in_new_tab(self.folder().to_path_buf()); // for the checks with two tabs of folder
         }
         pyegui_core::native_dnd::set_window(&*frame);
+        #[cfg(target_os = "macos")]
+        pyegui_core::window::mark_window(&*frame);
         // the window buttons centered in the top band
         #[cfg(target_os = "macos")]
         pyegui_core::window::place_window_buttons(&*frame, 20.0, TOP_H as f64 / 2.0, 20.0);
@@ -2084,6 +2768,29 @@ impl FinderApp {
         }
     }
 
+    /// The native glass of a second window: found among the windows of the app (its viewport gives no handle),
+    /// then the blur like the first window
+    #[cfg(target_os = "macos")]
+    fn native_backdrop(&mut self, ctx: &egui::Context, glass: bool, dark: bool) {
+        if self.native.is_none() && glass && ctx.cumulative_frame_nr() > 2 {
+            if let Some(native) = pyegui_core::window::claim_new_window() {
+                if let Some(name) = backdrop_name() {
+                    let _ = pyegui_core::window::apply_backdrop(&native, name);
+                }
+                self.native = Some(native);
+            }
+        }
+        if self.native.is_some() {
+            let filter = if glass { self.settled_blur(ctx)[usize::from(dark)] } else { [0, 100, 100] };
+            if filter != self.applied_filter {
+                self.applied_filter = filter;
+                if let Some(native) = &self.native {
+                    let _ = pyegui_core::window::set_window_filter(native, filter[0], filter[1] as f32 / 100.0, filter[2] as f32 / 100.0);
+                }
+            }
+        }
+    }
+
     /// Opens the windows asked for and draws them; the closed ones are dropped
     fn other_windows(&mut self, ctx: &egui::Context) {
         if let Some(folder) = self.new_window.take() {
@@ -2107,9 +2814,17 @@ impl FinderApp {
             let mut keep = true;
             ctx.show_viewport_immediate(*id, builder, |ui, _class| {
                 ui.push_id(*id, |ui| {
-                    // no native backdrop here: the window is filled
-                    let rect = ui.ctx().content_rect();
-                    ui.painter().rect_filled(rect, 0.0, style::glass_base(ui.visuals().dark_mode, None));
+                    // no native backdrop here (no handle of the window): the layers keep their own opacity over a
+                    // light base, not over an opaque fill that hides them. A color or a picture is painted by `draw`
+                    let dark = ui.visuals().dark_mode;
+                    let glass = window.looks[usize::from(dark)].background == Background::Glass;
+                    #[cfg(target_os = "macos")]
+                    window.native_backdrop(ui.ctx(), glass, dark);
+                    if glass && window.native.is_none() {
+                        let rect = ui.ctx().content_rect();
+                        let base = style::glass_base(dark, None);
+                        ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 60));
+                    }
                     window.draw(ui);
                 });
                 if ui.ctx().input(|i| i.viewport().close_requested()) {
@@ -2236,6 +2951,8 @@ fn free_space(path: &Path) -> Option<u64> {
 
 /// The heights of the top and bottom bands, in the sidebar and in the body
 pub const TOP_H: f32 = 40.0;
+/// the key of the rectangle of the header of a tag, which the dock leaves clear of the sheet of its pane
+pub const TAG_BAND: &str = "finder-tag-band";
 
 pub use pyegui_core::style::bar_tint;
 /// the bottom bands are as high as the top ones
@@ -2266,6 +2983,11 @@ fn drag_window(ui: &mut egui::Ui, rect: egui::Rect) {
 pub fn file_uri(path: &Path) -> String {
     let p = path.to_string_lossy();
     if cfg!(windows) { format!("file:///{}", p.replace('\\', "/")) } else { format!("file://{p}") }
+}
+
+/// "Work/ Invoice" -> ["Work", "Invoice"]
+fn tagsui_split(text: &str) -> Vec<String> {
+    crate::tagstore::TagStore::split_path(text)
 }
 
 fn home() -> PathBuf {

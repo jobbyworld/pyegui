@@ -87,6 +87,86 @@ fn backdrop_host(window: &impl raw_window_handle::HasWindowHandle) -> Result<Bac
     Ok(BackdropHost(raw_window_handle::AppKitWindowHandle::new(ptr)))
 }
 
+/// A window found by `claim_new_window`: its content view, as a handle for the other functions
+#[cfg(target_os = "macos")]
+pub struct NativeWindow(raw_window_handle::AppKitWindowHandle);
+
+#[cfg(target_os = "macos")]
+impl raw_window_handle::HasWindowHandle for NativeWindow {
+    fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw_window_handle::RawWindowHandle::AppKit(self.0)) })
+    }
+}
+
+/// Marks the window as known, so that `claim_new_window` does not return it
+#[cfg(target_os = "macos")]
+pub fn mark_window(window: &impl raw_window_handle::HasWindowHandle) {
+    if let Ok(raw_window_handle::RawWindowHandle::AppKit(handle)) = window.window_handle().map(|h| h.as_raw()) {
+        unsafe { mark_view(handle.ns_view.as_ptr().cast()) };
+    }
+}
+
+/// Puts the marker in the frame view of the window of this content view; false if it was there
+#[cfg(target_os = "macos")]
+unsafe fn mark_view(view: *mut objc2::runtime::AnyObject) -> bool {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject, Bool as ObjcBool};
+    use objc2_foundation::{NSRect, NSString};
+    let host: *mut AnyObject = msg_send![&*view, superview];
+    if host.is_null() {
+        return false;
+    }
+    let identifier = NSString::from_str("pyegui.window-known");
+    let subviews: *mut AnyObject = msg_send![&*host, subviews];
+    let count: usize = msg_send![&*subviews, count];
+    for i in 0..count {
+        let subview: *mut AnyObject = msg_send![&*subviews, objectAtIndex: i];
+        let id: *mut AnyObject = msg_send![&*subview, identifier];
+        if !id.is_null() {
+            let same: ObjcBool = msg_send![&*id, isEqualToString: &*identifier];
+            if same.as_bool() {
+                return false;
+            }
+        }
+    }
+    let Some(class) = AnyClass::get(c"NSView") else { return false };
+    let new: *mut AnyObject = msg_send![class, alloc];
+    let new: *mut AnyObject = msg_send![new, initWithFrame: NSRect::ZERO];
+    let _: () = msg_send![&*new, setIdentifier: &*identifier];
+    let _: () = msg_send![&*host, addSubview: new];
+    true
+}
+
+/// The visible window of the app that was not marked yet (a window opened since): the windows of a
+/// viewport of egui have no handle in their update function. Returns it marked
+#[cfg(target_os = "macos")]
+pub fn claim_new_window() -> Option<NativeWindow> {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject, Bool as ObjcBool};
+    unsafe {
+        let app: *mut AnyObject = msg_send![AnyClass::get(c"NSApplication")?, sharedApplication];
+        let windows: *mut AnyObject = msg_send![&*app, windows];
+        let count: usize = msg_send![&*windows, count];
+        for i in 0..count {
+            let window: *mut AnyObject = msg_send![&*windows, objectAtIndex: i];
+            let visible: ObjcBool = msg_send![&*window, isVisible];
+            let main: ObjcBool = msg_send![&*window, canBecomeMainWindow];
+            if !visible.as_bool() || !main.as_bool() {
+                continue;
+            }
+            let view: *mut AnyObject = msg_send![&*window, contentView];
+            if view.is_null() {
+                continue;
+            }
+            if mark_view(view) {
+                let ptr = std::ptr::NonNull::new(view.cast())?;
+                return Some(NativeWindow(raw_window_handle::AppKitWindowHandle::new(ptr)));
+            }
+        }
+    }
+    None
+}
+
 /// The radius of the corners of the window (16 points for a window with a title bar on macOS 26),
 /// read from the private _cornerRadius of NSWindow when it has it, else 0
 #[cfg(target_os = "macos")]

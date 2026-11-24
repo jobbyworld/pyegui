@@ -345,13 +345,21 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         let scrolled_key = egui::Id::new(pyegui_core::columns::HEADER_SCROLLED);
         ui.ctx().data_mut(|d| {
             d.remove::<egui::Rect>(band_key);
+            d.remove::<egui::Rect>(egui::Id::new(crate::app::TAG_BAND));
             d.remove::<bool>(scrolled_key);
         });
         let result = self.pane_content(ui, pane);
         let band = ui.ctx().data(|d| d.get_temp::<egui::Rect>(band_key)).filter(|_| matches!(*pane, Pane::Central(_)));
         let scrolled = ui.ctx().data(|d| d.get_temp::<bool>(scrolled_key)).unwrap_or(false);
         let titled = self.titled.contains(&tile);
-        let rects: Vec<egui::Rect> = match band.filter(|_| !titled && !scrolled) {
+        // the header of a tag, above the header of the columns, is left clear with it
+        let tag_band = ui.ctx().data(|d| d.get_temp::<egui::Rect>(egui::Id::new(crate::app::TAG_BAND))).filter(|_| matches!(*pane, Pane::Central(_)) && !titled);
+        let cleared = band.filter(|_| !titled && !scrolled);
+        let cleared = match (cleared, tag_band) {
+            (Some(b), Some(t)) => Some(b.union(t)),
+            (b, t) => b.or(t),
+        };
+        let rects: Vec<egui::Rect> = match cleared {
             Some(b) => {
                 let k = ui.ctx().pixels_per_point();
                 let (mut top, bottom) = (((b.top().clamp(area.top(), area.bottom())) * k).round() / k, ((b.bottom().clamp(area.top(), area.bottom())) * k).round() / k);

@@ -102,6 +102,7 @@ pub static ACTIONS: &[Action] = &[
     Action { category: "Fichier", label: "Ouvrir avec Claude (Cowork)", icon: "claude", shortcut: None, enabled: claude_available, in_menu: true, run: |app, ctx| {
         ctx.open_url(egui::OpenUrl::same_tab(openapps::claude_url("cowork", &target_directory(app))));
     }},
+    Action { category: "Fichier", label: "Ajouter aux favoris", icon: "bookmark", shortcut: None, enabled: always, in_menu: true, run: |app, _| app.add_favorites() },
     Action { category: "Fichier", label: "Nouvelle fenêtre", icon: "dock", shortcut: cmd(Key::N), enabled: always, in_menu: true, run: |app, _| app.new_window = Some(app.new_target()) },
     Action { category: "Fichier", label: "Nouvel onglet", icon: "dock", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::T)), enabled: always, in_menu: true, run: |app, _| app.open_in_new_tab(app.new_target()) },
     Action { category: "Fichier", label: "Nouveau dossier", icon: "folder-plus", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::N)), enabled: always, in_menu: true, run: |app, _| app.new_folder() },
@@ -182,22 +183,6 @@ pub fn run_shortcuts(app: &mut FinderApp, ctx: &egui::Context) {
             }
         }
     }
-}
-
-/// The items of the context menu of an item; returns the index of the action chosen
-pub fn menu(ui: &mut egui::Ui, enabled: &[bool]) -> Option<usize> {
-    let mut chosen = None;
-    for (index, action) in ACTIONS.iter().enumerate().filter(|(_, a)| a.in_menu) {
-        let mut button = crate::glyphs::action_button(ui, action.icon, action.label);
-        if let Some(shortcut) = &action.shortcut {
-            button = button.shortcut_text(ui.ctx().format_shortcut(shortcut));
-        }
-        if ui.add_enabled(enabled[index], button).clicked() {
-            chosen = Some(index);
-            ui.close();
-        }
-    }
-    chosen
 }
 
 pub fn reveal(path: &Path) {
