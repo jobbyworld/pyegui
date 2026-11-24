@@ -242,15 +242,15 @@ Some **bold** and *italic* text, a [link](https://github.com/emilk/egui).
 - item 1
 - item 2
 
-```python
+~~~python
 print("hello")
-```
+~~~
 
-```mermaid
+~~~mermaid
 flowchart LR
     A[Start] --> B{OK?}
     B -->|Yes| C[Done]
-```
+~~~
 ''')
 ```
 

@@ -62,15 +62,15 @@ pub(crate) use pyegui_core::markdown::replace_mermaid;
 ///     - item 1
 ///     - item 2
 ///
-///     ```python
+///     ~~~python
 ///     print("hello")
-///     ```
+///     ~~~
 ///
-///     ```mermaid
+///     ~~~mermaid
 ///     flowchart LR
 ///         A[Start] --> B{OK?}
 ///         B -->|Yes| C[Done]
-///     ```
+///     ~~~
 ///     ''')
 #[pyfunction]
 #[pyo3(signature = (text, **kwargs))]
