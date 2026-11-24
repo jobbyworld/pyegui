@@ -10,7 +10,7 @@ python scripts/bundle_finder_macos.py                 # macOS: dist/Finder.app a
 
 It is built on `pyegui-core` (the logic shared with the Python extension: file watcher, transfers, PDF
 viewer, terminal, markdown, styles, icons) and on egui. Its tags are kept in the same SQLite database as the
-Python Finder (`tags.db` of the user data folder, `PYEGUI_FINDER_TAGS` overrides the path).
+Python Finder (`tags.db` of the user data folder, `PYEGUI_FINDER_TAGS` overrides the path). The schema is documented in [docs/finder-database.md](../docs/finder-database.md).
 
 Shortcuts: Cmd+[ and Cmd+] back and forward, Cmd+Up parent, Enter or Cmd+Down open, Backspace parent, Cmd+A,
 Cmd+C / X / V, Cmd+D duplicate, Cmd+Backspace trash, F2 rename, Cmd+Shift+N new folder, Cmd+1 / 2 / 3 list, icons,

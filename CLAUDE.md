@@ -190,5 +190,5 @@ module. The themes and their introductions are in its `THEMES` list. A public na
 theme makes the script fail, so add a new function to a theme there. Never edit the generated
 files by hand: fix the docstring in `src/` instead.
 
-Other documentation: `README.rst` (install and usage), `docs/` (Sphinx site), `CHANGELOG.md`,
+Other documentation: `README.rst` (install and usage), `docs/` (Sphinx site), [docs/finder-database.md](docs/finder-database.md) (the SQLite schema shared by `finder.py` and `finder-rs`: tags, items, files, pdf_info, favorites, notes), `CHANGELOG.md`,
 `TODO.md` (egui features not bound yet), `guides/` (small how-to scripts).

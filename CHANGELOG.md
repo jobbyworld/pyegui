@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Docs: `docs/finder-database.md` documents the SQLite schema shared by `finder.py` and `finder-rs` (tables, columns, how `files` and `pdf_info` are filled, example queries, how to change the schema).
 - Finder example, like `finder-rs`: the action palette has an entry "Étiquettes" (also found by typing "tags", opened with Enter or the right arrow) that opens a page of the tags: a field to search or create a tag (`a/b/c`), the tags with a box that is on, off or mixed for the selection, the arrows, Enter or Space to tick, Left or Backspace to go back.
 - Finder example, like `finder-rs`: the sections of the sidebar (Favorites, Locations, Tags) fold with a click on their title (kept between runs), a tag of the sidebar is deleted with a trash at the right of its row (a first click arms it, a second one deletes it), moved under another tag or before/after it with the mouse (`TagStore.move_at`), and the search of the toolbar disappears as soon as the whole name of the folder no longer fits.
 - `tag_tree_view(..., deletable=, movable=, keep_order=)` and `TagTreeView.take_deleted()` / `take_moved()`: a trash with two clicks, moving the levels with the mouse, and the levels in the order of the tags instead of sorted by name. `text_width(text, size=None)`: the width a text takes on one line.
