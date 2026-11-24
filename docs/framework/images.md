@@ -22,7 +22,7 @@ image("file://icons/gear.svg", max_width=16, max_height=16, tint=(120, 120, 128)
 ```
 
 
-## `image_button_clicked(source, text=None, size=16.0, tint=None, selected=False, frame=True, tooltip=None, menu=None)`
+## `image_button_clicked(source, text=None, size=16.0, tint=None, selected=False, frame=True, tooltip=None, menu=None, min_width=0.0)`
 
 A button showing an image, and a text if given. Returns True when it is clicked.
 
@@ -36,6 +36,7 @@ A button showing an image, and a text if given. Returns True when it is clicked.
 - `frame` (bool): draw the background of the button. False shows it only when the button is hovered or selected, like the items of a sidebar. Default is True
 - `tooltip` (str): a text shown when the button is hovered, to keep the button small. Default is none
 - `menu` (Callable[[], None]): draws a menu shown when the button is right-clicked. A left click still returns True. Default is none
+- `min_width` (float): the button is at least this wide, e.g. to give the buttons of a list the same width. Default is 0
 
 **Example:**
 

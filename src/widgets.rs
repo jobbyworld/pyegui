@@ -220,6 +220,29 @@ unsafe fn available_width() -> PyResult<f32> {
     Ok(current_ui(&UI)?.available_width())
 }
 
+/// The width a text takes on one line with the font of the ui, in points: to know whether it fits
+/// before drawing it.
+///
+/// Args:
+///     text (str): the text
+///
+///     size (float): font size of the text. Default is the size of the body text
+///
+/// Example::
+///
+///     if text_width(name, size=15) + 60 > available_width():
+///         label("…")
+#[pyfunction]
+#[pyo3(signature = (text, size=None))]
+unsafe fn text_width(text: &str, size: Option<f32>) -> PyResult<f32> {
+    let ui = current_ui(&UI)?;
+    let font = match size {
+        Some(size) => egui::FontId::proportional(size),
+        None => egui::TextStyle::Body.resolve(ui.style()),
+    };
+    Ok(ui.painter().layout_no_wrap(text.to_owned(), font, egui::Color32::WHITE).size().x)
+}
+
 /// Height left for the next widgets, in points.
 #[pyfunction]
 unsafe fn available_height() -> PyResult<f32> {
@@ -378,12 +401,16 @@ fn extract_tint(tint: Option<&Bound<'_, PyAny>>) -> PyResult<Option<egui::Color3
 ///     menu (Callable[[], None]): draws a menu shown when the button is right-clicked. A left click
 ///         still returns True. Default is none
 ///
+///     min_width (float): the button is at least this wide, e.g. to give the buttons of a list the
+///         same width. Default is 0
+///
 /// Example::
 ///
 ///     if image_button_clicked("file://icons/list.svg", tooltip="List", selected=view == LIST):
 ///         view = LIST
 #[pyfunction]
-#[pyo3(signature = (source, text=None, size=16.0, tint=None, selected=false, frame=true, tooltip=None, menu=None))]
+#[pyo3(signature = (source, text=None, size=16.0, tint=None, selected=false, frame=true, tooltip=None, menu=None, min_width=0.0))]
+#[allow(clippy::too_many_arguments)]
 unsafe fn image_button_clicked(
     source: &str,
     text: Option<&str>,
@@ -393,6 +420,7 @@ unsafe fn image_button_clicked(
     frame: bool,
     tooltip: Option<&str>,
     menu: Option<Bound<'_, PyAny>>,
+    min_width: f32,
 ) -> PyResult<bool> {
     let ui = current_ui(&UI)?;
     let image = menu_image(source, size, extract_tint(tint)?);
@@ -400,7 +428,7 @@ unsafe fn image_button_clicked(
         Some(text) => egui::Button::image_and_text(image, text),
         None => egui::Button::image(image),
     };
-    let button = button.selected(selected);
+    let button = button.selected(selected).min_size(egui::vec2(min_width.max(0.0), 0.0));
     let button = if frame { button } else { button.frame_when_inactive(selected) };
     let response = ui.add(button);
     let response = match tooltip {
@@ -649,6 +677,8 @@ impl From<egui::Response> for Response {
 ///     drag (bool): also react to dragging, shown in dragged, drag_started and drag_stopped.
 ///         Default is False
 ///
+///     menu (Callable[[], None]): draws a menu shown when the area is right-clicked. Default is none
+///
 /// Example::
 ///
 ///     def tile():
@@ -659,14 +689,23 @@ impl From<egui::Response> for Response {
 ///     if response.clicked:
 ///         select(name)
 #[pyfunction]
-#[pyo3(signature = (update_fun, drag=false))]
-unsafe fn interactive(update_fun: Bound<'_, PyAny>, drag: bool) -> PyResult<Response> {
+#[pyo3(signature = (update_fun, drag=false, menu=None))]
+unsafe fn interactive(update_fun: Bound<'_, PyAny>, drag: bool, menu: Option<Bound<'_, PyAny>>) -> PyResult<Response> {
     let ui = current_ui(&UI)?;
     let sense = if drag { egui::Sense::click_and_drag() } else { egui::Sense::click() };
     let output = ui.scope_builder(egui::UiBuilder::new().sense(sense), |ui| {
         run_nested_update_func(ui, update_fun)
     });
     output.inner?;
+    if let Some(menu_fun) = menu {
+        let mut result = Ok(());
+        egui::Popup::context_menu(&output.response)
+            .style(crate::style::menu_style())
+            .show(|ui| {
+                result = run_nested_update_func(ui, menu_fun);
+            });
+        result?;
+    }
     Ok(output.response.into())
 }
 
@@ -822,6 +861,70 @@ unsafe fn segmented_control(
         selected.value = index;
     }
     Ok(picked.is_some())
+}
+
+/// A row of icon buttons in one rounded frame, like the controls of the top and bottom bands of the
+/// Finder: the cells that are on are filled with the accent color, a cell can be disabled, have a
+/// tooltip and a menu opened by a right click. Unlike segmented_control it holds no selection: it
+/// returns the index of the cell clicked, and the app decides what is on.
+///
+/// Args:
+///     options (list[dict]): one dict per cell: "icon" (the uri of an image, like for image()), and
+///         optionally "tooltip" (str), "on" (bool, filled with the accent color), "enabled" (bool,
+///         True by default) and "menu" (Callable[[], None], draws the menu of a right click)
+///
+///     id (str): tells apart two controls of one ui
+///
+///     size (float): size of the icons. Default is 16
+///
+/// Returns the index of the cell clicked during the frame, or None.
+///
+/// Example::
+///
+///     picked = segmented_buttons(
+///         [
+///             {"icon": "file://icons/chevron-left.svg", "enabled": can_back, "tooltip": "Back"},
+///             {"icon": "file://icons/chevron-right.svg", "enabled": can_forward, "tooltip": "Forward"},
+///         ],
+///         id="nav",
+///     )
+///     if picked == 0:
+///         back()
+#[pyfunction]
+#[pyo3(signature = (options, id, size=16.0))]
+unsafe fn segmented_buttons(options: Vec<Bound<'_, pyo3::types::PyDict>>, id: &str, size: f32) -> PyResult<Option<usize>> {
+    let ui = current_ui(&UI)?;
+    let mut cells = Vec::with_capacity(options.len());
+    let mut menus: Vec<Option<Bound<'_, PyAny>>> = Vec::with_capacity(options.len());
+    for option in &options {
+        let icon: String = option
+            .get_item("icon")?
+            .ok_or_else(|| PyValueError::new_err("a cell of segmented_buttons needs an \"icon\""))?
+            .extract()?;
+        let tip: Option<String> = option.get_item("tooltip")?.map(|v| v.extract()).transpose()?.flatten();
+        let on: bool = option.get_item("on")?.map(|v| v.extract()).transpose()?.unwrap_or(false);
+        let enabled: bool = option.get_item("enabled")?.map(|v| v.extract()).transpose()?.unwrap_or(true);
+        cells.push(pyegui_core::segmented::Cell {
+            image: egui::Image::new(icon),
+            on,
+            enabled,
+            tip: tip.unwrap_or_default(),
+        });
+        menus.push(option.get_item("menu")?.filter(|m| !m.is_none()));
+    }
+    let out = pyegui_core::segmented::segmented(ui, id, size, &cells);
+    for (response, menu) in out.responses.iter().zip(menus) {
+        if let Some(menu_fun) = menu {
+            let mut result = Ok(());
+            egui::Popup::context_menu(response)
+                .style(crate::style::menu_style())
+                .show(|ui| {
+                    result = run_nested_update_func(ui, menu_fun);
+                });
+            result?;
+        }
+    }
+    Ok(out.clicked)
 }
 
 /// The text typed during the frame, or an empty string. Nothing while a text field has the focus,
@@ -999,6 +1102,8 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ui_contains_pointer, m)?)?;
     m.add_function(wrap_pyfunction!(interactive, m)?)?;
     m.add_function(wrap_pyfunction!(segmented_control, m)?)?;
+    m.add_function(wrap_pyfunction!(segmented_buttons, m)?)?;
+    m.add_function(wrap_pyfunction!(text_width, m)?)?;
     m.add_function(wrap_pyfunction!(pointer_pos, m)?)?;
     m.add_function(wrap_pyfunction!(pointer_pressed, m)?)?;
     m.add_function(wrap_pyfunction!(typed_text, m)?)?;

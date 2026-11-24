@@ -2,7 +2,7 @@
 
     python scripts/make_app_macos.py                          # -> ~/Applications/Finder.app
     python scripts/make_app_macos.py --dest /Applications --python /path/to/python
-    python scripts/make_app_macos.py examples/app.py --name Atelier --icon my.icns --bundle-id org.pyegui.Atelier
+    python scripts/make_app_macos.py examples/finder.py --name Finder --icon my.icns --bundle-id org.pyegui.Finder
 
 The bundle only contains a launcher script, an Info.plist and the icon: editing the code never
 requires rebuilding the app. Rebuild it only if the repository or the venv moves.

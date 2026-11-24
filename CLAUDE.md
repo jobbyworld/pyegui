@@ -10,7 +10,7 @@ extension (`pyegui`), there is no Python source: everything public is a `#[pyfun
 ```bash
 python3 -m venv .venv && .venv/bin/pip install maturin
 .venv/bin/maturin develop --release     # builds the extension into the venv (about 3 minutes)
-.venv/bin/python examples/finder.py     # any file of examples/
+.venv/bin/python examples/finder.py     # or examples/widget_gallery.py
 ```
 
 Launchers to start and pin an app (the Finder example by default; any script, name and icon can be
@@ -105,28 +105,15 @@ Index of all files: [docs/framework/README.md](docs/framework/README.md).
 
 ## Examples (`examples/`)
 
+Two scripts, nothing else to import (`finder.py` holds its own tags database and PDF reader):
+
 | File | Shows |
 |---|---|
-| `hello_world.py` | the smallest app |
-| `widget_gallery.py`, `demo.py` | most widgets, plots |
-| `finder.py` | a mini Finder: sidebar, toolbar, list/icon/tree views, preview, and a right-hand **Dock** with an **Actions** pane (collapsible categories, per-selection enabled state, shortcuts, rename modal, copy/cut/paste), multi-selection in the 3 views (Cmd/Shift click, Cmd+A) and a rubber band in the icon view, path bar; panes can be closed, moved by their tab, and brought back from the gear menu; a Tags column and a Last Opened column in the list and tree views, a Recent pane of the items last opened; folders watched by the `FileWatcher` of pyegui (panes **Dossiers surveillés** and **Activités**, a console of what changes); a SQLite index of folders (`finder_tags.py`; the PDF found are read with `pdf_info` of pyegui by `finder_pdf.py`; a PDF opens in the central view like a markdown file (double click: `PdfView` with page, zoom, search and text selection tools, read again at the same place when it is saved) and its first page is shown in Preview (`pdf_thumbnail`): pages and protections in the Pages and Prot. columns of the list, metadata in Preview) and an advanced search pane (**Recherche**, with PDF filters); the window, theme, view, folder, dock layout and open tree folders are kept between runs (`persist_id`, `ctx.save_state`, `dock.save`) |
-| `app.py` | "Atelier": sidebar, toolbar, tabs and status bar in a glass style |
-| `explorer.py` | file explorer in a glass style with a native backdrop, files open in tabs |
-| `fileviwer.py` | file browsing with `scandir` |
-| `workspace.py`, `python-ide.py`, `pages.py` | docking, panes and pages |
-| `glass.py` | glass style and native backdrops |
-| `markdown.py` | markdown editor with live preview and mermaid diagrams |
-| `dock_colors.py` | layout rules in a glass style: a blue dock and a green dock, semi transparent (`DockPane(sheet=...)`) |
-| `markdown_viewer_bars.py`, `markdown_viewer_glass.py`, `markdown_viewer_bars_glass.py` | the same app with a top and a bottom bar, with a glass backdrop, with both: the layout rules (`layout=dict(...)`, `sidebar_panel`, `topbar_panel`, `bottombar_panel`) |
-| `custom_titlebar.py` | `custom_titlebar=True`: no title bar of the system, `window_controls()` (close, minimize, maximize at the left like macOS) and `window_drag_area()` in a `topbar_panel` |
-| `terminal.py` | a terminal in a dock: a sidebar of files, a viewer and a bottom dock with a shell and a Python prompt; buttons write commands to the shell (`term.run`); a Réglages pane changes the layout rules (`ctx.set_layout`) and the blur of the backdrop live |
-| `files.py` | the three file views (tree, list, icons) sharing one `FileWatcher`, a preview reloaded when the file changes on the disk, a Log dock of the notify events, a `path_combo` title, a `path_breadcrumb` path bar and a slider for the size of the icons |
-| `markdown_finder.py` | a markdown viewer in the unified layout of `finder.py`: a `FileTreeView` of the `.md` files of a folder in the sidebar (filtered by the search field), the document in the middle, reloaded when saved, its outline and source in a dock, the path in the bottom band |
-| `tags.py` | `Tags` and `tags_edit`: tags with several levels, the last one shown, the full path in the colors of its levels on hover, suggestions while typing, compact dots, `max_visible`; a `TagTreeView` of all the tags in the sidebar |
-| `table_columns.py`, `file_columns.py` | `table(view=TableView())` and the file views with an interactive header: sort, filter by type, move, resize and pin columns (right click on a title) |
-| `pdf_viewer.py` | a PDF viewer: thumbnails and bookmarks in the sidebar, the pages in the middle (`PdfView`), a toolbar (page, zoom, fit, rotation, dark, hand), a search with its matches marked, text selection, password, drop a file on the window |
-| `windows.py` | `Viewport`: a second and more windows of one process (one icon of the Dock), sharing the values of the app |
-| `markdown_viewer.py` | minimal app: a sidebar listing markdown files, a viewer in the middle and four docks on the right (outline, source, infos, export to PDF with `markdown_to_pdf`) |
+| `widget_gallery.py` | most widgets, one after the other |
+| `finder.py` | a mini Finder, the reference for a real desktop layout: sidebar, toolbar, list/icon/tree views, preview, a right-hand **Dock** with an **Actions** pane, tags (`Tags`, `tags_edit`, `TagTreeView`) kept in a SQLite file (`TagStore`, shared with `finder-rs`), folders watched by the `FileWatcher`, a PDF viewer (`PdfView`, `pdf_thumbnail`, `pdf_info`), terminals in the dock, layout rules and glass, the window, theme, view, folder and dock layout kept between runs |
+
+The folders `examples/icons` (the SVG icons of the bars) and `examples/app_icon` (the icon of the app) are used by
+`finder.py` and by `finder-rs`.
 
 `finder.py` is the reference for a real desktop layout. Its Actions pane works like the Actions
 dock of the PyQt app `pyfinder`: one registry (`ACTIONS`: category, label, icon, shortcut, enabled
@@ -140,7 +127,7 @@ The repository is a Cargo workspace of three crates:
   `#[pyfunction]` / `#[pyclass]` wrappers.
 - `pyegui-core` (`core/`): what does not depend on Python, shared with the Rust applications: `watcher`
   (`Core`), `transfer` (`Transfer`, `drop_operation_for`), `pdf`, `pdf_nav`, `pdf_text`, `pdf_view`
-  (`PdfDocument`, `PdfView`, `pdf_view`, `pdf_thumbnail`), `terminal` (`Terminal`, `show`), `markdown`
+  (`PdfDocument`, `PdfView`, `pdf_view`, `pdf_thumbnail`), `terminal` (`Terminal`, `show`), `tags` (`Tags`, `tags_edit`, the chips), `dock_draw` (outlines of tabs and panes, corners smoothed over one pixel, `snap`), `titlebar` (window buttons, edge resize), `markdown`
   (`show`, `code_view`), `gherkin`, `style`, `window` (native backdrops, blur, corner radius), `icons`, `path` (breadcrumb, combo), `columns` and `files` (the file views: `FolderView`, `TreeState`, `draw_folder`, `draw_tree`, `Hooks` with Rust closures for badges and extra columns). A module of `src/` that moved to the core keeps only
   its wrappers (see `src/watcher.rs`, `src/terminal.rs`, `src/pdf_view.rs`); options read from kwargs become
   a struct of the core (`TerminalOptions`, `MarkdownOptions`, `PdfViewOptions`...). Still in `src/` because
@@ -149,7 +136,7 @@ The repository is a Cargo workspace of three crates:
 - `finder-rs` (`finder-rs/`): the Finder in pure Rust (binary `finder`), the equivalent of `examples/finder.py`.
   `actions.rs` (one registry of actions read by the pane, the context menu and the shortcuts), `app.rs` (window,
   state, file operations), `dock.rs` (`egui_tiles`), `views.rs` (the file views of the core, fed with the folder, selection and sort of the app), `viewer.rs`
-  (markdown, code, image, PDF), `terminals.rs`, `tagstore.rs` (SQLite, same schema as `finder_tags.py`) and
+  (markdown, code, image, PDF), `terminals.rs`, `tagstore.rs` (SQLite, same schema as `TagStore` of `examples/finder.py`) and
   `tagsui.rs`, `search.rs`, `model.rs`. Build `cargo build --profile dist -p finder-rs`; on macOS
   `python scripts/bundle_finder_macos.py` makes `dist/Finder.app` and `dist/Finder.dmg`. The CI builds
   and attaches the executables of Windows (x64, ARM64), macOS (x86_64, aarch64) and Linux to the release.

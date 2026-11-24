@@ -199,6 +199,36 @@ def update_func(ctx):
 ```
 
 
+## `segmented_buttons(options, id, size=16.0)`
+
+A row of icon buttons in one rounded frame, like the controls of the top and bottom bands of the
+Finder: the cells that are on are filled with the accent color, a cell can be disabled, have a
+tooltip and a menu opened by a right click. Unlike segmented_control it holds no selection: it
+returns the index of the cell clicked, and the app decides what is on.
+
+**Args**
+
+- `options` (list[dict]): one dict per cell: "icon" (the uri of an image, like for image()), and optionally "tooltip" (str), "on" (bool, filled with the accent color), "enabled" (bool, True by default) and "menu" (Callable[[], None], draws the menu of a right click)
+- `id` (str): tells apart two controls of one ui
+- `size` (float): size of the icons. Default is 16
+
+Returns the index of the cell clicked during the frame, or None.
+
+**Example:**
+
+```python
+picked = segmented_buttons(
+    [
+        {"icon": "file://icons/chevron-left.svg", "enabled": can_back, "tooltip": "Back"},
+        {"icon": "file://icons/chevron-right.svg", "enabled": can_forward, "tooltip": "Forward"},
+    ],
+    id="nav",
+)
+if picked == 0:
+    back()
+```
+
+
 ## `combo_box(current_value, alternatives, names, label)`
 
 Shows a combo box with values defined in "alternatives" and their corresponding names
@@ -546,6 +576,15 @@ def update_func(ctx):
   replaces them.
 
 - `TagTreeView.selected` (attribute): The path of the level selected, or None
+- `TagTreeView.take_deleted()` (method): The levels deleted with the trash since the last call (see `deletable` of tag_tree_view): the app
+
+  removes them from its own data, they are not removed from the Tags.
+
+- `TagTreeView.take_moved()` (method): The move asked for with the mouse since the last call (see `movable` of tag_tree_view), as
+
+  (path, parent, before): the level goes under `parent` (None: at the top), before the level `before`
+  of that parent (None: last). The app moves it in its own data.
+
 
 ## `tag_tree_view(view, tags, **kwargs)`
 
@@ -564,6 +603,9 @@ under it.
 - `counts` (dict[str, int]): a number shown at the right of a level, e.g. the items tagged
 - `editable` (bool): the menu of the right click, True by default
 - `removable` (bool): the Remove entry of that menu, True by default; False keeps only the colors, e.g. when removing a tag would take it off many items
+- `deletable` (bool): a trash at the right of the row under the pointer: a first click turns it red, a second one deletes the level (it is given by `view.take_deleted()`, the app removes it from its data). False by default
+- `movable` (bool): the rows can be dragged: dropped on the middle of another level it goes under it, on its upper or lower edge it goes before or after it. The move is given by `view.take_moved()` as (path, parent, before), the app moves it in its data. False by default
+- `keep_order` (bool): the levels stay in the order of the tags instead of being sorted by name, so that a move before or after another level shows. False by default
 
 **Returns**
 

@@ -2,7 +2,7 @@ r"""Create a pinnable Windows shortcut for a pyegui app (the Finder example by d
 
     python scripts\make_shortcut_windows.py                  # Start menu: Finder
     python scripts\make_shortcut_windows.py --desktop        # + Desktop
-    python scripts\make_shortcut_windows.py examples\app.py --name Atelier --icon my.ico --app-id pyegui.Atelier
+    python scripts\make_shortcut_windows.py examples\finder.py --name Finder --icon my.ico --app-id pyegui.Finder
 
 The shortcut starts the pythonw.exe of the venv (no console window) on the script, and carries
 the same AppUserModelID as the running app (the script calls

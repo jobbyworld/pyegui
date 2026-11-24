@@ -2,7 +2,7 @@
 
 This page is written by hand (the other files of this folder are generated from the docstrings, see
 [text.md](text.md) for the list of the keyword arguments of `markdown()`). It is also a test document:
-open it in `examples/markdown_viewer.py`, which draws it with the options described below.
+open it in `examples/finder.py`, which draws it with the options described below.
 
 ## Show a text
 
