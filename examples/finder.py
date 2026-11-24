@@ -1804,6 +1804,7 @@ def snapshot():
             for name, v in (("tree", tree), ("list", files_list))
         },
         "dock": dock.save(),  # the panes still open, their tabs and sizes
+        "tabs": tab_folders(),  # the tabs of folder (their pane is in the layout of the dock)
         "watched": [str(p) for p in watched],
     }
 
@@ -1857,7 +1858,13 @@ def restore(saved):
     layout = saved.get("dock")
     if layout:
         # a pane that no longer exists is left out; a layout that no longer fits is ignored
-        dock.load(layout)
+        tabs = saved.get("tabs")
+        panes = [
+            make_tab(Path(folder), title)
+            for title, folder in (tabs.items() if isinstance(tabs, dict) else [])
+            if isinstance(title, str) and title.startswith("tab ") and isinstance(folder, str) and is_dir_within(folder)
+        ]
+        dock.load(layout, panes=panes)
     folder = Path(saved.get("folder", ""))
     if len(sys.argv) < 2 and is_dir_within(folder):  # a path given on the command line wins
         history[:] = [folder]
@@ -2915,6 +2922,9 @@ def favorites_section(accent):
         def menu(fav=fav, path=path):
             if button_clicked("Ouvrir dans une nouvelle fenêtre"):
                 new_window(path if path.is_dir() else path.parent)
+                close_menu()
+            if button_clicked("Ouvrir dans un nouvel onglet"):
+                new_tab(path if path.is_dir() else path.parent)
                 close_menu()
             separator()
             if button_clicked("Retirer des favoris"):
@@ -4674,9 +4684,11 @@ def export_markdown_pdf():
 
 # category, label, icon, shortcut, enabled, run. "Cmd" is the command key on macOS and ctrl elsewhere
 ACTIONS = [
-    ("Ouvrir", "Nouvelle fenêtre", "dock", "Cmd+N", lambda: True, new_window),
+    ("Ouvrir", "Nouvelle fenêtre", "dock", "Cmd+N", lambda: True, lambda: new_window(new_target())),
+    ("Ouvrir", "Nouvel onglet", "dock", "Cmd+Shift+T", lambda: True, lambda: new_tab()),
     ("Ouvrir", "Ouvrir", "open", "Cmd+ArrowDown", has_selection, action_open),
     ("Ouvrir", "Ouvrir dans une nouvelle fenêtre", "dock", "Cmd+Alt+ArrowDown", lambda: bool(selected_folders()), open_in_new_window),
+    ("Ouvrir", "Ouvrir dans un nouvel onglet", "dock", "Cmd+Shift+ArrowDown", lambda: bool(selected_folders()), lambda: open_in_new_tab()),
     (
         "Ouvrir",
         "Afficher le dossier parent",
@@ -5429,7 +5441,7 @@ def make_dock():
                 DockContainer(
                     "vertical",
                     [
-                        DockPane(CENTRAL, central_ui, hide_tab=True, central=True),  # no tab while the files are alone
+                        DockPane(CENTRAL, lambda: draw_tab(CENTRAL), hide_tab=True, central=True, label=lambda: tab_name(CENTRAL)),  # no tab while the files are alone
                         DockContainer(
                             "tabs",
                             [DockPane(title, ui, closable=True) for title, ui in BOTTOM_PANES.items()],
@@ -5484,7 +5496,17 @@ PER_WINDOW = [
     "reading", "reading_cache", "zoom_pick", "image_state", "pdf_reader", "pdf_query", "pdf_searched",
     "pdf_password", "pdf_dark", "pdf_continuous", "pdf_grid", "pdf_tool", "pdf_thumb_size", "pdf_preview",
     "tree", "files_list", "files_icons", "tree_menu", "shell", "python", "follow_folder", "shell_folder",
-    "tag_tree", "item_tags", "item_tags_of", "pane_requests", "layout_requests", "transfer", "dock",
+    "tag_tree", "item_tags", "item_tags_of", "pane_requests", "layout_requests", "transfer", "dock", "tab_state",
+]
+
+# What a tab of folder has of its own, inside a window: the folder and its history, the selection, the view, the
+# search, the tag shown, the file read and the views of the files. The tab shown has its variables in the module,
+# the others wait in tab_state["parked"] (the same way as the windows, see select_tab)
+TAB_VARIABLES = [
+    "history", "position", "selected", "picked", "anchor", "scroll_target", "view", "search", "tag_filter",
+    "reading", "reading_cache", "zoom_pick", "image_state", "pdf_reader", "pdf_query", "pdf_searched",
+    "pdf_password", "pdf_dark", "pdf_continuous", "pdf_grid", "pdf_tool", "pdf_thumb_size", "pdf_preview",
+    "tree", "files_list", "files_icons", "tree_menu",
 ]
 
 
@@ -5528,6 +5550,7 @@ def make_window(folder):
         "follow_folder": Bool(True), "shell_folder": {"path": folder},
         "tag_tree": TagTreeView(), "item_tags": Tags(), "item_tags_of": {"path": None, "version": -1},
         "pane_requests": [], "layout_requests": [], "transfer": FileTransfer(), "dock": make_dock(),
+        "tab_state": {"current": CENTRAL, "parked": {}},
     }
     state["files_icons"].icon_size = files_icons.icon_size
     return state
@@ -5563,6 +5586,97 @@ class FinderWindow:
 
 finder_windows = []
 
+tab_state = {"current": CENTRAL, "parked": {}}  # the title of the tab whose variables are in the module; the others
+
+
+def tab_variables():
+    return {name: globals()[name] for name in TAB_VARIABLES}
+
+
+def select_tab(title):
+    """puts the variables of the tab `title` in the module; the ones that were there are parked"""
+    current = tab_state["current"]
+    parked = tab_state["parked"]
+    if title == current or title not in parked:
+        return
+    parked[current] = tab_variables()
+    globals().update(parked.pop(title))
+    tab_state["current"] = title
+
+
+def draw_tab(title):
+    """the content of a tab of folder: it takes the variables of its folder, and draws the files"""
+    select_tab(title)
+    central_ui()
+
+
+def sync_tabs():
+    """forgets the tabs that were closed; the one shown is replaced by another if it was closed"""
+    titles = dock.titles
+    parked = tab_state["parked"]
+    for title in [t for t in parked if t not in titles]:
+        del parked[title]
+    if tab_state["current"] not in titles and parked:
+        select_tab(next((t for t in parked if t in titles), next(iter(parked))))
+
+
+def new_target():
+    """what a new tab or window opens: the selected folder (or the folder of the selected file), else the folder shown"""
+    for path in chosen():
+        return path if path.is_dir() else path.parent
+    return current()
+
+
+def tab_name(title):
+    """what the tab shows: its folder, or its file in the viewer, as it is now"""
+    if title == tab_state["current"]:
+        path = Path(reading.value) if reading.value else current()
+    else:
+        tab = tab_state["parked"].get(title)
+        if tab is None:
+            return title
+        path = Path(tab["reading"].value) if tab["reading"].value else tab["history"][tab["position"].value]
+    return path.name or str(path)
+
+
+def tab_folders():
+    """the folder of each tab but the first one, by the title of the tab (what snapshot() keeps)"""
+    folders = {t: tab["history"][tab["position"].value] for t, tab in tab_state["parked"].items() if t != CENTRAL}
+    if tab_state["current"] != CENTRAL:
+        folders[tab_state["current"]] = current()
+    return {title: str(folder) for title, folder in folders.items() if title in dock.titles}
+
+
+def make_tab(folder, title=None):
+    """a tab of folder, parked: its pane, to give to the dock. The title is its identity (the dock keeps it in
+    its layout), the name shown is read from the folder at each frame"""
+    state = make_window(folder)
+    count = tab_state.get("count", 0)
+    if title is None:
+        count += 1
+        while f"tab {count}" in dock.titles or f"tab {count}" in tab_state["parked"]:
+            count += 1
+        title = f"tab {count}"
+    elif title.removeprefix("tab ").isdigit():
+        count = max(count, int(title.removeprefix("tab ")))
+    tab_state["count"] = count
+    tab_state["parked"][title] = {name: state[name] for name in TAB_VARIABLES}
+    return DockPane(title, lambda title=title: draw_tab(title), closable=True, central=True, label=lambda title=title: tab_name(title))
+
+
+def new_tab(folder=None):
+    """a tab of folder in the tabs of the files, on the folder given, else the selected folder, else the one shown"""
+    pane = make_tab(folder or new_target())
+    show_dock.value = True  # the tabs are the ones of the dock
+    dock.add_pane(pane)
+    dock.set_active(pane.title)
+
+
+def open_in_new_tab():
+    """a tab for each selected folder"""
+    for folder in selected_folders():
+        new_tab(folder)
+
 
 def update_func(ctx):
     if not started.value:
@@ -5573,6 +5687,9 @@ def update_func(ctx):
         apply_style()
         started.value = True
     finder_windows[:] = [w for w in finder_windows if w.viewport.is_open]  # the ones the user closed
+    if os.environ.get("FINDER_TAB2") and not tab_state.get("tested") and len(dock.titles) > 1 and started.value:
+        tab_state["tested"] = True
+        new_tab(Path(os.environ["FINDER_TAB2"]))  # for the checks with two tabs of folder
     collect_activity()
     apply_background()
     window_frame(ctx)
@@ -5584,6 +5701,7 @@ def window_frame(ctx):
     keyboard()
     action_keys()
     receive_drops()
+    sync_tabs()
     open_requested_panes()  # before the dock is drawn
     follow_in_shell()
     layout()

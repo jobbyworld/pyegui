@@ -183,11 +183,13 @@ A pane of a Dock, shown as a tab.
 - `hide_tab` (bool): hide the tab bar while the pane is alone in its tabs, like hide_single_tab_bar but for this pane only. The tab is back as soon as another pane joins it. Default is False
 - `sheet` (color): with layout rules, the background of the pane and of its tab, instead of the sheet of the dock. Its opacity is multiplied by the opacity of the dock. Default is the sheet of the dock
 - `central` (bool): the pane is the main content of the window: with set_glass_style(dock=...), it is filled with the level of the central area, not the one of the dock. Default is False
+- `label` (str | Callable[[], str]): the text shown in the tab, when it is not the title. A function is called at each frame, so the tab can follow what the pane shows (the folder of a tab of files). The title stays the identity of the pane: for `set_active`, `remove_pane`, `save` and `load`. Default is the title
 
 **Usage:**
 
 ```python
 DockPane("Editor", editor_ui, closable=True)
+DockPane("tab 2", files_ui, label=lambda: current_folder().name)  # the tab shows the folder
 DockPane("Notes", notes_ui, sheet=(59, 130, 246, 200))  # a blue sheet, with layout rules
 ```
 
@@ -195,6 +197,7 @@ DockPane("Notes", notes_ui, sheet=(59, 130, 246, 200))  # a blue sheet, with lay
 - `DockPane.central` (attribute)
 - `DockPane.closable` (attribute)
 - `DockPane.hide_tab` (attribute)
+- `DockPane.label` (attribute)
 - `DockPane.title` (attribute)
 - `DockPane.update_func` (attribute)
 

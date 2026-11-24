@@ -413,6 +413,24 @@ if available_width() < 400:
 ```
 
 
+## `text_width(text, size=None)`
+
+The width a text takes on one line with the font of the ui, in points: to know whether it fits
+before drawing it.
+
+**Args**
+
+- `text` (str): the text
+- `size` (float): font size of the text. Default is the size of the body text
+
+**Example:**
+
+```python
+if text_width(name, size=15) + 60 > available_width():
+    label("…")
+```
+
+
 ## `available_height()`
 
 Height left for the next widgets, in points.

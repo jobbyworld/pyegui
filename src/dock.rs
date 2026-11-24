@@ -44,9 +44,15 @@ const INACTIVE_SHEET: f32 = 0.45;
 ///     central (bool): the pane is the main content of the window: with set_glass_style(dock=...),
 ///         it is filled with the level of the central area, not the one of the dock. Default is False
 ///
+///     label (str | Callable[[], str]): the text shown in the tab, when it is not the title. A function is
+///         called at each frame, so the tab can follow what the pane shows (the folder of a tab of files).
+///         The title stays the identity of the pane: for `set_active`, `remove_pane`, `save` and `load`.
+///         Default is the title
+///
 /// Usage::
 ///
 ///     DockPane("Editor", editor_ui, closable=True)
+///     DockPane("tab 2", files_ui, label=lambda: current_folder().name)  # the tab shows the folder
 ///     DockPane("Notes", notes_ui, sheet=(59, 130, 246, 200))  # a blue sheet, with layout rules
 #[pyclass]
 pub(crate) struct DockPane {
@@ -61,12 +67,14 @@ pub(crate) struct DockPane {
     sheet: Option<Color32>,
     #[pyo3(get, set)]
     central: bool,
+    #[pyo3(get, set)]
+    label: Option<Py<PyAny>>,
 }
 
 #[pymethods]
 impl DockPane {
     #[new]
-    #[pyo3(signature = (title, update_func, closable=false, hide_tab=false, sheet=None, central=false))]
+    #[pyo3(signature = (title, update_func, closable=false, hide_tab=false, sheet=None, central=false, label=None))]
     fn new(
         title: String,
         update_func: Py<PyAny>,
@@ -74,8 +82,10 @@ impl DockPane {
         hide_tab: bool,
         sheet: Option<Bound<'_, PyAny>>,
         central: bool,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         Ok(DockPane {
+            label,
             title,
             update_func,
             closable,
@@ -119,6 +129,7 @@ struct Pane {
     hide_tab: bool,
     sheet: Option<Color32>,
     central: bool,
+    label: Option<Py<PyAny>>,
 }
 
 impl Pane {
@@ -130,6 +141,7 @@ impl Pane {
             hide_tab: self.hide_tab,
             sheet: self.sheet,
             central: self.central,
+            label: self.label.as_ref().map(|l| l.clone_ref(py)),
         }
     }
 
@@ -141,6 +153,7 @@ impl Pane {
             hide_tab: pane.hide_tab,
             sheet: pane.sheet,
             central: pane.central,
+            label: pane.label.as_ref().map(|l| l.clone_ref(py)),
         }
     }
 }
@@ -1205,6 +1218,17 @@ impl Behavior<'_> {
 
 impl egui_tiles::Behavior<Pane> for Behavior<'_> {
     fn tab_title_for_pane(&mut self, pane: &Pane) -> egui::WidgetText {
+        // the label (a text, or a function called at each frame), else the title
+        if let Some(label) = &pane.label {
+            let label = label.bind(self.py);
+            let text = match label.extract::<String>() {
+                Ok(text) => Some(text),
+                Err(_) => label.call0().and_then(|value| value.extract::<String>()).ok(),
+            };
+            if let Some(text) = text {
+                return text.into();
+            }
+        }
         pane.title.as_str().into()
     }
 
