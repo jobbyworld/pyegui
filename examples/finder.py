@@ -260,6 +260,22 @@ CREATE TABLE IF NOT EXISTS notes (
     text TEXT NOT NULL,
     updated REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS meta_defs (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    type TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    config TEXT NOT NULL DEFAULT '{}',
+    position INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS meta_values (
+    path TEXT NOT NULL,
+    def_id INTEGER NOT NULL REFERENCES meta_defs(id) ON DELETE CASCADE,
+    value TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'user',
+    PRIMARY KEY (path, def_id)
+);
+CREATE INDEX IF NOT EXISTS meta_values_def ON meta_values(def_id);
 """
 
 

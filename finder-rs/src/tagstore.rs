@@ -54,6 +54,22 @@ CREATE TABLE IF NOT EXISTS notes (
     text TEXT NOT NULL,
     updated REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS meta_defs (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    type TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    config TEXT NOT NULL DEFAULT '{}',
+    position INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS meta_values (
+    path TEXT NOT NULL,
+    def_id INTEGER NOT NULL REFERENCES meta_defs(id) ON DELETE CASCADE,
+    value TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'user',
+    PRIMARY KEY (path, def_id)
+);
+CREATE INDEX IF NOT EXISTS meta_values_def ON meta_values(def_id);
 ";
 
 /// The colors new tags start from, one after the other (the same as `NEW_TAG_COLORS` of finder.py)
@@ -132,7 +148,7 @@ fn default_favorites() -> Vec<(String, String, String)> {
 }
 
 pub struct TagStore {
-    db: Connection,
+    pub(crate) db: Connection,
     /// grows at every change, so a view can tell its cache is stale
     pub version: u64,
 }
@@ -488,7 +504,7 @@ impl TagStore {
         self.changed();
     }
 
-    fn changed(&mut self) {
+    pub(crate) fn changed(&mut self) {
         self.version += 1;
     }
 

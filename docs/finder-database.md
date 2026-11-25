@@ -115,6 +115,33 @@ A free text attached to a file or folder.
 | `text` | TEXT NOT NULL | |
 | `updated` | REAL NOT NULL | seconds since the epoch |
 
+### `meta_defs`
+
+The definitions of the meta properties (see `core/src/meta.rs`).
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | INTEGER PRIMARY KEY | |
+| `name` | TEXT NOT NULL UNIQUE | name of the property |
+| `type` | TEXT NOT NULL | `text`, `longtext`, `number`, `bool`, `date` or `choice` (a name, so a type can be added with no migration) |
+| `description` | TEXT NOT NULL DEFAULT `''` | |
+| `config` | TEXT NOT NULL DEFAULT `'{}'` | JSON: for a `choice` `mode` (`closed` or `open`), `multiple`, `options` (`id`, `label`, `color`), `next_id`; for a `number` `unit`, `decimals` |
+| `position` | INTEGER NOT NULL DEFAULT 0 | order of the properties |
+
+### `meta_values`
+
+The value of a property on a file or folder. Only own values are stored.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `path` | TEXT NOT NULL | the file or folder |
+| `def_id` | INTEGER NOT NULL, FK `meta_defs(id)` ON DELETE CASCADE | |
+| `value` | TEXT NOT NULL | `text`: as typed; `number`: decimal; `bool`: `1`/`0`; `date`: seconds since 1970 (midnight UTC); `choice`: the **id** of an option (`3`), or a JSON list of ids (`[3,5]`) when `multiple` |
+| `source` | TEXT NOT NULL DEFAULT `'user'` | `user` (typed), later `auto` (filled by a rule of the indexation) |
+
+Primary key `(path, def_id)`; index `meta_values_def(def_id)`. A choice keeps the id of its options, never the label:
+renaming or merging an option does not touch the values.
+
 ## Queries to start from
 
 ```sql

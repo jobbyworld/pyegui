@@ -341,6 +341,7 @@ pub struct FinderApp {
     /// the tags folded in the tree of the sidebar
     tag_folded: HashSet<i64>,
     pub tag_manager: Option<TagManager>,
+    pub meta: crate::metaui::MetaUi,
     /// what the indexation leaves out, and the window that edits it (the text of the entry being typed)
     pub index_ignore: crate::indexignore::IgnoreRules,
     pub index_ignore_edit: Option<String>,
@@ -650,6 +651,7 @@ impl FinderApp {
             tags_query: String::new(),
             tag_folded: HashSet::new(),
             tag_manager: None,
+            meta: Default::default(),
             index_ignore: saved.index_ignore.clone(),
             index_ignore_edit: None,
             tag_cache: Default::default(),
@@ -1256,6 +1258,7 @@ impl FinderApp {
 
     fn modals(&mut self, ctx: &egui::Context) {
         tagsui::modal(self, ctx);
+        crate::metaui::modal(self, ctx);
         self.index_ignore_modal(ctx);
         if let Some((path, mut name)) = self.rename.take() {
             let mut keep = true;

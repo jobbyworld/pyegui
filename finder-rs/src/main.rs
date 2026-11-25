@@ -10,6 +10,8 @@ mod dock;
 mod glyphs;
 mod indexignore;
 mod indexsearch;
+mod metastore;
+mod metaui;
 mod model;
 mod openapps;
 mod tagsui;

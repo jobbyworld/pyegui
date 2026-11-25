@@ -3975,6 +3975,8 @@ dependencies = [
  "pulldown-cmark",
  "raw-window-handle",
  "rosetta-date",
+ "serde",
+ "serde_json",
  "ttf-parser",
  "usvg",
  "window-vibrancy",

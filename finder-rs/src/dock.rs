@@ -27,11 +27,13 @@ pub enum Pane {
     /// the shell of the terminal and its Python prompt
     Shell,
     Python,
+    /// the meta properties of the selected item
+    Properties,
 }
 
-pub const PANES: [Pane; 11] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::Recent, Pane::Search, Pane::Index, Pane::Appearance, Pane::Activity, Pane::Sql, Pane::Shell, Pane::Python];
+pub const PANES: [Pane; 12] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::Properties, Pane::Recent, Pane::Search, Pane::Index, Pane::Appearance, Pane::Activity, Pane::Sql, Pane::Shell, Pane::Python];
 /// the panes of the first dock at the right of the folder, and those of the terminals below
-const SIDE: [Pane; 8] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::Recent, Pane::Search, Pane::Index, Pane::Appearance, Pane::Activity];
+const SIDE: [Pane; 9] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::Properties, Pane::Recent, Pane::Search, Pane::Index, Pane::Appearance, Pane::Activity];
 const TERMINALS: [Pane; 2] = [Pane::Shell, Pane::Python];
 
 /// The size of the icon in a tab, and the space after it
@@ -49,6 +51,7 @@ impl Pane {
             Pane::Activity => "refresh",
             Pane::Sql => "list",
             Pane::Tags => "tag",
+            Pane::Properties => "list",
             Pane::Recent => "list",
             Pane::Search => "search",
             Pane::Index => "search",
@@ -68,6 +71,7 @@ impl Pane {
             Pane::Shell => "Shell",
             Pane::Python => "Python",
             Pane::Tags => "Étiquettes",
+            Pane::Properties => "Propriétés",
             Pane::Recent => "Récents",
             Pane::Search => "Recherche",
             Pane::Index => "Index",
@@ -444,6 +448,7 @@ impl Behavior<'_> {
             Pane::Activity => activity_pane(self.app, ui),
             Pane::Sql => crate::sqlpane::pane(&mut self.app.sql, ui),
             Pane::Tags => crate::tagsui::pane(self.app, ui),
+            Pane::Properties => crate::metaui::pane(self.app, ui),
             Pane::Recent => crate::tagsui::recent_pane(self.app, ui),
             Pane::Search => crate::search::pane(self.app, ui),
             Pane::Index => crate::indexsearch::pane(self.app, ui),
