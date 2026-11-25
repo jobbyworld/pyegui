@@ -204,7 +204,7 @@ pub fn trash(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let script = format!(
-            "tell application \"Finder\" to delete POSIX file \"{}\"",
+            "tell application id \"com.apple.finder\" to delete POSIX file \"{}\"",
             path.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"")
         );
         let out = std::process::Command::new("osascript").arg("-e").arg(script).output().map_err(|e| e.to_string())?;

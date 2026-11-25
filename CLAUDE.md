@@ -138,7 +138,8 @@ The repository is a Cargo workspace of three crates:
   state, file operations), `dock.rs` (`egui_tiles`), `views.rs` (the file views of the core, fed with the folder, selection and sort of the app), `viewer.rs`
   (markdown, code, image, PDF), `terminals.rs`, `tagstore.rs` (SQLite, same schema as `TagStore` of `examples/finder.py`) and
   `tagsui.rs`, `search.rs`, `model.rs`. Build `cargo build --profile dist -p finder-rs`; on macOS
-  `python scripts/bundle_finder_macos.py` makes `dist/Finder.app` and `dist/Finder.dmg`. The CI builds
+
+  `python scripts/bundle_finder_macos.py makes dist/Finder.app and dist/Finder.dmg`. The CI builds
   and attaches the executables of Windows (x64, ARM64), macOS (x86_64, aarch64) and Linux to the release.
   Not done compared with `finder.py`: drag of files
   out of the window, Windows Explorer integration.
