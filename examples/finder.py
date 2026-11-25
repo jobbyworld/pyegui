@@ -4508,7 +4508,7 @@ def index_ignore_ui():
     checkbox(index_ignore_hidden, "Ignorer les éléments cachés (dont le nom commence par un point)")
 
     def row(i, name):
-        if small_button_clicked("Retirer"):
+        if image_button_clicked(svg("close"), size=12, tint=icon_tint(), tooltip="Retirer"):
             index_ignore_names.pop(i)
         else:
             label(name)
@@ -4519,8 +4519,12 @@ def index_ignore_ui():
         if not index_ignore_names:
             weak("Aucun dossier dans la liste")
 
-    set_max_height(260)
-    scroll_area_vertical(rows)
+    def bounded():
+        # set_max_height measures from the top of its own ui, so it needs a fresh one here
+        set_max_height(260)
+        scroll_area_vertical(rows)
+
+    vertical(bounded)
 
     def add():
         text_edit_singleline(index_ignore_typed, hint_text="Ajouter un nom ou un chemin")

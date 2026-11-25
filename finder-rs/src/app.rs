@@ -325,7 +325,7 @@ pub struct FinderApp {
     pub sql: crate::sqlpane::SqlState,
     pub notice: Option<String>,
     /// the walk of "Indexer le dossier" running in a thread: the folder, the count so far, the result when done
-    indexing: Option<(PathBuf, Arc<std::sync::atomic::AtomicUsize>, Arc<Mutex<Option<Option<usize>>>>)>,
+    indexing: Option<(PathBuf, Arc<crate::tagstore::IndexProgress>, Arc<Mutex<Option<Option<usize>>>>)>,
     dock: Option<egui_tiles::Tree<Pane>>,
     /// what the system told about the disk, newest last
     pub activity: std::collections::VecDeque<String>,
@@ -696,16 +696,15 @@ impl FinderApp {
             self.activity.push_back("Indexation déjà en cours".into());
             return;
         }
-        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let progress = Arc::new(crate::tagstore::IndexProgress::default());
         let result = Arc::new(Mutex::new(None));
         self.activity.push_back(format!("Indexation de {}…", folder.display()));
-        let (c, r, f, rules) = (count.clone(), result.clone(), folder.clone(), self.index_ignore.clone());
+        let (p, r, f, rules) = (progress.clone(), result.clone(), folder.clone(), self.index_ignore.clone());
         std::thread::spawn(move || {
-            let cancel = std::sync::atomic::AtomicBool::new(false);
-            let n = crate::tagstore::index_tree(None, &f, &rules, &cancel, &c);
+            let n = crate::tagstore::index_tree(None, &f, &rules, &p);
             *r.lock().unwrap() = Some(n);
         });
-        self.indexing = Some((folder, count, result));
+        self.indexing = Some((folder, progress, result));
     }
 
     /// Called at each frame: reports the end of the walk
@@ -713,13 +712,27 @@ impl FinderApp {
         self.indexing.is_some()
     }
 
+    /// The folder being indexed and how far the walk is, for the Activités pane
+    pub fn index_progress(&self) -> Option<(&Path, &crate::tagstore::IndexProgress)> {
+        self.indexing.as_ref().map(|(folder, progress, _)| (folder.as_path(), progress.as_ref()))
+    }
+
+    /// Stops the walk at the next folder
+    pub fn cancel_indexing(&self) {
+        if let Some((_, progress, _)) = &self.indexing {
+            progress.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
     fn poll_indexing(&mut self, ctx: &egui::Context) {
-        let Some((folder, _, result)) = &self.indexing else { return };
+        let Some((folder, progress, result)) = &self.indexing else { return };
+        let cancelled = progress.cancel.load(std::sync::atomic::Ordering::Relaxed);
         let done = *result.lock().unwrap();
         match done {
             Some(n) => {
                 let text = match n {
-                    Some(n) => format!("{n} éléments indexés dans {}", folder.display()),
+                    Some(n) => format!("Indexation terminée : nombre de fichiers indexés : {n} (dans {})", folder.display()),
+                    None if cancelled => format!("Indexation de {} annulée", folder.display()),
                     None => format!("Indexation de {} impossible", folder.display()),
                 };
                 self.activity.push_back(text);
@@ -1193,10 +1206,10 @@ impl FinderApp {
             ui.add_space(6.0);
             ui.checkbox(&mut self.index_ignore.hidden, "Ignorer les éléments cachés (dont le nom commence par un point)");
             ui.add_space(6.0);
-            egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+            egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
                 for (i, name) in self.index_ignore.names.iter().enumerate() {
                     ui.horizontal(|ui| {
-                        if ui.small_button("✕").on_hover_text("Retirer").clicked() {
+                        if glyphs::button(ui, glyphs::CLOSE, 12.0, false, "Retirer").clicked() {
                             remove = Some(i);
                         }
                         ui.label(name);

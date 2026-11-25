@@ -587,6 +587,28 @@ fn actions_pane(app: &mut FinderApp, ui: &mut egui::Ui) {
 }
 
 fn activity_pane(app: &mut FinderApp, ui: &mut egui::Ui) {
+    // an indexation in progress: the share of the folders read (an estimate: the walk learns of its
+    // sub-folders as it goes), the entries recorded and the folder being read
+    let mut cancel = false;
+    if let Some((folder, progress)) = app.index_progress() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let (done, known) = (progress.folders_done.load(Relaxed), progress.folders_known.load(Relaxed));
+        let fraction = progress.fraction();
+        ui.strong(format!("Indexation de {}", folder.display()));
+        ui.add(egui::ProgressBar::new(fraction).text(format!("{:.0} %", fraction * 100.0)).animate(true));
+        ui.horizontal(|ui| {
+            ui.weak(format!("{done} / {known} dossiers · {} éléments", progress.entries.load(Relaxed)));
+            if ui.small_button("Annuler").clicked() {
+                cancel = true;
+            }
+        });
+        let current = progress.current.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        ui.add(egui::Label::new(RichText::new(current).monospace().small().weak()).truncate());
+        ui.separator();
+    }
+    if cancel {
+        app.cancel_indexing();
+    }
     ui.horizontal(|ui| {
         ui.weak("Dossiers surveillés");
         if ui.small_button("Vider le journal").clicked() {

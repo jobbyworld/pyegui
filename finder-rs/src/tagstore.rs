@@ -243,24 +243,59 @@ fn open_index(db_path: Option<&Path>) -> Option<Connection> {
     Some(db)
 }
 
-/// Records everything under `root` (the action "Indexer le dossier"): one connection, one transaction
-/// per folder, symbolic links listed but not followed. Returns the number of entries, `None` if `cancel` was set.
-pub fn index_tree(db_path: Option<&Path>, root: &Path, ignore: &crate::indexignore::IgnoreRules, cancel: &std::sync::atomic::AtomicBool, count: &std::sync::atomic::AtomicUsize) -> Option<usize> {
-    use std::sync::atomic::Ordering;
-    let mut db = open_index(db_path)?;
-    let mut todo = vec![root.to_path_buf()];
-    let mut total = 0;
-    while let Some(folder) = todo.pop() {
-        if cancel.load(Ordering::Relaxed) {
-            return None;
-        }
-        if let Some((n, subfolders)) = record_folder(&mut db, &folder, Some(ignore)) {
-            total += n;
-            count.store(total, Ordering::Relaxed);
-            todo.extend(subfolders);
+/// What a walk of `index_tree` has done, read by the window while it runs
+#[derive(Default)]
+pub struct IndexProgress {
+    /// the entries recorded so far
+    pub entries: std::sync::atomic::AtomicUsize,
+    /// the folders read, and the folders known so far (read or waiting): the share of the work done is
+    /// an estimate, the total grows as the walk meets sub-folders
+    pub folders_done: std::sync::atomic::AtomicUsize,
+    pub folders_known: std::sync::atomic::AtomicUsize,
+    /// the folder being read
+    pub current: std::sync::Mutex<String>,
+    /// set by the window to stop the walk
+    pub cancel: std::sync::atomic::AtomicBool,
+}
+
+impl IndexProgress {
+    /// The share of the folders read, 0.0 to 1.0
+    pub fn fraction(&self) -> f32 {
+        use std::sync::atomic::Ordering::Relaxed;
+        let known = self.folders_known.load(Relaxed);
+        if known == 0 {
+            0.0
+        } else {
+            (self.folders_done.load(Relaxed) as f32 / known as f32).min(1.0)
         }
     }
-    Some(total)
+}
+
+/// Records everything under `root` (the action "Indexer le dossier"): one connection, one transaction
+/// per folder, symbolic links listed but not followed, what `ignore` says left out. Returns the number
+/// of files recorded (the folders are counted in `progress.entries` with them), `None` if `progress.cancel` was set.
+pub fn index_tree(db_path: Option<&Path>, root: &Path, ignore: &crate::indexignore::IgnoreRules, progress: &IndexProgress) -> Option<usize> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut db = open_index(db_path)?;
+    let mut todo = vec![root.to_path_buf()];
+    let (mut total, mut files) = (0, 0);
+    progress.folders_known.store(1, Relaxed);
+    while let Some(folder) = todo.pop() {
+        if progress.cancel.load(Relaxed) {
+            return None;
+        }
+        *progress.current.lock().unwrap_or_else(|e| e.into_inner()) = folder.to_string_lossy().into_owned();
+        if let Some((n, subfolders)) = record_folder(&mut db, &folder, Some(ignore)) {
+            total += n;
+            // the entries are files and sub-folders (the ones that are not left out)
+            files += n - subfolders.len();
+            progress.entries.store(total, Relaxed);
+            progress.folders_known.fetch_add(subfolders.len(), Relaxed);
+            todo.extend(subfolders);
+        }
+        progress.folders_done.fetch_add(1, Relaxed);
+    }
+    Some(files)
 }
 
 fn record_folder(db: &mut Connection, folder: &Path, ignore: Option<&crate::indexignore::IgnoreRules>) -> Option<(usize, Vec<PathBuf>)> {
@@ -924,7 +959,6 @@ mod index_children_tests {
 
     #[test]
     fn a_walk_leaves_out_what_the_rules_ignore() {
-        use std::sync::atomic::{AtomicBool, AtomicUsize};
         let dir = std::env::temp_dir().join(format!("idxignore{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         for sub in ["keep/deep", ".git/objects", "node_modules/pkg", "Local Settings/cache"] {
@@ -934,8 +968,12 @@ mod index_children_tests {
         let db = std::env::temp_dir().join(format!("idxignore{}.db", std::process::id()));
         TagStore::open(Some(&db)).unwrap();
         let rules = crate::indexignore::IgnoreRules { hidden: true, names: vec!["node_modules".into(), "Local Settings".into()] };
-        let total = index_tree(Some(&db), &dir, &rules, &AtomicBool::new(false), &AtomicUsize::new(0));
-        assert_eq!(total, Some(3), "keep, keep/deep and keep/deep/f.txt only");
+        let progress = IndexProgress::default();
+        let total = index_tree(Some(&db), &dir, &rules, &progress);
+        assert_eq!(progress.folders_done.load(std::sync::atomic::Ordering::Relaxed), 3, "the root, keep and keep/deep");
+        assert!((progress.fraction() - 1.0).abs() < 1e-6);
+        assert_eq!(total, Some(1), "keep/deep/f.txt is the only file");
+        assert_eq!(progress.entries.load(std::sync::atomic::Ordering::Relaxed), 3, "keep, keep/deep and keep/deep/f.txt");
         let c = Connection::open(&db).unwrap();
         let n: i64 = c.query_row("SELECT COUNT(*) FROM files WHERE path LIKE ?", params![format!("%{}%", ".git")], |r| r.get(0)).unwrap();
         assert_eq!(n, 0);
