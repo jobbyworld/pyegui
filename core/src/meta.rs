@@ -10,6 +10,7 @@
 //! | `number` | a decimal number (`12`, `3.5`) |
 //! | `bool` | `1` or `0` |
 //! | `date` | seconds since 1970 (a decimal number) |
+//! | `formula` | nothing: computed from `config.formula` when shown |
 //! | `choice` | the id of an option (`3`), or with `multiple` a JSON list of ids (`[3,5]`) |
 //!
 //! A choice stores the **id** of an option, never its label, so renaming or merging options does not touch
@@ -29,10 +30,12 @@ pub enum MetaType {
     Bool,
     Date,
     Choice,
+    /// computed from a template, never stored (see `eval_formula`)
+    Formula,
 }
 
 impl MetaType {
-    pub const ALL: [MetaType; 6] = [MetaType::Text, MetaType::LongText, MetaType::Number, MetaType::Bool, MetaType::Date, MetaType::Choice];
+    pub const ALL: [MetaType; 7] = [MetaType::Text, MetaType::LongText, MetaType::Number, MetaType::Bool, MetaType::Date, MetaType::Choice, MetaType::Formula];
 
     /// The name kept in the base (`meta_defs.type`)
     pub fn name(self) -> &'static str {
@@ -43,6 +46,7 @@ impl MetaType {
             MetaType::Bool => "bool",
             MetaType::Date => "date",
             MetaType::Choice => "choice",
+            MetaType::Formula => "formula",
         }
     }
 
@@ -59,13 +63,14 @@ impl MetaType {
             MetaType::Bool => "Oui / non",
             MetaType::Date => "Date",
             MetaType::Choice => "Liste de choix",
+            MetaType::Formula => "Formule",
         }
     }
 
     /// How a column of this type sorts and filters
     pub fn data_type(self) -> DataType {
         match self {
-            MetaType::Text | MetaType::LongText => DataType::Text,
+            MetaType::Text | MetaType::LongText | MetaType::Formula => DataType::Text,
             MetaType::Number => DataType::Number,
             MetaType::Date => DataType::Date,
             MetaType::Bool | MetaType::Choice => DataType::Choice,
@@ -104,6 +109,8 @@ pub struct Config {
     // number
     pub unit: String,
     pub decimals: Option<u8>,
+    // formula
+    pub formula: String,
 }
 
 impl Config {
@@ -213,7 +220,7 @@ pub fn encode_ids(ids: &[i64], multiple: bool) -> String {
 pub fn is_valid(def: &MetaDef, text: &str) -> bool {
     let t = text.trim();
     match def.ty {
-        MetaType::Text | MetaType::LongText => true,
+        MetaType::Text | MetaType::LongText | MetaType::Formula => true,
         MetaType::Number | MetaType::Date => t.parse::<f64>().is_ok_and(f64::is_finite),
         MetaType::Bool => matches!(t, "0" | "1"),
         MetaType::Choice => {
@@ -227,7 +234,7 @@ pub fn is_valid(def: &MetaDef, text: &str) -> bool {
 /// (`date_text`); the others are here.
 pub fn display(def: &MetaDef, text: &str) -> String {
     match def.ty {
-        MetaType::Text | MetaType::LongText => text.to_owned(),
+        MetaType::Text | MetaType::LongText | MetaType::Formula => text.to_owned(),
         MetaType::Number => match text.trim().parse::<f64>() {
             Ok(n) => {
                 let digits = def.config.decimals.map(usize::from).unwrap_or(if n.fract() == 0.0 { 0 } else { 2 });
@@ -252,7 +259,7 @@ pub fn date_seconds(text: &str) -> Option<f64> {
 pub fn column_value(def: &MetaDef, text: Option<&str>) -> Value {
     let Some(text) = text else { return Value::None };
     match def.ty {
-        MetaType::Text | MetaType::LongText => Value::Text(text.to_owned()),
+        MetaType::Text | MetaType::LongText | MetaType::Formula => Value::Text(text.to_owned()),
         MetaType::Number | MetaType::Date => text.trim().parse().map(Value::Num).unwrap_or(Value::None),
         MetaType::Bool => Value::Text(display(def, text)),
         MetaType::Choice => Value::Text(display(def, text)),
@@ -346,7 +353,7 @@ pub fn summary_text(def: &MetaDef, summary: &Summary, date: &dyn Fn(f64) -> Stri
             let labels: Vec<&str> = def.config.options.iter().filter(|o| used.contains(&o.id)).map(|o| o.label.as_str()).collect();
             more(&labels)
         }
-        MetaType::Text | MetaType::LongText => {
+        MetaType::Text | MetaType::LongText | MetaType::Formula => {
             let texts: Vec<&str> = summary.values.iter().map(|(v, _)| v.lines().next().unwrap_or("")).collect();
             more(&texts)
         }
@@ -379,6 +386,97 @@ pub fn resolved_column_value(def: &MetaDef, resolved: &Resolved) -> Value {
         Resolved::Summary(s) => Value::Text(summary_text(def, s, &|d| d.to_string())),
         Resolved::None => Value::None,
     }
+}
+
+// formulas
+
+/// The text of a template where `{name}` is replaced by the value of `name`, like a Python f-string:
+/// `{filename} {Statut}`. `{name:spec}` formats it: `upper`, `lower`, `title`, `trim`, `.2f` (decimals),
+/// `03d` (zeros in front). `{{` and `}}` are a brace. A name that has no value gives nothing.
+pub fn eval_formula(template: &str, var: &dyn Fn(&str) -> Option<String>) -> String {
+    let mut out = String::new();
+    let mut chars = template.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' if chars.peek() == Some(&'{') => {
+                chars.next();
+                out.push('{');
+            }
+            '}' if chars.peek() == Some(&'}') => {
+                chars.next();
+                out.push('}');
+            }
+            '{' => {
+                let mut expr = String::new();
+                let mut closed = false;
+                for c in chars.by_ref() {
+                    if c == '}' {
+                        closed = true;
+                        break;
+                    }
+                    expr.push(c);
+                }
+                if !closed {
+                    out.push('{');
+                    out.push_str(&expr);
+                    break;
+                }
+                let (name, spec) = expr.split_once(':').unwrap_or((&expr, ""));
+                out.push_str(&apply_spec(var(name.trim()).unwrap_or_default(), spec.trim()));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn apply_spec(value: String, spec: &str) -> String {
+    match spec {
+        "" => value,
+        "upper" => value.to_uppercase(),
+        "lower" => value.to_lowercase(),
+        "trim" => value.trim().to_owned(),
+        "title" => value
+            .split(' ')
+            .map(|w| {
+                let mut c = w.chars();
+                c.next().map(|f| f.to_uppercase().collect::<String>() + &c.as_str().to_lowercase()).unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => {
+            let number = value.trim().replace(',', ".").parse::<f64>().ok();
+            if let (Some(n), Some(digits)) = (number, spec.strip_prefix('.').and_then(|d| d.strip_suffix('f')).and_then(|d| d.parse::<usize>().ok())) {
+                format!("{n:.digits$}")
+            } else if let (Some(n), Some(width)) = (number, spec.strip_suffix('d').and_then(|w| w.parse::<usize>().ok())) {
+                if spec.starts_with('0') { format!("{:0width$}", n as i64) } else { format!("{:width$}", n as i64) }
+            } else {
+                value
+            }
+        }
+    }
+}
+
+/// The variables every item has: `filename` (`name`), `stem`, `ext`, `parent` (`folder`: the name of the folder that
+/// holds it), `path`, `size` (bytes) and `modified` (`jj/mm/aaaa`). None for another name.
+pub fn file_var(path: &std::path::Path, name: &str) -> Option<String> {
+    let text = |o: Option<&std::ffi::OsStr>| o.map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    Some(match name.to_lowercase().as_str() {
+        "filename" | "name" | "file" => text(path.file_name()),
+        "stem" => text(path.file_stem()),
+        "ext" => text(path.extension()),
+        "parent" | "folder" => text(path.parent().and_then(|p| p.file_name())),
+        "path" => path.to_string_lossy().into_owned(),
+        "size" => std::fs::metadata(path).ok().filter(|m| m.is_file()).map(|m| m.len().to_string()).unwrap_or_default(),
+        "modified" => std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|d| chrono::DateTime::from_timestamp(d.as_secs() as i64, 0))
+            .map(|t| t.format("%d/%m/%Y").to_string())
+            .unwrap_or_default(),
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -547,5 +645,36 @@ mod tests {
         let r = Resolved::Inherited { value: "86400".into(), from: "/p".into() };
         assert_eq!(resolved_text(&day, &r, &|d| format!("jour {d}")), "jour 86400");
         assert_eq!(resolved_text(&day, &Resolved::None, &|d| d.to_string()), "");
+    }
+
+    #[test]
+    fn a_formula_fills_its_names_like_an_f_string() {
+        let var = |n: &str| match n {
+            "filename" => Some("rapport.pdf".to_owned()),
+            "Statut" => Some("en cours".to_owned()),
+            "prix" => Some("3.14159".to_owned()),
+            "n" => Some("7".to_owned()),
+            _ => None,
+        };
+        assert_eq!(eval_formula("{filename} {Statut}", &var), "rapport.pdf en cours");
+        assert_eq!(eval_formula("{ Statut :upper}", &var), "EN COURS");
+        assert_eq!(eval_formula("{Statut:title}", &var), "En Cours");
+        assert_eq!(eval_formula("{prix:.2f} €", &var), "3.14 €");
+        assert_eq!(eval_formula("n°{n:03d}", &var), "n°007");
+        assert_eq!(eval_formula("{{filename}} = {filename}", &var), "{filename} = rapport.pdf");
+        assert_eq!(eval_formula("[{unknown}]", &var), "[]");
+        assert_eq!(eval_formula("open {Statut", &var), "open {Statut", "an unclosed brace stays as it is");
+        assert_eq!(eval_formula("{prix:wat}", &var), "3.14159", "a spec that is not known leaves the value");
+    }
+
+    #[test]
+    fn items_have_file_variables() {
+        let p = std::path::Path::new("/tmp/Projet/rapport.final.pdf");
+        assert_eq!(file_var(p, "filename").as_deref(), Some("rapport.final.pdf"));
+        assert_eq!(file_var(p, "STEM").as_deref(), Some("rapport.final"));
+        assert_eq!(file_var(p, "ext").as_deref(), Some("pdf"));
+        assert_eq!(file_var(p, "folder").as_deref(), Some("Projet"));
+        assert_eq!(file_var(p, "size").as_deref(), Some(""), "a file that is not there has no size");
+        assert_eq!(file_var(p, "other"), None);
     }
 }

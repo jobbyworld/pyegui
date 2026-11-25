@@ -123,9 +123,9 @@ The definitions of the meta properties (see `core/src/meta.rs`).
 |---|---|---|
 | `id` | INTEGER PRIMARY KEY | |
 | `name` | TEXT NOT NULL UNIQUE | name of the property |
-| `type` | TEXT NOT NULL | `text`, `longtext`, `number`, `bool`, `date` or `choice` (a name, so a type can be added with no migration) |
+| `type` | TEXT NOT NULL | `text`, `longtext`, `number`, `bool`, `date`, `choice` or `formula` (a name, so a type can be added with no migration) |
 | `description` | TEXT NOT NULL DEFAULT `''` | |
-| `config` | TEXT NOT NULL DEFAULT `'{}'` | JSON: for a `choice` `mode` (`closed` or `open`), `multiple`, `options` (`id`, `label`, `color`), `next_id`; for a `number` `unit`, `decimals` |
+| `config` | TEXT NOT NULL DEFAULT `'{}'` | JSON: for a `choice` `mode` (`closed` or `open`), `multiple`, `options` (`id`, `label`, `color`), `next_id`; for a `number` `unit`, `decimals`; for a `formula` `formula`, a template like an f-string (`{filename} {Statut}`) |
 | `position` | INTEGER NOT NULL DEFAULT 0 | order of the properties |
 
 ### `meta_values`
@@ -140,6 +140,10 @@ The value of a property on a file or folder. Only own values are stored.
 | `source` | TEXT NOT NULL DEFAULT `'user'` | `user` (typed), later `auto` (filled by a rule of the indexation) |
 
 Primary key `(path, def_id)`; index `meta_values_def(def_id)`.
+
+A `formula` property has no rows in this table: its text is computed when shown from the template and the variables
+of the item (`filename`, `stem`, `ext`, `parent`, `path`, `size`, `modified`) and the other properties
+(`pyegui_core::meta::eval_formula`).
 
 Two rules are computed when asked (`pyegui_core::meta::resolve`), never stored: an item **inherits** the value of its
 nearest folder that has one (the item's own value wins), and a folder with no value, own or inherited, shows a

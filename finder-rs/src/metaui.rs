@@ -6,9 +6,10 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, NaiveDate, NaiveTime};
 use eframe::egui::{self, Color32, RichText};
+use pyegui_core::columns::Value;
 use pyegui_core::date_input::parse_date;
 use pyegui_core::human_date::human_full_date;
-use pyegui_core::meta::{decode_ids, display, encode_ids, resolve, resolved_column_value, resolved_text, ListMode, MetaDef, MetaType, Resolved};
+use pyegui_core::meta::{eval_formula, file_var, decode_ids, display, encode_ids, resolve, resolved_column_value, resolved_text, ListMode, MetaDef, MetaType, Resolved};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -47,6 +48,7 @@ pub struct MetaCache {
     defs: Rc<Vec<MetaDef>>,
     values: HashMap<i64, Rc<BTreeMap<String, String>>>,
     resolved: HashMap<(i64, PathBuf), Rc<Resolved>>,
+    computed: HashMap<(i64, PathBuf), Rc<String>>,
 }
 
 /// A day as the columns write it
@@ -84,6 +86,42 @@ impl FinderApp {
     }
 }
 
+impl FinderApp {
+    /// The text of a formula property for a path: the template with the variables of the item and the
+    /// values of the other properties (a formula may use another one, down to a few levels)
+    pub fn meta_formula(&self, def: &MetaDef, path: &std::path::Path) -> Rc<String> {
+        self.formula_at(def, path, 0)
+    }
+
+    fn formula_at(&self, def: &MetaDef, path: &std::path::Path, depth: u8) -> Rc<String> {
+        if depth > 4 {
+            return Rc::new(String::new());
+        }
+        if let Some(found) = self.meta_refresh().computed.get(&(def.id, path.to_path_buf())) {
+            if depth == 0 {
+                return found.clone();
+            }
+        }
+        let defs = self.meta_defs();
+        let text = eval_formula(&def.config.formula, &|name| {
+            if let Some(v) = file_var(path, name) {
+                return Some(v);
+            }
+            let other = defs.iter().find(|d| d.id != def.id && d.name.to_lowercase() == name.to_lowercase())?;
+            Some(if other.ty == MetaType::Formula {
+                (*self.formula_at(other, path, depth + 1)).clone()
+            } else {
+                resolved_text(other, &self.meta_resolved(other, path), &date_text)
+            })
+        });
+        let text = Rc::new(text);
+        if depth == 0 {
+            self.meta_refresh().computed.insert((def.id, path.to_path_buf()), text.clone());
+        }
+        text
+    }
+}
+
 /// The columns of the properties shown: a title (the name of the property) and how a row fills it
 pub fn extras<'a>(app: &'a FinderApp, reserved: &[&str]) -> Vec<pyegui_core::files::Extra<'a>> {
     let defs = app.meta_defs();
@@ -92,6 +130,20 @@ pub fn extras<'a>(app: &'a FinderApp, reserved: &[&str]) -> Vec<pyegui_core::fil
         .map(|d| {
             let title = if reserved.contains(&d.name.as_str()) { format!("{} (propriété)", d.name) } else { d.name.clone() };
             let (for_cell, for_value) = (d.clone(), d.clone());
+            if d.ty == MetaType::Formula {
+                return pyegui_core::files::Extra {
+                    title,
+                    width: 160.0,
+                    cell: Box::new(move |ui, path| {
+                        ui.add(egui::Label::new(&*app.meta_formula(&for_cell, path)).truncate().selectable(false));
+                    }),
+                    ty: d.ty.data_type(),
+                    value: Some(Box::new(move |path| {
+                        let text = app.meta_formula(&for_value, path);
+                        if text.is_empty() { Value::None } else { Value::Text((*text).clone()) }
+                    })),
+                };
+            }
             pyegui_core::files::Extra {
                 title,
                 width: 130.0,
@@ -212,7 +264,7 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
         app.meta.new_option.clear();
     }
     let values = app.tags.as_ref().map(|s| s.meta_values_of(&path)).unwrap_or_default();
-    let resolved: Vec<Rc<Resolved>> = defs.iter().map(|d| app.meta_resolved(d, &path)).collect();
+    let resolved: Vec<Rc<Resolved>> = defs.iter().map(|d| if d.ty == MetaType::Formula { Rc::new(Resolved::None) } else { app.meta_resolved(d, &path) }).collect();
     egui::CollapsingHeader::new("Colonnes des vues").id_salt("meta-columns").show(ui, |ui| {
         for def in &defs {
             let mut on = app.meta_columns.contains(&def.id);
@@ -241,6 +293,11 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
                 }
             });
             // what the item has without a value of its own: the one of a folder around it, or what is below it
+            if def.ty == MetaType::Formula {
+                let text = app.meta_formula(def, &path);
+                ui.label(if text.is_empty() { RichText::new("—").weak() } else { RichText::new(&*text) });
+                continue;
+            }
             match &**resolved {
                 Resolved::Inherited { from, .. } => {
                     let name = std::path::Path::new(from).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| from.clone());
@@ -450,6 +507,17 @@ pub fn modal(app: &mut FinderApp, ctx: &egui::Context) {
                         if ui.add(egui::TextEdit::singleline(&mut draft.config.unit).desired_width(80.0)).lost_focus() {
                             save = true;
                         }
+                        ui.end_row();
+                    }
+                    if draft.ty == MetaType::Formula {
+                        ui.label("Formule");
+                        ui.vertical(|ui| {
+                            let edit = ui.add(egui::TextEdit::multiline(&mut draft.config.formula).desired_rows(2).desired_width(280.0).hint_text("{filename} {Statut}"));
+                            if edit.lost_focus() {
+                                save = true;
+                            }
+                            ui.weak("{nom} : filename, stem, ext, parent, path, size, modified, ou une autre propriété. {nom:upper}, :lower, :title, :.2f, :03d.");
+                        });
                         ui.end_row();
                     }
                     if draft.ty == MetaType::Choice {
