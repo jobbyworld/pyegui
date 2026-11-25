@@ -115,6 +115,59 @@ A free text attached to a file or folder.
 | `text` | TEXT NOT NULL | |
 | `updated` | REAL NOT NULL | seconds since the epoch |
 
+### `meta_defs`
+
+The definitions of the meta properties (see `core/src/meta.rs`).
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | INTEGER PRIMARY KEY | |
+| `name` | TEXT NOT NULL UNIQUE | name of the property |
+| `type` | TEXT NOT NULL | `text`, `longtext`, `number`, `bool`, `date`, `choice` or `formula` (a name, so a type can be added with no migration) |
+| `description` | TEXT NOT NULL DEFAULT `''` | |
+| `config` | TEXT NOT NULL DEFAULT `'{}'` | JSON: for a `choice` `mode` (`closed` or `open`), `multiple`, `options` (`id`, `label`, `color`), `next_id`; for a `number` `unit`, `decimals`; for a `formula` `formula`, a template like an f-string (`{filename} {Statut}`) |
+| `position` | INTEGER NOT NULL DEFAULT 0 | order of the properties |
+
+### `meta_values`
+
+The value of a property on a file or folder. Only own values are stored.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `path` | TEXT NOT NULL | the file or folder |
+| `def_id` | INTEGER NOT NULL, FK `meta_defs(id)` ON DELETE CASCADE | |
+| `value` | TEXT NOT NULL | `text`: as typed; `number`: decimal; `bool`: `1`/`0`; `date`: seconds since 1970 (midnight UTC); `choice`: the **id** of an option (`3`), or a JSON list of ids (`[3,5]`) when `multiple` |
+| `source` | TEXT NOT NULL DEFAULT `'user'` | `user` (typed), or `auto:<id>` (written by the rule `meta_rules.id`) |
+
+Primary key `(path, def_id)`; index `meta_values_def(def_id)`.
+
+A `formula` property has no rows in this table: its text is computed when shown from the template and the variables
+of the item (`filename`, `stem`, `ext`, `parent`, `path`, `size`, `modified`) and the other properties
+(`pyegui_core::meta::eval_formula`).
+
+Two rules are computed when asked (`pyegui_core::meta::resolve`), never stored: an item **inherits** the value of its
+nearest folder that has one (the item's own value wins), and a folder with no value, own or inherited, shows a
+**summary** of the values of the items below it (range of numbers or dates, union of the options, `2/3 oui`...). A choice keeps the id of its options, never the label:
+renaming or merging an option does not touch the values.
+
+### `meta_rules`
+
+The rules of the indexation: under `root`, each level of sub-folders is read with `pattern` and gives the value of a
+property (`pyegui_core::meta::Pattern`).
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | INTEGER PRIMARY KEY | |
+| `root` | TEXT NOT NULL | the folder the pattern starts from (stored path) |
+| `pattern` | TEXT NOT NULL | `{project}/{entreprise}/*/{chapter}`: the first level under `root` fills `project`, the second `entreprise`, `*` (or any text) is a level that gives nothing |
+| `enabled` | INTEGER NOT NULL DEFAULT 1 | |
+
+A rule writes its values on the **folders** (the items below inherit them) into `meta_values` with the source
+`auto:<id of the rule>`, at the end of an indexation or when asked (`TagStore::apply_meta_rules`). It first removes the
+values it wrote before, and never replaces a value that is already there (typed by the person: source `user`). The
+folder name is read as a value of the type of the property (a number, a date, an option: a closed list ignores a name
+it does not have, an open one adds it).
+
 ## Queries to start from
 
 ```sql

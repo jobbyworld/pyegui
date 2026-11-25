@@ -21,6 +21,7 @@ pub mod titlebar;
 pub mod icons;
 pub mod path;
 pub mod columns;
+pub mod meta;
 pub mod table;
 pub mod date_range;
 pub mod date_input;

@@ -209,6 +209,8 @@ struct Saved {
     terminal_font_size: f32,
     /// the widths of the columns of the list and of the tree, by view and column key
     column_widths: std::collections::BTreeMap<String, std::collections::BTreeMap<String, f32>>,
+    /// the meta properties shown as columns (ids of `meta_defs`)
+    meta_columns: Vec<i64>,
     /// the look of the light theme and of the dark theme, kept apart
     looks: [Look; 2],
     /// an accent chosen with the color picker
@@ -242,6 +244,7 @@ impl Default for Saved {
             font_size: 14.0,
             terminal_font_size: 13.0,
             column_widths: Default::default(),
+            meta_columns: Vec::new(),
             looks: Default::default(),
             accent_custom: None,
             show_hidden: false,
@@ -271,6 +274,7 @@ pub struct FinderApp {
     pub font_size: f32,
     pub terminal_font_size: f32,
     pub column_widths: std::collections::BTreeMap<String, std::collections::BTreeMap<String, f32>>,
+    pub meta_columns: Vec<i64>,
     pub looks: [Look; 2],
     pub accent_custom: Option<[u8; 3]>,
     /// the picture behind the glasses, blurred: the file, the blur and its texture
@@ -341,6 +345,9 @@ pub struct FinderApp {
     /// the tags folded in the tree of the sidebar
     tag_folded: HashSet<i64>,
     pub tag_manager: Option<TagManager>,
+    pub meta: crate::metaui::MetaUi,
+    /// the properties, their values and what they resolve to for the rows shown, until the store changes
+    pub meta_cache: std::cell::RefCell<crate::metaui::MetaCache>,
     /// what the indexation leaves out, and the window that edits it (the text of the entry being typed)
     pub index_ignore: crate::indexignore::IgnoreRules,
     pub index_ignore_edit: Option<String>,
@@ -558,6 +565,7 @@ impl FinderApp {
             font_size: self.font_size,
             terminal_font_size: self.terminal_font_size,
             column_widths: self.column_widths.clone(),
+            meta_columns: self.meta_columns.clone(),
             ..Saved::default()
         };
         let mut app = Self::build(ctx, saved, Some(folder), false);
@@ -599,6 +607,7 @@ impl FinderApp {
             font_size: saved.font_size.clamp(9.0, 24.0),
             terminal_font_size: saved.terminal_font_size.clamp(8.0, 30.0),
             column_widths: saved.column_widths.clone(),
+            meta_columns: saved.meta_columns.clone(),
             looks: saved.looks,
             accent_custom: saved.accent_custom,
             bg_texture: None,
@@ -650,6 +659,8 @@ impl FinderApp {
             tags_query: String::new(),
             tag_folded: HashSet::new(),
             tag_manager: None,
+            meta: Default::default(),
+            meta_cache: Default::default(),
             index_ignore: saved.index_ignore.clone(),
             index_ignore_edit: None,
             tag_cache: Default::default(),
@@ -742,8 +753,25 @@ impl FinderApp {
                 };
                 self.activity.push_back(text);
                 self.indexing = None;
+                // the folders are known now: the rules read their names
+                if n.is_some() {
+                    self.apply_meta_rules_notice();
+                }
             }
             None => ctx.request_repaint_after(std::time::Duration::from_millis(250)),
+        }
+    }
+
+    /// Applies the rules of the properties and says in the activity what they wrote
+    pub fn apply_meta_rules_notice(&mut self) {
+        let Some(store) = self.tags.as_mut() else { return };
+        if store.meta_rules().is_empty() {
+            return;
+        }
+        let (written, unknown) = store.apply_meta_rules();
+        self.activity.push_back(format!("Règles des propriétés : {written} valeur(s) écrite(s)"));
+        if !unknown.is_empty() {
+            self.activity.push_back(format!("Règles des propriétés : propriété inconnue : {}", unknown.join(", ")));
         }
     }
 
@@ -1256,6 +1284,8 @@ impl FinderApp {
 
     fn modals(&mut self, ctx: &egui::Context) {
         tagsui::modal(self, ctx);
+        crate::metaui::modal(self, ctx);
+        crate::metaui::rules_modal(self, ctx);
         self.index_ignore_modal(ctx);
         if let Some((path, mut name)) = self.rename.take() {
             let mut keep = true;
@@ -2803,6 +2833,7 @@ impl eframe::App for FinderApp {
             font_size: self.font_size,
             terminal_font_size: self.terminal_font_size,
             column_widths: self.column_widths.clone(),
+            meta_columns: self.meta_columns.clone(),
             looks: self.looks.clone(),
             accent_custom: self.accent_custom,
             show_hidden: self.show_hidden,
