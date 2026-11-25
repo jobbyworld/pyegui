@@ -222,8 +222,11 @@ pub fn parse_period(text: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDat
     let words: Vec<String> = t
         .split_whitespace()
         .map(|w| w.trim_start_matches("l'").to_string())
-        .filter(|w| !matches!(w.as_str(), "" | "la" | "le" | "cette" | "ce" | "cet" | "de" | "du"))
+        .filter(|w| !matches!(w.as_str(), "" | "la" | "le" | "les" | "cette" | "ce" | "cet" | "de" | "du"))
         .collect();
+    if let [count, which, unit] = words.as_slice() {
+        return counted_period(count, which, unit, today);
+    }
     let (unit, rest) = words.split_first()?;
     let step = match rest {
         [] => 0,
@@ -245,6 +248,32 @@ pub fn parse_period(text: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDat
         }
         _ => None,
     }
+}
+
+/// "3 derniers mois", "7 derniers jours", "2 dernières semaines", "5 prochains jours": N units back from today
+/// (today included) or ahead of it. A day counts for the days of the range: the last 7 days are today and the 6 before
+fn counted_period(count: &str, which: &str, unit: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
+    let n: u32 = count.parse().ok().filter(|n| *n > 0)?;
+    let back = match which {
+        "derniers" | "dernières" | "dernieres" | "passés" | "passées" => true,
+        "prochains" | "prochaines" => false,
+        _ => return None,
+    };
+    let (days, months) = match unit {
+        "jour" | "jours" => (n as i64, 0),
+        "semaine" | "semaines" => (7 * n as i64, 0),
+        "mois" => (0, n),
+        "année" | "années" | "annee" | "annees" | "an" | "ans" => (0, 12 * n),
+        _ => return None,
+    };
+    let shift = |d: NaiveDate, sign: i64| -> Option<NaiveDate> {
+        if months > 0 {
+            if sign < 0 { d.checked_sub_months(chrono::Months::new(months)) } else { d.checked_add_months(chrono::Months::new(months)) }
+        } else {
+            Some(d + Duration::days(sign * (days - 1)))
+        }
+    };
+    if back { Some((shift(today, -1)?, today)) } else { Some((today, shift(today, 1)?)) }
 }
 
 /// "15h", "15h30", "15:30", "midi", "minuit"
@@ -340,6 +369,19 @@ mod more_tests {
         assert_eq!(parse_period("l'année prochaine", today), Some((d(2027, 1, 1), d(2027, 12, 31))));
         assert_eq!(parse_period("cette année", today), Some((d(2026, 1, 1), d(2026, 12, 31))));
         assert_eq!(parse_period("demain", today), None);
+    }
+
+    #[test]
+    fn counted_periods() {
+        let today = d(2026, 11, 25);
+        assert_eq!(parse_period("3 derniers mois", today), Some((d(2026, 8, 25), today)));
+        assert_eq!(parse_period("les 3 derniers mois", today), Some((d(2026, 8, 25), today)));
+        assert_eq!(parse_period("7 derniers jours", today), Some((d(2026, 11, 19), today)));
+        assert_eq!(parse_period("2 dernières semaines", today), Some((d(2026, 11, 12), today)));
+        assert_eq!(parse_period("5 prochains jours", today), Some((today, d(2026, 11, 29))));
+        assert_eq!(parse_period("6 prochains mois", today), Some((today, d(2027, 5, 25))));
+        assert_eq!(parse_period("2 dernières années", today), Some((d(2024, 11, 25), today)));
+        assert_eq!(parse_any_range("3 derniers mois", today), Some((Some(d(2026, 8, 25)), Some(today))));
     }
 
     #[test]
