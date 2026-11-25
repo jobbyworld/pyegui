@@ -2806,6 +2806,39 @@ unsafe fn date_range_picker(selection: &mut DateRange, kwargs: Option<&Bound<'_,
     Ok(response.changed())
 }
 
+/// The date a text says, in French: "12/03/2026" (day first), "demain", "lundi prochain", "dans 3 jours",
+/// "il y a 2 semaines", "12 mars", "fin mars". None when the text is not understood.
+///
+/// Example::
+///
+///     parse_date("lundi prochain")   # datetime.date(...)
+#[pyfunction]
+fn parse_date(text: &str) -> Option<NaiveDate> {
+    pyegui_core::date_input::parse_date(text, chrono::Local::now().date_naive())
+}
+
+/// A range of dates typed by a person, as (start, end) with None for an open end, or None when it is not
+/// understood: "cette semaine", "ce mois-ci", "depuis lundi", "jusqu'au 20/03", "12/03 au 20/03", "demain",
+/// "tout".
+///
+/// Example::
+///
+///     start, end = parse_date_range("depuis lundi")   # end is None
+#[pyfunction]
+fn parse_date_range(text: &str) -> Option<(Option<NaiveDate>, Option<NaiveDate>)> {
+    pyegui_core::date_input::parse_any_range(text, chrono::Local::now().date_naive())
+}
+
+/// A day said the way people say it: "Aujourd'hui", "Hier", "lundi dernier", "12 mars", "12 mars 2025".
+///
+/// Example::
+///
+///     human_day(datetime.date.today())   # "Aujourd'hui"
+#[pyfunction]
+fn human_day(day: NaiveDate) -> String {
+    pyegui_core::human_date::human_day(day, chrono::Local::now().date_naive())
+}
+
 /// Add extra space before the next widget.
 ///
 /// The direction is dependent on the layout.
@@ -2924,6 +2957,9 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_opacity, m)?)?;
     m.add_function(wrap_pyfunction!(date_picker_button, m)?)?;
     m.add_function(wrap_pyfunction!(date_range_picker, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_date, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_date_range, m)?)?;
+    m.add_function(wrap_pyfunction!(human_day, m)?)?;
     m.add_function(wrap_pyfunction!(add_space, m)?)?;
     containers::register(m)?;
     layout::register(m)?;

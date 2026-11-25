@@ -66,6 +66,8 @@ struct Popup {
     pending: Option<NaiveDate>,
     /// the day under the pointer, to draw the range being made
     hover: Option<NaiveDate>,
+    /// what is typed in the field of the popup
+    text: String,
 }
 
 fn first_of_month(day: NaiveDate) -> NaiveDate {
@@ -116,6 +118,28 @@ fn calendar(ui: &mut Ui, popup: &mut Popup, range: &mut DateRange) {
     let today = chrono::Local::now().date_naive();
     let shown = *popup.month.get_or_insert_with(|| first_of_month(range.start.or(range.end).unwrap_or(today)));
 
+    // the field: a range said in French, applied with Enter ("cette semaine", "depuis lundi", "12/03 au 20/03")
+    let typed = ui.add(egui::TextEdit::singleline(&mut popup.text).hint_text("ex : cette semaine, depuis lundi").desired_width(f32::INFINITY));
+    let understood = if popup.text.trim().is_empty() { None } else { crate::date_input::parse_any_range(&popup.text, today) };
+    if !popup.text.trim().is_empty() {
+        match understood {
+            Some((start, end)) => {
+                ui.weak(format!("↵  {}", DateRange { start, end }.human_daterange_label()));
+            }
+            None => {
+                ui.colored_label(egui::Color32::from_rgb(239, 68, 68), "Date non comprise");
+            }
+        }
+    }
+    if typed.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        if let Some((start, end)) = understood {
+            *range = DateRange::new(start, end);
+            popup.pending = None;
+            popup.month = Some(first_of_month(range.start.or(range.end).unwrap_or(today)));
+            popup.text.clear();
+        }
+    }
+    ui.add_space(4.0);
     ui.horizontal(|ui| {
         for (mode, text) in [(Mode::Between, "Entre"), (Mode::From, "À partir de"), (Mode::Until, "Jusqu'à")] {
             if ui.selectable_label(popup.mode == mode, text).clicked() {

@@ -1,7 +1,10 @@
 """Démo de `date_range_picker` : une plage de dates, éventuellement ouverte, qui filtre un tableau.
 
-Trois façons de choisir : « Entre » (début puis fin), « À partir de » (>= une date, sans fin) et
-« Jusqu'à » (<= une date, sans début). Des raccourcis donnent les plages usuelles.
+Trois façons de choisir la plage :
+  - le calendrier : « Entre » (début puis fin), « À partir de » (>= une date), « Jusqu'à » (<= une date) ;
+  - le champ en haut du calendrier, en français, validé par Entrée : « cette semaine », « depuis lundi »,
+    « jusqu'au 20/03 », « 12/03 au 20/03 », « ce mois-ci », « demain », « tout » ;
+  - le champ ci-dessous, hors du calendrier, avec les mêmes phrases (`parse_date_range`).
 
 Lancer avec : python examples/date_range_demo.py
 """
@@ -34,9 +37,11 @@ events = [
 ]
 
 period = DateRange(today - day(days=14), None)  # >= il y a deux semaines, sans fin
+typed = Str("")  # le champ hors du calendrier
+typed_error = Str("")
 view = TableView(sort_by="Date")  # tri et filtres du tableau, gardés entre les frames
-selected = Int(-1)
 ACCENT = (59, 130, 246)
+SENTENCES = ["cette semaine", "semaine prochaine", "ce mois-ci", "depuis lundi dernier", "jusqu'à demain", "tout"]
 
 
 def set_period(start, end):
@@ -44,31 +49,15 @@ def set_period(start, end):
 
 
 def describe(holder):
-    """la plage en mots : ce que le sélecteur dit, avec l'infini pour une extrémité ouverte"""
+    """la plage en mots, avec « ∞ » pour une extrémité ouverte"""
     if holder.start is None and holder.end is None:
         return "toutes les dates"
     if holder.end is None:
-        return f"à partir du {holder.start:%d/%m/%Y}"
+        return f"à partir de {human_day(holder.start)} ({holder.start:%d/%m/%Y})"
     if holder.start is None:
-        return f"jusqu'au {holder.end:%d/%m/%Y}"
+        return f"jusqu'à {human_day(holder.end)} ({holder.end:%d/%m/%Y})"
     days = (holder.end - holder.start).days + 1
     return f"du {holder.start:%d/%m/%Y} au {holder.end:%d/%m/%Y} ({days} jour{'s' if days > 1 else ''})"
-
-
-def shortcuts():
-    month_start = today.replace(day=1)
-    if button_clicked("7 derniers jours"):
-        set_period(today - day(days=6), today)
-    if button_clicked("30 derniers jours"):
-        set_period(today - day(days=29), today)
-    if button_clicked("Ce mois"):
-        set_period(month_start, None)
-    if button_clicked("Passé"):
-        set_period(None, today)
-    if button_clicked("Futur"):
-        set_period(today, None)
-    if button_clicked("Tout"):
-        set_period(None, None)
 
 
 def picker_row():
@@ -77,11 +66,34 @@ def picker_row():
     colored_label(ACCENT, describe(period))
 
 
+def typed_row():
+    label("Saisie")
+    text_edit_singleline(typed, hint_text="cette semaine, depuis lundi, 12/03 au 20/03…")
+    if key_pressed("Enter", when_typing=True) and typed.value.strip():
+        found = parse_date_range(typed.value)
+        if found is None:
+            typed_error.value = f"« {typed.value} » n'est pas compris"
+        else:
+            typed_error.value = ""
+            set_period(*found)
+            typed.value = ""
+    if typed_error.value:
+        colored_label((239, 68, 68), typed_error.value)
+
+
+def sentences_row():
+    label("Essayer")
+    for sentence in SENTENCES:
+        if button_clicked(sentence):
+            set_period(*parse_date_range(sentence))
+            typed_error.value = ""
+
+
 def results():
     shown = [e for e in events if period.contains(e[0])]
     strong(f"{len(shown)} évènement{'s' if len(shown) > 1 else ''} sur {len(events)}")
     if not shown:
-        weak("Aucun évènement dans cette période : élargissez-la ou choisissez « Tout ».")
+        weak("Aucun évènement dans cette période : élargissez-la ou choisissez « tout ».")
         return
     table(
         ["Date", "Évènement", "Type"],
@@ -94,10 +106,11 @@ def results():
 
 def update(ctx):
     heading("Plage de dates")
-    weak("Un sélecteur à deux extrémités, chacune pouvant rester ouverte (∞).")
+    weak("Une plage à deux extrémités, chacune pouvant rester ouverte (∞). Le champ en haut du calendrier comprend le français.")
     add_space(6)
     horizontal(picker_row)
-    horizontal(shortcuts)
+    horizontal(typed_row)
+    horizontal(sentences_row)
     separator()
     results()
 

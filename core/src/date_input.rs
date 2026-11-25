@@ -365,3 +365,49 @@ mod more_tests {
         assert_eq!(parse_datetime("n'importe quoi à 15h", now), None);
     }
 }
+
+/// What a person types in the field of a date range picker: a period ("cette semaine", "ce mois-ci"), two dates
+/// ("12/03 au 20/03", "lundi → ∞"), an open range ("depuis lundi", "jusqu'au 20/03"), one day ("demain"),
+/// or "tout" for every date. The ends are `None` when open
+pub fn parse_any_range(text: &str, today: NaiveDate) -> Option<(Option<NaiveDate>, Option<NaiveDate>)> {
+    let t = text.trim().to_lowercase().replace('’', "'");
+    if matches!(t.as_str(), "tout" | "toutes" | "toutes les dates" | "∞" | "") {
+        return Some((None, None));
+    }
+    for prefix in ["à partir du ", "à partir de ", "a partir du ", "à partir d'", "depuis le ", "depuis ", "dès le ", "dès "] {
+        if let Some(rest) = t.strip_prefix(prefix) {
+            return parse_date(rest, today).map(|d| (Some(d), None));
+        }
+    }
+    for prefix in ["jusqu'au ", "jusqu'à ", "jusqu'a ", "avant le ", "avant "] {
+        if let Some(rest) = t.strip_prefix(prefix) {
+            return parse_date(rest, today).map(|d| (None, Some(d)));
+        }
+    }
+    parse_period(&t, today)
+        .map(|(s, e)| (Some(s), Some(e)))
+        .or_else(|| parse_range(&t, today))
+        .or_else(|| parse_date(&t, today).map(|d| (Some(d), Some(d))))
+}
+
+#[cfg(test)]
+mod any_range_tests {
+    use super::*;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    #[test]
+    fn what_a_person_types_in_the_field() {
+        let today = d(2026, 11, 25);
+        assert_eq!(parse_any_range("cette semaine", today), Some((Some(d(2026, 11, 23)), Some(d(2026, 11, 29)))));
+        assert_eq!(parse_any_range("depuis lundi dernier", today), Some((Some(d(2026, 11, 23)), None)));
+        assert_eq!(parse_any_range("à partir du 12/03/2026", today), Some((Some(d(2026, 3, 12)), None)));
+        assert_eq!(parse_any_range("jusqu'au 20/03/2026", today), Some((None, Some(d(2026, 3, 20)))));
+        assert_eq!(parse_any_range("12/03/2026 au 20/03/2026", today), Some((Some(d(2026, 3, 12)), Some(d(2026, 3, 20)))));
+        assert_eq!(parse_any_range("demain", today), Some((Some(d(2026, 11, 26)), Some(d(2026, 11, 26)))));
+        assert_eq!(parse_any_range("tout", today), Some((None, None)));
+        assert_eq!(parse_any_range("n'importe quoi", today), None);
+    }
+}
