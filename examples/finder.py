@@ -16,6 +16,7 @@ Space or Cmd+P to open the action palette (search and run an action for the curr
     python finder.py [folder]
 """
 
+import fnmatch
 import os
 import queue
 import shlex
@@ -30,6 +31,37 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
 import pyegui
+
+# `--debug` keeps the events in the terminal and in a file (`--log FILE`, by default
+# ~/.local/share/finder-py/debug.log): files recorded in the SQL base, PDF metadata read, mermaid diagrams
+# pre-rendered. FINDER_DEBUG=1 does the same. The flags are taken out of sys.argv: the path comes first.
+def _debug_flags():
+    args = sys.argv[1:]
+    log = None
+    if "--log" in args:
+        i = args.index("--log")
+        log = Path(args[i + 1]).expanduser() if i + 1 < len(args) else None
+        del args[i : i + 2]
+    debug = "--debug" in args or os.environ.get("FINDER_DEBUG", "0") not in ("", "0")
+    args = [a for a in args if a != "--debug"]
+    sys.argv[1:] = args
+    if debug or log:
+        log = log or Path.home() / ".local" / "share" / "finder-py" / "debug.log"
+        try:
+            pyegui.debug_log_enable(str(log))
+            print(f"debug log: {log}", file=sys.stderr)
+        except OSError as error:
+            print(f"debug log: cannot write {log}: {error}", file=sys.stderr)
+            pyegui.debug_log_enable()
+
+
+_debug_flags()
+
+
+def dlog(category, message):
+    """one line of the debug log (does nothing without --debug)"""
+    pyegui.debug_log(category, message)
+
 
 from pyegui import (
     RGB,
@@ -328,6 +360,7 @@ class TagStore:
         )
         if cursor.rowcount == 0:
             return None
+        dlog("sqlite", f"tags: tag {name!r} created (color {color}, parent {parent})")
         self.changed()
         return cursor.lastrowid
 
@@ -451,6 +484,7 @@ class TagStore:
 
     def tag(self, path, tag):
         self.db.execute("INSERT OR IGNORE INTO items (path, tag_id) VALUES (?, ?)", (tag_key(path), tag))
+        dlog("sqlite", f"items: tag {tag} put on {tag_key(path)}")
         self.changed()
 
     def untag(self, path, tag):
@@ -507,6 +541,7 @@ class TagStore:
                                                    open_count = open_count + 1""",
                 (tag_key(path), time.time() if when is None else when),
             )
+            dlog("sqlite", f"files: {tag_key(path)} opened")
             self.changed()
         except sqlite3.OperationalError:  # database is locked
             self.db.rollback()
@@ -555,7 +590,7 @@ class TagStore:
 
     # the index: a whole folder and everything it contains, with name, size and date
 
-    def index_folder(self, root, progress=None, cancel=None, workers=1, on_folder=None):
+    def index_folder(self, root, progress=None, cancel=None, workers=1, on_folder=None, ignore=None):
         """walks a folder and records every file and sub-folder in the table files (name, parent,
         kind, size, modification date). A file gets last_seen, the time of the walk that found it;
         a folder gets last_full_scan, the time of the walk that read all its entries (a folder
@@ -604,6 +639,9 @@ class TagStore:
                     info = item.stat(follow_symlinks=False)
                 except OSError:
                     continue
+                if ignore and ignore(item.path, item.name, is_dir):  # not recorded, and a folder is not entered
+                    dlog("sqlite", f"files: ignored {item.path}")
+                    continue
                 found.append(
                     (os.path.normcase(item.path), item.name, parent, int(is_dir),
                      0 if is_dir else info.st_size, info.st_mtime, None if is_dir else started)
@@ -643,6 +681,7 @@ class TagStore:
                 "UPDATE files SET last_full_scan = ? WHERE path = ?", [(started, f) for f in scanned]
             )
             db.commit()
+            dlog("sqlite", f"index walk of {root}: {len(rows)} entries written, {len(scanned)} folders fully read")
             rows.clear()
             scanned.clear()
 
@@ -692,6 +731,7 @@ class TagStore:
             flush()
             gone = self._drop_vanished(db, root, started, seen_folders, done)
             db.commit()
+            dlog("sqlite", f"index walk of {root} done: {count} entries, {gone} removed")
             if progress:
                 progress(count)
             self._checkpoint(db)
@@ -730,6 +770,9 @@ class TagStore:
         except OSError:
             return None
         try:
+            before = None
+            if pyegui.debug_enabled():  # what was recorded of the folder, to log what is new and what changed
+                before = {p: (s, m) for p, s, m in db.execute("SELECT path, COALESCE(size, 0), COALESCE(modified, 0) FROM files WHERE parent = ? AND path != ?", (key, key))}
             db.execute(
                 """INSERT INTO files (path, name, parent, is_dir, size, modified, last_full_scan)
                    VALUES (?, ?, ?, 1, 0, ?, ?)
@@ -746,13 +789,32 @@ class TagStore:
                 rows,
             )
             found = {r[0] for r in rows}
+            added = updated = removed = 0
+            if before is not None:
+                shown = 15
+                for path, name, _, is_dir, size, modified, _ in rows:
+                    kind = "folder" if is_dir else "file"
+                    if path not in before:
+                        added += 1
+                        if added <= shown:
+                            dlog("sqlite", f"files: + {kind} {path}")
+                    elif before[path][0] != size or abs(before[path][1] - modified) > 1e-3:
+                        updated += 1
+                        if updated <= shown:
+                            dlog("sqlite", f"files: ~ {kind} {name} changed ({before[path][0]} -> {size} bytes) in {key}")
+                if added > shown or updated > shown:
+                    dlog("sqlite", f"files: ... only the first {shown} added and the first {shown} updated are listed")
             for path, is_dir in db.execute("SELECT path, is_dir FROM files WHERE parent = ? AND path != ?", (key, key)).fetchall():
                 if path in found:
                     continue
+                removed += 1
+                dlog("sqlite", f"files: - {'folder' if is_dir else 'file'} {path} is gone")
                 db.execute("DELETE FROM files WHERE path = ?", (path,))
                 if is_dir:  # a vanished folder takes what was recorded below it
                     db.execute("DELETE FROM files WHERE path LIKE ? ESCAPE '\\'", (like_inside(path),))
             db.commit()
+            if before is not None:
+                dlog("sqlite", f"folder {key} recorded: {len(rows)} entries, {added} new, {updated} changed, {removed} removed")
             return len(rows)
         except (sqlite3.Error, OSError):
             return None
@@ -897,6 +959,7 @@ class TagStore:
                 info = read_pdf_info(path)
                 read += 1
                 errors += bool(info["error"])
+                dlog("sqlite", f"pdf_info: {path} recorded ({info['pages']} pages{', error: ' + info['error'] if info['error'] else ''})")
                 db.execute(
                     f"INSERT OR REPLACE INTO pdf_info (path, size, mtime, read_at, {', '.join(COLUMNS)}) "
                     f"VALUES ({marks})",
@@ -1859,6 +1922,7 @@ def snapshot():
         "closed_sections": sorted(closed_sections),
         "show_hidden": show_hidden.value,
         "blue_folders": blue_folders.value,
+        "index_ignore": {"hidden": index_ignore_hidden.value, "names": list(index_ignore_names)},
         "background": {
             "on": bg_on.value,
             "image": bg_image.value,
@@ -1905,6 +1969,11 @@ def restore(saved):
     show_sidebar.value = saved.get("show_sidebar", show_sidebar.value)
     show_dock.value = saved.get("show_dock", show_dock.value)
     closed_sections.update(s for s in saved.get("closed_sections", []) if isinstance(s, str))
+    ignore = saved.get("index_ignore")
+    if isinstance(ignore, dict):
+        index_ignore_hidden.value = bool(ignore.get("hidden", True))
+        if isinstance(ignore.get("names"), list):
+            index_ignore_names[:] = [n for n in ignore["names"] if isinstance(n, str)]
     set_hidden(bool(saved.get("show_hidden", show_hidden.value)))
     set_blue(bool(saved.get("blue_folders", blue_folders.value)))
     background = saved.get("background")
@@ -4397,6 +4466,87 @@ def one_selected():
     return len(chosen()) == 1
 
 
+# What the indexation of a folder leaves out: the hidden entries and the folders of a list, kept between runs.
+# An entry of the list is a name (matched on the name of a folder, case ignored, `*` stands for any text:
+# `*.app`, `cache*`) or a path (everything under it).
+INDEX_IGNORE_DEFAULT = [
+    "Local Settings", "AppData", "Application Data", "Library", "$RECYCLE.BIN", "System Volume Information",
+    "node_modules", "__pycache__", "target", "venv", "site-packages", "*.app", "*.photoslibrary",
+]
+index_ignore_hidden = Bool(True)
+index_ignore_names = list(INDEX_IGNORE_DEFAULT)
+index_ignore_open = Bool(False)
+index_ignore_typed = Str("")
+
+
+def make_index_ignore():
+    """the function the walk uses to leave entries out, with the rules as they are now (the walk runs in
+    a thread: it must not read what the window edits)"""
+    hidden = index_ignore_hidden.value
+    names = [n.strip() for n in index_ignore_names if n.strip()]
+    is_path = lambda n: "/" in n or "\\" in n
+    paths = [os.path.normcase(n.rstrip("/\\")) for n in names if is_path(n)]
+    patterns = [n.lower() for n in names if not is_path(n)]
+
+    def ignore(path, name, is_dir):
+        if hidden and name.startswith("."):
+            return True
+        if not is_dir:
+            return False
+        low = os.path.normcase(path)
+        if any(low == p or low.startswith(p + os.sep) or low.startswith(p + "/") for p in paths):
+            return True
+        return any(fnmatch.fnmatchcase(name.lower(), pattern) for pattern in patterns)
+
+    return ignore
+
+
+def index_ignore_ui():
+    set_width(420)
+    heading("Dossiers ignorés par l'indexation")
+    weak("Un nom (sans la casse, avec * : *.app, cache*) ou un chemin complet (tout ce qu'il contient).")
+    checkbox(index_ignore_hidden, "Ignorer les éléments cachés (dont le nom commence par un point)")
+
+    def row(i, name):
+        if small_button_clicked("Retirer"):
+            index_ignore_names.pop(i)
+        else:
+            label(name)
+
+    def rows():
+        for i, name in enumerate(list(index_ignore_names)):
+            horizontal(lambda i=i, name=name: row(i, name))
+        if not index_ignore_names:
+            weak("Aucun dossier dans la liste")
+
+    set_max_height(260)
+    scroll_area_vertical(rows)
+
+    def add():
+        text_edit_singleline(index_ignore_typed, hint_text="Ajouter un nom ou un chemin")
+        typed = index_ignore_typed.value.strip()
+        if (button_clicked("Ajouter") or key_pressed("Enter", when_typing=True)) and typed:
+            if typed.lower() not in (n.lower() for n in index_ignore_names):
+                index_ignore_names.append(typed)
+            index_ignore_typed.value = ""
+
+    horizontal(add)
+
+    def end():
+        if button_clicked("Valeurs par défaut"):
+            index_ignore_hidden.value = True
+            index_ignore_names[:] = INDEX_IGNORE_DEFAULT
+        if button_clicked("Fermer"):
+            index_ignore_open.value = False
+
+    horizontal(end)
+
+
+def index_ignore_dialog():
+    if modal("index-ignore", index_ignore_ui, rounding=12, inner_margin=14, fill=dialog_fill()):
+        index_ignore_open.value = False
+
+
 def index_folder_action():
     """records the folder (the selected one, or the current one) and all it contains in the SQLite
     base, in a thread so the window stays alive; the progress shows in the path bar"""
@@ -4451,10 +4601,12 @@ def run_index_job(folder, name, walk):
     def cancelled():
         return indexing["cancel"]
 
+    ignore = make_index_ignore()
+
     def work():
         try:
             indexing["result"] = (
-                tags.index_folder(folder, progress, cancelled, on_folder=on_folder) if walk else (0, 0)
+                tags.index_folder(folder, progress, cancelled, on_folder=on_folder, ignore=ignore) if walk else (0, 0)
             )
             if indexing["result"] is not None:  # then what the PDF say of themselves: only the new or changed ones are read
                 indexing["pdfs"] = tags.index_pdfs(folder, pdf_progress, cancelled, on_file)  # a cancelled walk stops the whole job
@@ -4987,6 +5139,14 @@ ACTIONS = [
         None,
         lambda: True,  # while one runs, the new one waits in the queue
         index_folder_action,
+    ),
+    (
+        "Outils",
+        "Dossiers ignorés par l'indexation…",
+        "gear",
+        None,
+        lambda: True,
+        lambda: setattr(index_ignore_open, "value", True),
     ),
     (
         "Outils",
@@ -5893,6 +6053,8 @@ def window_frame(ctx):
         rename_dialog()
     if integration_note.value:
         integration_dialog()
+    if index_ignore_open.value:
+        index_ignore_dialog()
     if palette_open.value:
         action_palette()
     if tag_picker_open.value:
@@ -5935,6 +6097,7 @@ if __name__ == "__main__":
 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
     set_blue_folders(blue_folders.value)  # restore() changes it again when the user chose otherwise
+    pyegui.preload_markdown_fonts()  # the fonts of the mermaid diagrams, loaded while the window opens
     run_native(
         "Finder",
         update_func,

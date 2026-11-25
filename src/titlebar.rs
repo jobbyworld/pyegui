@@ -9,7 +9,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui::{self, Sense, ViewportCommand};
-use pyegui_core::titlebar::{maximized, toggle_maximized};
+use pyegui_core::titlebar::toggle_maximized;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 

@@ -7,7 +7,7 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-pub(crate) use pyegui_core::pdf::{open_with_info, Info};
+pub(crate) use pyegui_core::pdf::Info;
 use pyegui_core::pdf::{info_of_path, PERMISSIONS};
 
 /// What the Python side gets: the dict of `pdf_info`.

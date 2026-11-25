@@ -1,4 +1,3 @@
-use eframe::egui;
 use pyegui_core::markdown::{self as core, MarkdownOptions, Policies, TableFit, MERMAID_THEMES};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -6,7 +5,6 @@ use pyo3::types::PyDict;
 
 use crate::{current_ui, kwarg, UI};
 
-pub(crate) use pyegui_core::markdown::replace_mermaid;
 
 /// Shows markdown text: headings, lists, tables, quotes, code blocks, links and images.
 ///
@@ -167,7 +165,22 @@ unsafe fn code_view(text: &str, language: &str, kwargs: Option<&Bound<'_, PyDict
     Ok(())
 }
 
+/// Loads, on a thread of its own, the system fonts that the mermaid diagrams of `markdown` need.
+///
+/// Without it the first diagram loads them (about two seconds, on a thread too: the text of the diagram
+/// shows a placeholder until then). Call it once the app is running to have them ready before the first
+/// markdown with a diagram is opened. Does nothing the second time.
+///
+/// Example::
+///
+///     preload_markdown_fonts()  # at the start of the app
+#[pyfunction]
+fn preload_markdown_fonts() {
+    core::preload_fonts();
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(preload_markdown_fonts, m)?)?;
     m.add_function(wrap_pyfunction!(markdown, m)?)?;
     m.add_function(wrap_pyfunction!(code_view, m)?)?;
     Ok(())

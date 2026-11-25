@@ -424,6 +424,42 @@ if date_range_picker(period):
 ```
 
 
+## `parse_date(text)`
+
+The date a text says, in French: "12/03/2026" (day first), "demain", "lundi prochain", "dans 3 jours",
+"il y a 2 semaines", "12 mars", "fin mars". None when the text is not understood.
+
+**Example:**
+
+```python
+parse_date("lundi prochain")   # datetime.date(...)
+```
+
+
+## `parse_date_range(text)`
+
+A range of dates typed by a person, as (start, end) with None for an open end, or None when it is not
+understood: "cette semaine", "ce mois-ci", "depuis lundi", "jusqu'au 20/03", "12/03 au 20/03", "demain",
+"tout".
+
+**Example:**
+
+```python
+start, end = parse_date_range("depuis lundi")   # end is None
+```
+
+
+## `human_day(day)`
+
+A day said the way people say it: "Aujourd'hui", "Hier", "lundi dernier", "12 mars", "12 mars 2025".
+
+**Example:**
+
+```python
+human_day(datetime.date.today())   # "Aujourd'hui"
+```
+
+
 ## `color_edit_button_rgb(rgb)`
 
 Shows a button with the given color. If the user clicks the button, a full color picker is shown.

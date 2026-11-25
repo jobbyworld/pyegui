@@ -255,6 +255,21 @@ flowchart LR
 ```
 
 
+## `preload_markdown_fonts()`
+
+Loads, on a thread of its own, the system fonts that the mermaid diagrams of `markdown` need.
+
+Without it the first diagram loads them (about two seconds, on a thread too: the text of the diagram
+shows a placeholder until then). Call it once the app is running to have them ready before the first
+markdown with a diagram is opened. Does nothing the second time.
+
+**Example:**
+
+```python
+preload_markdown_fonts()  # at the start of the app
+```
+
+
 ## `markdown_to_pdf(text, path=None, **kwargs)`
 
 Turns a markdown text into a PDF, drawn like `markdown()` is.

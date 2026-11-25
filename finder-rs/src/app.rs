@@ -17,7 +17,7 @@ use crate::glyphs;
 use pyegui_core::path::{breadcrumb, combo, BreadcrumbOptions, ComboOptions};
 use crate::model::{self, History, SortKey};
 use crate::tagstore::{How, TagStore};
-use crate::tagsui::{self, TagManager, TagPicker};
+use crate::tagsui::{self, TagManager};
 use crate::terminals::{self, Terminals};
 use crate::viewer::{self, Viewer};
 use crate::views::{self, Views};
@@ -220,6 +220,8 @@ struct Saved {
     open_folders: Vec<PathBuf>,
     /// the sections of the sidebar that are folded (Favoris, Emplacements, Étiquettes)
     closed_sections: Vec<String>,
+    /// what the indexation of a folder leaves out
+    index_ignore: crate::indexignore::IgnoreRules,
 }
 
 impl Default for Saved {
@@ -247,6 +249,7 @@ impl Default for Saved {
             dock: None,
             open_folders: Vec::new(),
             closed_sections: Vec::new(),
+            index_ignore: Default::default(),
         }
     }
 }
@@ -335,7 +338,9 @@ pub struct FinderApp {
     /// the tags folded in the tree of the sidebar
     tag_folded: HashSet<i64>,
     pub tag_manager: Option<TagManager>,
-    pub tag_picker: Option<TagPicker>,
+    /// what the indexation leaves out, and the window that edits it (the text of the entry being typed)
+    pub index_ignore: crate::indexignore::IgnoreRules,
+    pub index_ignore_edit: Option<String>,
     /// the tags of the rows shown, by path, until the store changes
     tag_cache: std::cell::RefCell<(u64, std::collections::HashMap<PathBuf, std::rc::Rc<Vec<(Color32, String, How)>>>)>,
     /// the tag paths of the rows shown, and the tags of the store with their colors, until the store changes
@@ -640,7 +645,8 @@ impl FinderApp {
             tags_query: String::new(),
             tag_folded: HashSet::new(),
             tag_manager: None,
-            tag_picker: None,
+            index_ignore: saved.index_ignore.clone(),
+            index_ignore_edit: None,
             tag_cache: Default::default(),
             tag_paths_cache: Default::default(),
             library_cache: Default::default(),
@@ -693,10 +699,10 @@ impl FinderApp {
         let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let result = Arc::new(Mutex::new(None));
         self.activity.push_back(format!("Indexation de {}…", folder.display()));
-        let (c, r, f) = (count.clone(), result.clone(), folder.clone());
+        let (c, r, f, rules) = (count.clone(), result.clone(), folder.clone(), self.index_ignore.clone());
         std::thread::spawn(move || {
             let cancel = std::sync::atomic::AtomicBool::new(false);
-            let n = crate::tagstore::index_tree(None, &f, &cancel, &c);
+            let n = crate::tagstore::index_tree(None, &f, &rules, &cancel, &c);
             *r.lock().unwrap() = Some(n);
         });
         self.indexing = Some((folder, count, result));
@@ -1142,7 +1148,7 @@ impl FinderApp {
         let folder = self.views.drop_target(self.view).unwrap_or_else(|| self.folder().to_path_buf());
         if !hovered.is_empty() {
             let operation = pyegui_core::transfer::drop_operation_for(held, &hovered, &folder);
-            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop-hint")));
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("drop-hint")));
             let screen = ctx.content_rect();
             painter.rect_filled(screen, 0.0, Color32::from_black_alpha(110));
             painter.text(
@@ -1174,12 +1180,69 @@ impl FinderApp {
         }
     }
 
+    /// The window of what the indexation leaves out: the hidden entries, then the list of names and paths
+    fn index_ignore_modal(&mut self, ctx: &egui::Context) {
+        let Some(mut typed) = self.index_ignore_edit.take() else { return };
+        let mut close = false;
+        let mut remove: Option<usize> = None;
+        let mut add = false;
+        egui::Modal::new(egui::Id::unique("index-ignore")).show(ctx, |ui| {
+            ui.set_width(420.0);
+            ui.heading("Dossiers ignorés par l'indexation");
+            ui.weak("Un nom (sans la casse, avec * au début ou à la fin : *.app, cache*) ou un chemin complet (tout ce qu'il contient).");
+            ui.add_space(6.0);
+            ui.checkbox(&mut self.index_ignore.hidden, "Ignorer les éléments cachés (dont le nom commence par un point)");
+            ui.add_space(6.0);
+            egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                for (i, name) in self.index_ignore.names.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        if ui.small_button("✕").on_hover_text("Retirer").clicked() {
+                            remove = Some(i);
+                        }
+                        ui.label(name);
+                    });
+                }
+                if self.index_ignore.names.is_empty() {
+                    ui.weak("Aucun dossier dans la liste");
+                }
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let edit = ui.add(egui::TextEdit::singleline(&mut typed).hint_text("Ajouter un nom ou un chemin").desired_width(280.0));
+                let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (ui.button("Ajouter").clicked() || enter) && !typed.trim().is_empty() {
+                    add = true;
+                }
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("Valeurs par défaut").clicked() {
+                    self.index_ignore = Default::default();
+                }
+                if ui.button("Fermer").clicked() {
+                    close = true;
+                }
+            });
+        });
+        if let Some(i) = remove {
+            self.index_ignore.names.remove(i);
+        }
+        if add {
+            self.index_ignore.add(&typed);
+            typed.clear();
+        }
+        if !close && !ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.index_ignore_edit = Some(typed);
+        }
+    }
+
     fn modals(&mut self, ctx: &egui::Context) {
         tagsui::modal(self, ctx);
+        self.index_ignore_modal(ctx);
         if let Some((path, mut name)) = self.rename.take() {
             let mut keep = true;
             let mut apply = false;
-            egui::Modal::new(egui::Id::new("rename")).show(ctx, |ui| {
+            egui::Modal::new(egui::Id::unique("rename")).show(ctx, |ui| {
                 ui.set_width(320.0);
                 ui.heading("Renommer");
                 let edit = ui.add(egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY));
@@ -1213,7 +1276,7 @@ impl FinderApp {
         if let Some((id, name)) = self.confirm_tag_delete.take() {
             let mut keep = true;
             let mut yes = false;
-            egui::Modal::new(egui::Id::new("delete-tag")).show(ctx, |ui| {
+            egui::Modal::new(egui::Id::unique("delete-tag")).show(ctx, |ui| {
                 ui.set_width(360.0);
                 ui.heading("Supprimer l'étiquette ?");
                 ui.label(format!("« {name} » est retirée de tous les éléments. Les fichiers et les sous-étiquettes sont conservés."));
@@ -1238,7 +1301,7 @@ impl FinderApp {
         if let Some(paths) = self.confirm_delete.take() {
             let mut keep = true;
             let mut yes = false;
-            egui::Modal::new(egui::Id::new("delete")).show(ctx, |ui| {
+            egui::Modal::new(egui::Id::unique("delete")).show(ctx, |ui| {
                 ui.set_width(340.0);
                 ui.heading("Supprimer définitivement ?");
                 ui.label(format!("{} élément(s) seront supprimés, sans corbeille.", paths.len()));
@@ -1261,7 +1324,7 @@ impl FinderApp {
         self.poll_indexing(ctx);
         if let Some(text) = self.notice.clone() {
             let mut close = false;
-            egui::Modal::new(egui::Id::new("notice")).show(ctx, |ui| {
+            egui::Modal::new(egui::Id::unique("notice")).show(ctx, |ui| {
                 ui.set_width(340.0);
                 ui.label(text);
                 if ui.button("OK").clicked() {
@@ -1290,7 +1353,7 @@ impl FinderApp {
     /// tree of the tags, each with a box to check for the selected items. Up and Down move, Enter or Space
     /// checks, Left or Backspace goes back, Esc closes the whole popup
     fn palette_modal(&mut self, ctx: &egui::Context) {
-        let page_id = egui::Id::new("palette-page");
+        let page_id = egui::Id::unique("palette-page");
         let Some((mut query, mut index)) = self.palette.take() else {
             // closed: everything is reset, so that the next opening (a key, a right click) starts on the main
             // page, with empty fields, and does not slide
@@ -1404,7 +1467,7 @@ impl FinderApp {
         let mut cursor = self.palette_cursor;
         let mut tag_query = self.palette_tag_query.clone();
         let mut go_back = false;
-        let response = egui::Modal::new(egui::Id::new("palette")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("palette")).show(ctx, |ui| {
             ui.set_width(page_size.x);
             let (area, _) = ui.allocate_exact_size(page_size, egui::Sense::hover());
             // the main page leaves to the left while the tags come in from the right, and back
@@ -1765,7 +1828,7 @@ impl FinderApp {
                 });
                 ui.add_space(8.0);
                 if show_search {
-                    ui.add(egui::TextEdit::singleline(&mut self.search).id(egui::Id::new("search-field")).hint_text("Rechercher").vertical_align(egui::Align::Center).desired_width(search_width));
+                    ui.add(egui::TextEdit::singleline(&mut self.search).id(egui::Id::unique("search-field")).hint_text("Rechercher").align(egui::Align2::LEFT_CENTER).desired_width(search_width));
                     ui.add_space(8.0);
                 }
                 if show_view {
@@ -1840,7 +1903,7 @@ impl FinderApp {
         let before = self.theme;
         // the panel is not a popup of egui (only one is open at a time: the picker of a color would close
         // it): it stays open until the gear or its cross is clicked
-        let open_id = egui::Id::new("appearance-open");
+        let open_id = egui::Id::unique("appearance-open");
         let mut open = ui.ctx().data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
         // for the checks of the look (FINDER_SHOT): the panel opened by itself
         if std::env::var_os("FINDER_APPEARANCE").is_some() && ui.ctx().cumulative_frame_nr() == 20 {
@@ -1865,7 +1928,7 @@ impl FinderApp {
         let mut open = open ^ gear.clicked();
         if open {
             let pos = egui::pos2(gear.rect.right(), gear.rect.top() - 8.0);
-            egui::Area::new(egui::Id::new("appearance-panel"))
+            egui::Area::new(egui::Id::unique("appearance-panel"))
                 .order(egui::Order::Foreground)
                 .pivot(egui::Align2::RIGHT_BOTTOM)
                 .fixed_pos(pos)
@@ -2054,7 +2117,7 @@ impl FinderApp {
     /// parents shortened when room is missing; "…" turns it into a field to type a path
     fn path_bar(&mut self, ui: &mut egui::Ui) {
         if let Some(mut text) = self.path_text.take() {
-            let id = egui::Id::new("path-field");
+            let id = egui::Id::unique("path-field");
             let fresh = !ui.memory(|m| m.has_focus(id));
             let mut output = egui::TextEdit::singleline(&mut text).id(id).desired_width(ui.available_width().max(100.0)).show(ui);
             if fresh {
@@ -2128,7 +2191,7 @@ impl FinderApp {
             })
             .response
             .rect;
-        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(TAG_BAND), band));
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(TAG_BAND), band));
         if ask_delete {
             self.confirm_tag_delete = Some((tag.id, tag.name.clone()));
         }
@@ -2280,7 +2343,7 @@ impl FinderApp {
                 if has_children {
                     // the arrow: its own click folds, the rest of the row shows the tag
                     let arrow = egui::Rect::from_center_size(egui::pos2(x + 7.0, rect.center().y), egui::vec2(20.0, 24.0));
-                    let arrow_response = ui.interact(arrow, ui.id().with(("tag-fold", tag.id)), egui::Sense::click());
+                    let arrow_response = ui.interact(arrow, ui.scope_id().with(("tag-fold", tag.id)), egui::Sense::click());
                     // a large chevron: to the right when folded, down when open
                     let chevron = if folded { glyphs::CHEVRON_RIGHT } else { glyphs::CHEVRON_DOWN };
                     glyphs::image(chevron, 16.0, color).paint_at(ui, egui::Rect::from_center_size(arrow.center(), egui::vec2(16.0, 16.0)));
@@ -2303,7 +2366,7 @@ impl FinderApp {
                 }
                 if shown_trash {
                     let trash = egui::Rect::from_center_size(egui::pos2(rect.right() - 16.0, rect.center().y), egui::vec2(24.0, 22.0));
-                    let trash_response = ui.interact(trash, ui.id().with(("tag-trash", tag.id)), egui::Sense::click());
+                    let trash_response = ui.interact(trash, ui.scope_id().with(("tag-trash", tag.id)), egui::Sense::click());
                     over_trash = trash_response.hovered();
                     let tint = if armed {
                         Color32::from_rgb(230, 60, 60)
@@ -2415,7 +2478,7 @@ impl FinderApp {
             }
             if let Some(p) = pointer {
                 // the name follows the pointer
-                let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("tag-ghost"));
+                let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("tag-ghost"));
                 ctx.layer_painter(layer).text(p + egui::vec2(14.0, 0.0), egui::Align2::LEFT_CENTER, &tags[from].name, egui::TextStyle::Body.resolve(ui.style()), ui.visuals().text_color());
             }
             return;
@@ -2524,7 +2587,7 @@ impl FinderApp {
                     self.fav_insert = Some(rows.iter().filter(|y| **y < p.y).count());
                     if let Some(favorite) = favorites.iter().find(|f| f.id == moving) {
                         // the name follows the pointer
-                        let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("fav-ghost"));
+                        let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("fav-ghost"));
                         let painter = ui.ctx().layer_painter(layer);
                         painter.text(p + egui::vec2(14.0, 0.0), egui::Align2::LEFT_CENTER, &favorite.label, egui::TextStyle::Body.resolve(ui.style()), ui.visuals().text_color());
                     }
@@ -2729,6 +2792,7 @@ impl eframe::App for FinderApp {
             dock: self.dock.as_ref().and_then(|d| serde_json::to_string(d).ok()),
             open_folders: self.open_folders.iter().cloned().collect(),
             closed_sections: self.closed_sections.iter().cloned().collect(),
+            index_ignore: self.index_ignore.clone(),
         };
         if let Ok(json) = serde_json::to_string(&saved) {
             storage.set_string(STATE_KEY, json);
@@ -2905,7 +2969,7 @@ impl FinderApp {
         let ctx = ui.ctx().clone();
         if std::mem::take(&mut self.focus_view) {
             // a field of search that still has the focus would keep the arrows from the view
-            ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("search-field")));
+            ctx.memory_mut(|m| m.surrender_focus(egui::Id::unique("search-field")));
         }
         self.paint_background(&ctx, ui.visuals().dark_mode);
         let prof = std::env::var_os("FINDER_PROF").is_some();
@@ -3074,7 +3138,7 @@ pub const MAC_TITLEBAR: bool = cfg!(target_os = "macos");
 
 /// A strip of the window that moves it when it is dragged (double click: maximize)
 fn drag_window(ui: &mut egui::Ui, rect: egui::Rect) {
-    let response = ui.interact(rect, ui.id().with("drag-window"), egui::Sense::click_and_drag());
+    let response = ui.interact(rect, ui.scope_id().with("drag-window"), egui::Sense::click_and_drag());
     if response.double_clicked() {
         let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));

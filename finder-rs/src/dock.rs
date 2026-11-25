@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::actions::{self, ACTIONS};
 use crate::app::FinderApp;
-use pyegui_core::dock_draw::{corner_mesh, dedup, feathered_fan, minus, pane_outline, snap, tab_foot, tab_outline, INACTIVE_GAP, SEAM};
+use pyegui_core::dock_draw::{corner_mesh, dedup, feathered_fan, minus, pane_outline, snap, tab_foot, tab_outline, SEAM};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Pane {
@@ -89,7 +89,7 @@ fn default_tree() -> Tree<Pane> {
         linear.shares.set_share(top, 3.0);
         linear.shares.set_share(terminals, 1.0);
     }
-    Tree::new(egui::Id::new("finder-dock"), root, tiles)
+    Tree::new(egui::Id::unique("finder-dock"), root, tiles)
 }
 
 /// The layout saved, or the default one when there is none or it does not read
@@ -107,10 +107,6 @@ pub fn restore(saved: Option<&str>) -> Tree<Pane> {
         }
     }
     tree
-}
-
-fn present(tiles: &Tiles<Pane>) -> Vec<Pane> {
-    tiles.iter().filter_map(|(_, t)| if let Tile::Pane(p) = t { Some(*p) } else { None }).collect()
 }
 
 /// The sheet of the dock: what the panes and their active tab are filled with
@@ -186,7 +182,7 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
 
     // the bar behind the tabs is darkened: the active tab, in the fill of its pane, stands out of it
     // the tint of the bands, so the bars of the docks and the bands are one
-    fn tab_bar_color(&self, visuals: &egui::Visuals) -> egui::Color32 {
+    fn tab_bar_color(&self, _visuals: &egui::Visuals) -> egui::Color32 {
         egui::Color32::TRANSPARENT // the tint of the content behind is the one of the bands
     }
 
@@ -345,11 +341,11 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         // a title the header is transparent (the tint of the bands) until the rows scroll under it: then
         // it takes the sheet, which hides them
         let slot = ui.painter().add(egui::Shape::Noop);
-        let band_key = egui::Id::new(pyegui_core::columns::HEADER_BAND);
-        let scrolled_key = egui::Id::new(pyegui_core::columns::HEADER_SCROLLED);
+        let band_key = egui::Id::unique(pyegui_core::columns::HEADER_BAND);
+        let scrolled_key = egui::Id::unique(pyegui_core::columns::HEADER_SCROLLED);
         ui.ctx().data_mut(|d| {
             d.remove::<egui::Rect>(band_key);
-            d.remove::<egui::Rect>(egui::Id::new(crate::app::TAG_BAND));
+            d.remove::<egui::Rect>(egui::Id::unique(crate::app::TAG_BAND));
             d.remove::<bool>(scrolled_key);
         });
         let result = self.pane_content(ui, pane);
@@ -357,7 +353,7 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         let scrolled = ui.ctx().data(|d| d.get_temp::<bool>(scrolled_key)).unwrap_or(false);
         let titled = self.titled.contains(&tile);
         // the header of a tag, above the header of the columns, is left clear with it
-        let tag_band = ui.ctx().data(|d| d.get_temp::<egui::Rect>(egui::Id::new(crate::app::TAG_BAND))).filter(|_| matches!(*pane, Pane::Central(_)) && !titled);
+        let tag_band = ui.ctx().data(|d| d.get_temp::<egui::Rect>(egui::Id::unique(crate::app::TAG_BAND))).filter(|_| matches!(*pane, Pane::Central(_)) && !titled);
         let cleared = band.filter(|_| !titled && !scrolled);
         let cleared = match (cleared, tag_band) {
             (Some(b), Some(t)) => Some(b.union(t)),

@@ -192,7 +192,7 @@ fn secs(time: std::io::Result<SystemTime>) -> f64 {
 /// so it is meant for a thread. `None` when the folder cannot be read or the base is busy: the next visit tries again.
 pub fn index_children(db_path: Option<&Path>, folder: &Path) -> Option<usize> {
     let mut db = open_index(db_path)?;
-    record_folder(&mut db, folder).map(|(n, _)| n)
+    record_folder(&mut db, folder, None).map(|(n, _)| n)
 }
 
 /// Reads the metadata (page count first) of the PDF among `rows` that are new or changed since they were
@@ -219,6 +219,7 @@ fn read_pdfs(db: &mut Connection, rows: &[(String, String, bool, i64, f64)]) {
         let flag = |v: bool| known.then_some(i64::from(v));
         let allowed = |bit: u32| flag(info.permissions.is_none_or(|p| p & (1 << (bit - 1)) != 0));
         let rights: Vec<Option<i64>> = PERMISSIONS.iter().map(|(_, bit)| allowed(*bit)).collect();
+        pyegui_core::dlog!("sqlite", "pdf_info: {path} recorded ({} pages{})", info.pages.map_or("?".to_string(), |n| n.to_string()), info.error.as_ref().map_or(String::new(), |e| format!(", error: {e}")));
         let _ = db.execute(
             "INSERT OR REPLACE INTO pdf_info (path, size, mtime, pages, encrypted, needs_password, can_print, can_copy, can_modify,
                  can_annotate, can_fill_forms, can_assemble, title, author, subject, keywords, creator, producer,
@@ -244,7 +245,7 @@ fn open_index(db_path: Option<&Path>) -> Option<Connection> {
 
 /// Records everything under `root` (the action "Indexer le dossier"): one connection, one transaction
 /// per folder, symbolic links listed but not followed. Returns the number of entries, `None` if `cancel` was set.
-pub fn index_tree(db_path: Option<&Path>, root: &Path, cancel: &std::sync::atomic::AtomicBool, count: &std::sync::atomic::AtomicUsize) -> Option<usize> {
+pub fn index_tree(db_path: Option<&Path>, root: &Path, ignore: &crate::indexignore::IgnoreRules, cancel: &std::sync::atomic::AtomicBool, count: &std::sync::atomic::AtomicUsize) -> Option<usize> {
     use std::sync::atomic::Ordering;
     let mut db = open_index(db_path)?;
     let mut todo = vec![root.to_path_buf()];
@@ -253,7 +254,7 @@ pub fn index_tree(db_path: Option<&Path>, root: &Path, cancel: &std::sync::atomi
         if cancel.load(Ordering::Relaxed) {
             return None;
         }
-        if let Some((n, subfolders)) = record_folder(&mut db, &folder) {
+        if let Some((n, subfolders)) = record_folder(&mut db, &folder, Some(ignore)) {
             total += n;
             count.store(total, Ordering::Relaxed);
             todo.extend(subfolders);
@@ -262,7 +263,7 @@ pub fn index_tree(db_path: Option<&Path>, root: &Path, cancel: &std::sync::atomi
     Some(total)
 }
 
-fn record_folder(db: &mut Connection, folder: &Path) -> Option<(usize, Vec<PathBuf>)> {
+fn record_folder(db: &mut Connection, folder: &Path, ignore: Option<&crate::indexignore::IgnoreRules>) -> Option<(usize, Vec<PathBuf>)> {
     let started = now();
     let parent = key(folder);
     let mut rows = Vec::new();
@@ -270,12 +271,26 @@ fn record_folder(db: &mut Connection, folder: &Path) -> Option<(usize, Vec<PathB
     for entry in std::fs::read_dir(folder).ok()?.flatten() {
         let Ok(info) = std::fs::symlink_metadata(entry.path()) else { continue };
         let is_dir = info.is_dir();
+        // a walk leaves out what the rules say: nothing is recorded of it, and a folder is not entered
+        if let Some(rules) = ignore {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if rules.ignores(&entry.path(), &name, is_dir) {
+                pyegui_core::dlog!("sqlite", "files: ignored {}", entry.path().display());
+                continue;
+            }
+        }
         if is_dir {
             subfolders.push(entry.path());
         }
         rows.push((key(&entry.path()), entry.file_name().to_string_lossy().into_owned(), is_dir, if is_dir { 0 } else { info.len() as i64 }, secs(info.modified())));
     }
     let tx = db.transaction().ok()?;
+    // what was recorded of the folder before this visit, to log what is new and what changed
+    let before: Option<std::collections::HashMap<String, (i64, f64)>> = pyegui_core::debuglog::enabled().then(|| {
+        let mut statement = tx.prepare("SELECT path, COALESCE(size, 0), COALESCE(modified, 0) FROM files WHERE parent = ? AND path != ?").ok()?;
+        let all = statement.query_map(params![parent, parent], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?, r.get::<_, f64>(2)?)))).ok()?;
+        Some(all.flatten().collect())
+    }).flatten();
     let folder_modified = secs(std::fs::metadata(folder).and_then(|m| m.modified()));
     let name = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| folder.to_string_lossy().into_owned());
     let up = folder.parent().map(key).unwrap_or_else(|| parent.clone());
@@ -301,10 +316,37 @@ fn record_folder(db: &mut Connection, folder: &Path) -> Option<(usize, Vec<PathB
         let all = statement.query_map(params![parent, parent], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0))).ok()?;
         all.flatten().collect()
     };
+    let (mut added, mut updated, mut removed) = (0usize, 0usize, 0usize);
+    if let Some(before) = &before {
+        const SHOWN: usize = 15;
+        for (path, name, is_dir, size, modified) in &rows {
+            let kind = if *is_dir { "folder" } else { "file" };
+            match before.get(path) {
+                None => {
+                    added += 1;
+                    if added <= SHOWN {
+                        pyegui_core::dlog!("sqlite", "files: + {kind} {path}");
+                    }
+                }
+                Some((s, m)) if s != size || (m - modified).abs() > 1e-3 => {
+                    updated += 1;
+                    if updated <= SHOWN {
+                        pyegui_core::dlog!("sqlite", "files: ~ {kind} {name} changed ({s} -> {size} bytes) in {parent}");
+                    }
+                }
+                Some(_) => {}
+            }
+        }
+        if added > SHOWN || updated > SHOWN {
+            pyegui_core::dlog!("sqlite", "files: ... only the first {SHOWN} added and the first {SHOWN} updated are listed");
+        }
+    }
     for (path, is_dir) in known {
         if found.contains(&path) {
             continue;
         }
+        removed += 1;
+        pyegui_core::dlog!("sqlite", "files: - {} {path} is gone", if is_dir { "folder" } else { "file" });
         let _ = tx.execute("DELETE FROM files WHERE path = ?", params![path]);
         if is_dir {
             // a vanished folder takes what was recorded below it
@@ -313,6 +355,11 @@ fn record_folder(db: &mut Connection, folder: &Path) -> Option<(usize, Vec<PathB
         }
     }
     tx.commit().ok()?;
+    pyegui_core::dlog!(
+        "sqlite",
+        "folder {parent} recorded: {} entries, {added} new, {updated} changed, {removed} removed",
+        rows.len()
+    );
     #[cfg(feature = "pdf")]
     read_pdfs(db, &rows);
     Some((rows.len(), subfolders))
@@ -381,12 +428,14 @@ impl TagStore {
         if added == 0 {
             return None;
         }
+        pyegui_core::dlog!("sqlite", "favorites: {text} added");
         self.changed();
         Some(self.db.last_insert_rowid())
     }
 
     pub fn remove_favorite(&mut self, id: i64) {
         let _ = self.db.execute("DELETE FROM favorites WHERE id = ?", params![id]);
+        pyegui_core::dlog!("sqlite", "favorites: #{id} removed");
         self.changed();
     }
 
@@ -418,6 +467,7 @@ impl TagStore {
 
     /// A new tag, last among its siblings; returns its id
     pub fn create(&mut self, name: &str, color: &str, parent: Option<i64>) -> Option<i64> {
+        pyegui_core::dlog!("sqlite", "tags: tag {name:?} created (color {color}, parent {parent:?})");
         let position = self.next_position(parent);
         self.db
             .execute("INSERT INTO tags (name, color, parent_id, position) VALUES (?, ?, ?, ?)", params![name, color, parent, position])
@@ -584,11 +634,13 @@ impl TagStore {
 
     pub fn tag(&mut self, path: &Path, tag: i64) {
         let _ = self.db.execute("INSERT OR IGNORE INTO items (path, tag_id) VALUES (?, ?)", params![key(path), tag]);
+        pyegui_core::dlog!("sqlite", "items: tag {tag} put on {}", key(path));
         self.changed();
     }
 
     pub fn untag(&mut self, path: &Path, tag: i64) {
         let _ = self.db.execute("DELETE FROM items WHERE path = ? AND tag_id = ?", params![key(path), tag]);
+        pyegui_core::dlog!("sqlite", "items: tag {tag} removed from {}", key(path));
         self.changed();
     }
 
@@ -633,6 +685,7 @@ impl TagStore {
 
     /// The item was opened now
     pub fn opened(&mut self, path: &Path) {
+        pyegui_core::dlog!("sqlite", "files: {} opened", key(path));
         let _ = self.db.execute(
             "INSERT INTO files (path, last_opened, open_count) VALUES (?, ?, 1) \
              ON CONFLICT(path) DO UPDATE SET last_opened = excluded.last_opened, open_count = open_count + 1",
@@ -866,6 +919,26 @@ mod index_children_tests {
         let c = Connection::open(&db).unwrap();
         let n: i64 = c.query_row("SELECT COUNT(*) FROM files WHERE parent = ?", params![key(&dir)], |r| r.get(0)).unwrap();
         assert_eq!(n, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_walk_leaves_out_what_the_rules_ignore() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize};
+        let dir = std::env::temp_dir().join(format!("idxignore{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for sub in ["keep/deep", ".git/objects", "node_modules/pkg", "Local Settings/cache"] {
+            std::fs::create_dir_all(dir.join(sub)).unwrap();
+            std::fs::write(dir.join(sub).join("f.txt"), "x").unwrap();
+        }
+        let db = std::env::temp_dir().join(format!("idxignore{}.db", std::process::id()));
+        TagStore::open(Some(&db)).unwrap();
+        let rules = crate::indexignore::IgnoreRules { hidden: true, names: vec!["node_modules".into(), "Local Settings".into()] };
+        let total = index_tree(Some(&db), &dir, &rules, &AtomicBool::new(false), &AtomicUsize::new(0));
+        assert_eq!(total, Some(3), "keep, keep/deep and keep/deep/f.txt only");
+        let c = Connection::open(&db).unwrap();
+        let n: i64 = c.query_row("SELECT COUNT(*) FROM files WHERE path LIKE ?", params![format!("%{}%", ".git")], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

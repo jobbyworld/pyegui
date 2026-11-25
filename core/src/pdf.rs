@@ -291,11 +291,20 @@ pub fn info_of_bytes(bytes: Vec<u8>) -> Info {
 
 /// The information of the PDF at `path`; the read error becomes `error`.
 pub fn info_of_path(path: &str) -> Info {
-    match std::fs::read(path) {
+    let started = std::time::Instant::now();
+    let info = match std::fs::read(path) {
         Ok(bytes) => info_of_bytes(bytes),
         // the text of the OS depends on the language and the code page: the kind says it all
         Err(e) => Info { error: Some(format!("cannot read the file ({:?})", e.kind())), ..Info::default() },
-    }
+    };
+    crate::dlog!(
+        "pdf",
+        "metadata read of {path}: {} in {:.0?}{}",
+        info.pages.map_or("? pages".to_string(), |n| format!("{n} pages")),
+        started.elapsed(),
+        info.error.as_ref().map_or(String::new(), |e| format!(" (error: {e})"))
+    );
+    info
 }
 
 #[cfg(test)]

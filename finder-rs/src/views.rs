@@ -14,7 +14,7 @@ use pyegui_core::files::{
 };
 use pyegui_core::watcher::{expand, lock, Core, Entry};
 
-use crate::actions::{self, ACTIONS};
+use crate::actions::ACTIONS;
 use crate::app::{FinderApp, ViewMode};
 use crate::model::SortKey;
 use crate::tagsui;

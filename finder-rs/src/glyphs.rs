@@ -11,7 +11,6 @@ macro_rules! glyph {
     };
 }
 
-pub const SIDEBAR: Glyph = glyph!("sidebar");
 pub const CHEVRON_LEFT: Glyph = glyph!("chevron-left");
 pub const CHEVRON_RIGHT: Glyph = glyph!("chevron-right");
 pub const CHEVRON_UP: Glyph = glyph!("chevron-up");
@@ -19,7 +18,6 @@ pub const TREE: Glyph = glyph!("tree");
 pub const LIST: Glyph = glyph!("list");
 pub const GRID: Glyph = glyph!("grid");
 pub const TERMINAL: Glyph = glyph!("terminal");
-pub const PANES: Glyph = glyph!("panes");
 pub const SUN: Glyph = glyph!("sun");
 pub const MOON: Glyph = glyph!("moon");
 pub const THEME_SYSTEM: Glyph = glyph!("theme-system");
@@ -28,18 +26,8 @@ pub const LINK: Glyph = glyph!("link");
 pub const FOLDER_ENTER: Glyph = glyph!("folder-enter");
 pub const REFRESH: Glyph = glyph!("refresh");
 pub const CLOSE: Glyph = glyph!("close");
-pub const TAG: Glyph = glyph!("tag");
 pub const DRIVE: Glyph = glyph!("drive");
-pub const FOLDER: Glyph = glyph!("folder");
-pub const IMAGE: Glyph = glyph!("image");
-pub const DOWNLOAD: Glyph = glyph!("download");
-pub const DOCUMENT: Glyph = glyph!("document");
-pub const DESKTOP: Glyph = glyph!("desktop");
-pub const HOME: Glyph = glyph!("home");
 pub const OPEN: Glyph = glyph!("open");
-pub const MINIMIZE: Glyph = glyph!("minimize");
-pub const MAXIMIZE: Glyph = glyph!("maximize");
-pub const RESTORE: Glyph = glyph!("restore");
 pub const SEARCH: Glyph = glyph!("search");
 pub const ROTATE: Glyph = glyph!("rotate");
 pub const ZOOM_IN: Glyph = glyph!("zoom-in");

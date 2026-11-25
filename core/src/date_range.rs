@@ -85,7 +85,7 @@ const DAYS: [&str; 7] = ["lu", "ma", "me", "je", "ve", "sa", "di"];
 /// The button of the range and its calendar. Returns the response of the button, `changed()` when the range
 /// was changed during this frame. `id` tells apart the pickers of a ui.
 pub fn date_range_picker(ui: &mut Ui, id: &str, range: &mut DateRange) -> Response {
-    let id = Id::new(("date_range_picker", id));
+    let id = Id::unique(("date_range_picker", id));
     let mut response = ui.button(format!("📅 {}", range.human_daterange_label()));
     let open_id = id.with("open");
     if response.clicked() {
@@ -116,7 +116,7 @@ pub fn date_range_picker(ui: &mut Ui, id: &str, range: &mut DateRange) -> Respon
 /// The calendar with its field, drawn where it is (not in a popup of its own): for a place that is already
 /// a popup, like the filter of a column. Returns true when the range changed in this frame.
 pub fn date_range_inline(ui: &mut Ui, id: &str, range: &mut DateRange) -> bool {
-    let id = Id::new(("date_range_inline", id));
+    let id = Id::unique(("date_range_inline", id));
     let mut popup: Popup = ui.data(|d| d.get_temp(id)).unwrap_or_default();
     let before = *range;
     calendar(ui, &mut popup, range);

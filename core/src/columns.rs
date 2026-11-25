@@ -331,7 +331,7 @@ pub fn header(
         let band = cells.iter().map(|c| c.rect).reduce(|a, b| a.union(b));
         if let Some(band) = band {
             ui.ctx().data_mut(|d| {
-                let key = Id::new(HEADER_BAND);
+                let key = Id::unique(HEADER_BAND);
                 let all = d.get_temp::<Rect>(key).map_or(band, |old| old.union(band));
                 d.insert_temp(key, all);
             });

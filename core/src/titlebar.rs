@@ -74,7 +74,7 @@ pub fn window_controls(ui: &mut egui::Ui, size: f32, gap: f32) {
     for (n, (name, color, symbol)) in buttons.into_iter().enumerate() {
         let center = egui::pos2(rect.min.x + size / 2.0 + n as f32 * (size + gap), rect.center().y);
         let hit = egui::Rect::from_center_size(center, egui::Vec2::splat(size));
-        let response = ui.interact(hit, ui.id().with(("window_controls", name)), Sense::click());
+        let response = ui.interact(hit, ui.scope_id().with(("window_controls", name)), Sense::click());
         let fill = if focused || group_hover { color } else { Color32::from_gray(120) };
         let fill = if response.is_pointer_button_down_on() { fill.gamma_multiply(0.75) } else { fill };
         ui.painter().circle_filled(center, size / 2.0, fill);

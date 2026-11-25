@@ -1,10 +1,9 @@
 //! What the views show: sorting, filtering, the history of the folders and the texts of the columns.
 
-use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use pyegui_core::watcher::{natural_cmp, Entry};
+use pyegui_core::watcher::Entry;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]

@@ -9,7 +9,7 @@ use std::time::SystemTime;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-pub(crate) use pyegui_core::watcher::{default_core, entry, expand, lock, natural_cmp, Core, Entry};
+pub(crate) use pyegui_core::watcher::{default_core, expand, lock, Core};
 
 /// Keeps the file views up to date with the disk: the folders they show are watched by the
 /// system, and a file created, removed, renamed or modified by any program, inside or outside the

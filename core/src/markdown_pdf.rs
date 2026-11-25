@@ -876,7 +876,7 @@ pub fn build(text: &str, o: &Options) -> Result<(Vec<u8>, usize, Skipped), Strin
     let (mut headings, mut links) = parse_markdown(text);
 
     // the body
-    let body_text = crate::markdown::replace_mermaid(&env.ctx, text, o.theme.mermaid()).into_owned();
+    let body_text = crate::markdown::replace_mermaid(&env.ctx, text, o.theme.mermaid(), true).into_owned();
     let mut cache = CommonMarkCache::default();
     let scheme = o.base_dir.as_ref().map(|d| {
         let path = d.to_string_lossy().replace('\\', "/");

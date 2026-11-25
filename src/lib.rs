@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::{fs, ptr};
 
 mod columns;
+mod debuglog;
 mod cursor;
 mod containers;
 mod icons;
@@ -2262,10 +2263,10 @@ unsafe fn show_scroll_area(
     persist_id: Option<&str>,
     update_fun: Bound<'_, PyAny>,
 ) -> PyResult<()> {
-    let key = persist_id.map(|name| egui::Id::new(("pyegui-scroll-offset", name)));
+    let key = persist_id.map(|name| egui::Id::unique(("pyegui-scroll-offset", name)));
     // the offset is imposed only when the area is drawn in another parent than at the last frame,
     // otherwise egui keeps it (and the wheel and the bar move it)
-    let parent = ui.id();
+    let parent = ui.scope_id();
     if let Some((was_in, offset)) = key.and_then(|key| ui.ctx().data(|d| d.get_temp::<(egui::Id, egui::Vec2)>(key))) {
         if was_in != parent {
             area = area.scroll_offset(offset);
@@ -2989,5 +2990,6 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "pdf")]
     pdf_view::register(m)?;
     tags::register(m)?;
+    debuglog::register(m)?;
     Ok(())
 }

@@ -1111,11 +1111,11 @@ pub fn draw_folder_in(
     let scroll_to = view.scroll_to.take();
     // the offset is kept by view and folder, not by the place of the ui: the same view in a pane of a
     // dock or alone shows the same position
-    let scroll_key = egui::Id::new(("pyegui-scroll-offset", &view.id)).with(view.folder());
+    let scroll_key = egui::Id::unique(("pyegui-scroll-offset", &view.id)).with(view.folder());
     let mut area = egui::ScrollArea::vertical().id_salt(id.with(view.folder())).auto_shrink([false, false]);
     // imposed only when the view is drawn in another parent than at the last frame (the dock or
     // not): otherwise egui keeps the offset, and the wheel and the bar move it
-    let parent = ui.id();
+    let parent = ui.scope_id();
     if let Some((was_in, offset)) = ctx.data(|d| d.get_temp::<(Id, f32)>(scroll_key)) {
         if was_in != parent {
             area = area.vertical_scroll_offset(offset);
@@ -1236,7 +1236,7 @@ pub fn draw_folder_in(
             rubber_band(ui, view, &background, &shape, &entries, origin, width, seen, mods);
         });
     ctx.data_mut(|d| d.insert_temp(scroll_key, (parent, seen_offset)));
-    ctx.data_mut(|d| d.insert_temp(Id::new(columns::HEADER_SCROLLED), seen_offset > 0.5));
+    ctx.data_mut(|d| d.insert_temp(Id::unique(columns::HEADER_SCROLLED), seen_offset > 0.5));
     hscroll_bar(ui, id, &mut view.columns, &zones, output.inner_rect);
     menus
 }
@@ -1885,7 +1885,7 @@ pub fn draw_tree(
     let full_clip = ui.clip_rect();
     if let Some(slot) = &slot {
         let shift = (full_clip.top() - slot.top()).max(0.0);
-        ctx.data_mut(|d| d.insert_temp(Id::new(columns::HEADER_SCROLLED), shift > 0.5));
+        ctx.data_mut(|d| d.insert_temp(Id::unique(columns::HEADER_SCROLLED), shift > 0.5));
         let below = (slot.bottom() + shift).clamp(full_clip.top(), full_clip.bottom());
         ui.shrink_clip_rect(Rect::from_min_max(pos2(full_clip.left(), below), full_clip.max));
     }

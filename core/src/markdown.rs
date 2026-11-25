@@ -11,53 +11,144 @@ thread_local! {
     static CACHE: RefCell<CommonMarkCache> = RefCell::new(CommonMarkCache::default());
     // mermaid diagrams already rendered: hash of (source, theme) -> image uri or error
     static DIAGRAMS: RefCell<HashMap<u64, Result<String, String>>> = RefCell::new(HashMap::new());
-    // the system fonts, loaded with the first diagram only
-    static SVG_OPTIONS: std::cell::OnceCell<usvg::Options<'static>> = const { std::cell::OnceCell::new() };
+}
+
+/// The state of a diagram that is rendered on a thread of its own: the window goes on while it is drawn
+enum Slot {
+    Pending,
+    /// the svg (texts already turned into paths) or the error
+    Done(Result<std::sync::Arc<Vec<u8>>, String>),
+}
+
+/// The diagrams rendered or being rendered, for every window and thread; what a diagram needs is only its
+/// source and its theme, the svg is given to the image loaders of the context that asks for it
+static SLOTS: std::sync::Mutex<Option<HashMap<u64, Slot>>> = std::sync::Mutex::new(None);
+
+/// The system fonts, loaded once (about two seconds) by the first diagram, on its thread
+static FONTS: std::sync::OnceLock<std::sync::Arc<usvg::fontdb::Database>> = std::sync::OnceLock::new();
+
+/// What `mermaid_image` found
+enum Diagram {
+    Ready(String),
+    /// still being rendered: asked again at the next frame, a repaint is requested when it is done
+    Pending,
+    Failed(String),
 }
 
 /// Turns the texts of an svg into paths.
 ///
 /// The svg loader of egui reads no fonts, so it skips texts. Loading the system fonts for every
 /// svg would slow down the start of every app, so it is done here, for the diagrams only.
+fn system_fonts() -> std::sync::Arc<usvg::fontdb::Database> {
+    FONTS
+        .get_or_init(|| {
+            let started = std::time::Instant::now();
+            let mut db = usvg::fontdb::Database::new();
+            db.load_system_fonts();
+            crate::dlog!("mermaid", "system fonts loaded in {:.0?} ({} faces)", started.elapsed(), db.len());
+            std::sync::Arc::new(db)
+        })
+        .clone()
+}
+
+/// Loads the system fonts that the diagrams need on a thread of its own, once the app is running: the first
+/// diagram then does not wait for them (about two seconds). Harmless to call twice.
+pub fn preload_fonts() {
+    std::thread::spawn(|| {
+        system_fonts();
+    });
+}
+
 fn texts_to_paths(svg: &str) -> Result<String, String> {
-    SVG_OPTIONS.with(|options| {
-        let options = options.get_or_init(|| {
-            let mut options = usvg::Options::default();
-            options.fontdb_mut().load_system_fonts();
-            options
-        });
-        let tree = usvg::Tree::from_str(svg, options).map_err(|e| e.to_string())?;
-        // the writer saves the texts as their paths
-        Ok(tree.to_string(&usvg::WriteOptions::default()))
-    })
+    let mut options = usvg::Options::default();
+    options.fontdb = system_fonts();
+    let tree = usvg::Tree::from_str(svg, &options).map_err(|e| e.to_string())?;
+    // the writer saves the texts as their paths
+    Ok(tree.to_string(&usvg::WriteOptions::default()))
 }
 
 pub const MERMAID_THEMES: [&str; 5] = ["default", "dark", "forest", "neutral", "base"];
 
-/// Renders a mermaid diagram once, gives it to the image loaders of egui and returns its uri
-fn mermaid_image(ctx: &egui::Context, source: &str, theme: &str) -> Result<String, String> {
+/// Renders the svg of a diagram (the work that takes time, free of any context)
+fn render_svg(source: &str, theme: &str, key: u64) -> Result<std::sync::Arc<Vec<u8>>, String> {
+    let started = std::time::Instant::now();
+    let result = (|| {
+        let theme = mermaid_svg::Theme::by_name(theme).unwrap_or_default();
+        let svg = mermaid_svg::render_with(source, &theme).map_err(|e| e.to_string())?;
+        Ok(std::sync::Arc::new(texts_to_paths(&svg)?.into_bytes()))
+    })();
+    match &result {
+        Ok(_) => crate::dlog!("mermaid", "diagram {key:016x} pre-rendered ({} chars of source, theme {theme}) in {:.0?}", source.len(), started.elapsed()),
+        Err(e) => crate::dlog!("mermaid", "diagram {key:016x} failed (theme {theme}) after {:.0?}: {e}", started.elapsed()),
+    }
+    result
+}
+
+/// Gives the diagram to the image loaders of egui and returns its uri. A diagram that is not rendered yet
+/// is rendered on a thread (`wait` false: the window shows a placeholder and is repainted when it is
+/// ready) or here (`wait` true: what has no window to repaint, like the export to PDF).
+fn mermaid_image(ctx: &egui::Context, source: &str, theme: &str, wait: bool) -> Diagram {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     (source, theme).hash(&mut hasher);
     let key = hasher.finish();
 
-    DIAGRAMS.with_borrow_mut(|diagrams| {
-        diagrams
-            .entry(key)
-            .or_insert_with(|| {
-                let theme = mermaid_svg::Theme::by_name(theme).unwrap_or_default();
-                let svg = mermaid_svg::render_with(source, &theme).map_err(|e| e.to_string())?;
-                let svg = texts_to_paths(&svg)?;
-                // the .svg extension picks the svg loader of egui_extras
-                let uri = format!("bytes://mermaid-{:016x}.svg", key);
-                ctx.include_bytes(uri.clone(), svg.into_bytes());
-                Ok(uri)
-            })
-            .clone()
-    })
+    // already given to the loaders of this thread's window
+    if let Some(done) = DIAGRAMS.with_borrow(|d| d.get(&key).cloned()) {
+        return match done {
+            Ok(uri) => Diagram::Ready(uri),
+            Err(e) => Diagram::Failed(e),
+        };
+    }
+    let known = {
+        let mut slots = SLOTS.lock().unwrap_or_else(|e| e.into_inner());
+        let slots = slots.get_or_insert_with(HashMap::new);
+        match slots.get(&key) {
+            Some(Slot::Pending) if !wait => return Diagram::Pending,
+            Some(Slot::Done(result)) => Some(result.clone()),
+            // wait for what a thread is rendering: render it here too, the first to finish is kept
+            _ => {
+                if !wait {
+                    slots.insert(key, Slot::Pending);
+                }
+                None
+            }
+        }
+    };
+    let result = match known {
+        Some(result) => result,
+        None if wait => {
+            let result = render_svg(source, theme, key);
+            SLOTS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(key, Slot::Done(result.clone()));
+            result
+        }
+        None => {
+            let (ctx, source, theme) = (ctx.clone(), source.to_string(), theme.to_string());
+            std::thread::spawn(move || {
+                let result = render_svg(&source, &theme, key);
+                SLOTS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(key, Slot::Done(result));
+                ctx.request_repaint();
+            });
+            return Diagram::Pending;
+        }
+    };
+    let outcome = result.map(|svg| {
+        // the .svg extension picks the svg loader of egui_extras
+        let uri = format!("bytes://mermaid-{:016x}.svg", key);
+        ctx.include_bytes(uri.clone(), svg.as_ref().clone());
+        uri
+    });
+    DIAGRAMS.with_borrow_mut(|d| d.insert(key, outcome.clone()));
+    match outcome {
+        Ok(uri) => Diagram::Ready(uri),
+        Err(e) => Diagram::Failed(e),
+    }
 }
 
 /// Replaces the ```mermaid code blocks with images of their diagrams
-pub fn replace_mermaid<'a>(ctx: &egui::Context, text: &'a str, theme: &str) -> Cow<'a, str> {
+///
+/// The diagrams are rendered on threads: until one is ready its place holds a short line of text, and the
+/// window is repainted when it is done. With `wait` (no window to repaint) the call renders them itself.
+pub fn replace_mermaid<'a>(ctx: &egui::Context, text: &'a str, theme: &str, wait: bool) -> Cow<'a, str> {
     if !text.contains("mermaid") {
         return Cow::Borrowed(text);
     }
@@ -97,9 +188,10 @@ pub fn replace_mermaid<'a>(ctx: &egui::Context, text: &'a str, theme: &str) -> C
             continue;
         }
 
-        match mermaid_image(ctx, &source, theme) {
-            Ok(uri) => out.push_str(&format!("\n![mermaid diagram]({})\n\n", uri)),
-            Err(err) => out.push_str(&format!(
+        match mermaid_image(ctx, &source, theme, wait) {
+            Diagram::Ready(uri) => out.push_str(&format!("\n![mermaid diagram]({})\n\n", uri)),
+            Diagram::Pending => out.push_str("\n*Rendering the diagram…*\n\n"),
+            Diagram::Failed(err) => out.push_str(&format!(
                 "\n```text\nmermaid: {}\n\n{}```\n",
                 err.trim(),
                 source
@@ -579,7 +671,7 @@ pub fn show(ui: &mut egui::Ui, text: &str, options: &MarkdownOptions) -> Option<
         None if ui.visuals().dark_mode => "dark".to_string(),
         None => "default".to_string(),
     };
-    let text = replace_mermaid(ui.ctx(), text, &theme);
+    let text = replace_mermaid(ui.ctx(), text, &theme, false);
     let text = text.as_ref();
 
     let scrollable = options.scrollable;
@@ -726,3 +818,33 @@ mod rst_tests {
     }
 }
 
+
+#[cfg(test)]
+mod mermaid_tests {
+    use super::*;
+
+    const TEXT: &str = "# t\n\n```mermaid\ngraph TD; A-->B\n```\n\nafter\n";
+
+    #[test]
+    fn a_diagram_is_rendered_on_a_thread_and_replaces_its_placeholder() {
+        let ctx = egui::Context::default();
+        let first = replace_mermaid(&ctx, TEXT, "default", false);
+        assert!(first.contains("Rendering the diagram"), "{first}");
+        let started = std::time::Instant::now();
+        loop {
+            let text = replace_mermaid(&ctx, TEXT, "default", false);
+            if text.contains("bytes://mermaid-") {
+                break;
+            }
+            assert!(started.elapsed().as_secs() < 30, "the diagram never came: {text}");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn waiting_gives_the_diagram_at_once() {
+        let ctx = egui::Context::default();
+        let text = replace_mermaid(&ctx, "```mermaid\ngraph LR; X-->Y\n```\n", "dark", true);
+        assert!(text.contains("bytes://mermaid-"), "{text}");
+    }
+}

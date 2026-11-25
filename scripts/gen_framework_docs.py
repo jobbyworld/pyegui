@@ -25,7 +25,7 @@ THEMES = [
      "function of the top level receives the `Context`, which holds what is global to the app: "
      "the theme, the fonts, the clipboard, opening URLs, the state saved between two runs (`persist_id`, `save_state`, `load_state`). The styling methods of the context are "
      "in [styling.md](styling.md).",
-     ["run_native", "Context", "Backdrop", "pixels_per_point"]),
+     ["run_native", "Context", "Backdrop", "pixels_per_point", "debug_log_enable", "debug_log", "debug_enabled"]),
     ("values", "Values that widgets edit",
      "pyegui has no callbacks. A widget that edits a value takes a holder object (`Str`, `Int`, "
      "`Float`, `Bool`, `Date`, `RGB`), reads it each frame and writes `holder.value` when the "
@@ -35,7 +35,7 @@ THEMES = [
     ("text", "Text, links and markdown",
      "Functions that show text. They are called every frame, in the order the text appears.",
      ["heading", "label", "small", "strong", "weak", "monospace", "code", "code_view", "colored_label",
-      "badge", "hyperlink", "hyperlink_to", "link_clicked", "label_response", "markdown", "markdown_to_pdf"]),
+      "badge", "hyperlink", "hyperlink_to", "link_clicked", "label_response", "markdown", "preload_markdown_fonts", "markdown_to_pdf"]),
     ("inputs", "Buttons and input widgets",
      "Widgets the user acts on. Buttons and toggles return True during the frame they are "
      "clicked, the other widgets write into the holder they were given.",

@@ -1,6 +1,7 @@
 //! pyegui-core: what pyegui does without Python. The Python extension (`pyegui`) wraps these modules
 //! in `#[pyfunction]` and `#[pyclass]`; the Rust applications (`finder-rs`) use them directly.
 
+pub mod debuglog;
 pub mod gherkin;
 #[cfg(feature = "pdf")]
 pub mod markdown_pdf;

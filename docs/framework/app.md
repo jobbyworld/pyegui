@@ -167,7 +167,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to 'utf-8'.
+  encoding defaults to sys.getdefaultencoding().
   errors defaults to 'strict'.
 
 - `Backdrop.ACRYLIC_DARK` (attribute): str(object='') -> str
@@ -179,7 +179,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to 'utf-8'.
+  encoding defaults to sys.getdefaultencoding().
   errors defaults to 'strict'.
 
 - `Backdrop.ACRYLIC_LIGHT` (attribute): str(object='') -> str
@@ -191,7 +191,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to 'utf-8'.
+  encoding defaults to sys.getdefaultencoding().
   errors defaults to 'strict'.
 
 - `Backdrop.BLUR` (attribute): str(object='') -> str
@@ -203,7 +203,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to 'utf-8'.
+  encoding defaults to sys.getdefaultencoding().
   errors defaults to 'strict'.
 
 - `Backdrop.LIQUID_GLASS` (attribute): str(object='') -> str
@@ -215,7 +215,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to 'utf-8'.
+  encoding defaults to sys.getdefaultencoding().
   errors defaults to 'strict'.
 
 - `Backdrop.LIQUID_GLASS_CLEAR` (attribute): str(object='') -> str
@@ -227,7 +227,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to 'utf-8'.
+  encoding defaults to sys.getdefaultencoding().
   errors defaults to 'strict'.
 
 - `Backdrop.MICA` (attribute): str(object='') -> str
@@ -239,7 +239,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to 'utf-8'.
+  encoding defaults to sys.getdefaultencoding().
   errors defaults to 'strict'.
 
 - `Backdrop.MICA_DARK` (attribute): str(object='') -> str
@@ -251,7 +251,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to 'utf-8'.
+  encoding defaults to sys.getdefaultencoding().
   errors defaults to 'strict'.
 
 - `Backdrop.MICA_LIGHT` (attribute): str(object='') -> str
@@ -263,7 +263,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to 'utf-8'.
+  encoding defaults to sys.getdefaultencoding().
   errors defaults to 'strict'.
 
 - `Backdrop.TABBED` (attribute): str(object='') -> str
@@ -275,7 +275,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to 'utf-8'.
+  encoding defaults to sys.getdefaultencoding().
   errors defaults to 'strict'.
 
 - `Backdrop.TABBED_DARK` (attribute): str(object='') -> str
@@ -287,7 +287,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to 'utf-8'.
+  encoding defaults to sys.getdefaultencoding().
   errors defaults to 'strict'.
 
 - `Backdrop.TABBED_LIGHT` (attribute): str(object='') -> str
@@ -299,7 +299,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to 'utf-8'.
+  encoding defaults to sys.getdefaultencoding().
   errors defaults to 'strict'.
 
 - `Backdrop.VIBRANCY` (attribute): str(object='') -> str
@@ -311,10 +311,63 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to 'utf-8'.
+  encoding defaults to sys.getdefaultencoding().
   errors defaults to 'strict'.
 
 
 ## `pixels_per_point()`
 
 Number of physical pixels for each point of the ui. 2.0 on most retina screens
+
+
+## `debug_log_enable(path=None)`
+
+Turns the debug log on: the events are written to the terminal (stderr) and, with `path`, appended to that file.
+
+pyegui itself logs the PDF metadata it reads (`pdf_info`, the PDF views) and the mermaid diagrams it
+pre-renders for `markdown`; an app adds its own events with `debug_log`. Off by default: a call to
+`debug_log` then does nothing.
+
+**Args**
+
+- `path` (str, optional): file to append to. Its folder is created. Without it the log stays in the terminal.
+
+**Raises**
+
+- `OSError`: when the file cannot be opened.
+
+**Example:**
+
+```python
+from pyegui import debug_log_enable, debug_log
+debug_log_enable("/tmp/myapp.log")
+debug_log("sqlite", "3 files recorded")
+```
+
+
+## `debug_log(category, message)`
+
+Writes one line `HH:MM:SS.mmm [category] message` to the debug log. Does nothing while it is off.
+
+**Args**
+
+- `category` (str): what the event is about ("sqlite", "pdf", "mermaid"...).
+- `message` (str): the event.
+
+**Example:**
+
+```python
+debug_log("sqlite", f"{n} files recorded in {folder}")
+```
+
+
+## `debug_enabled()`
+
+Whether the debug log is on (to skip building an expensive message).
+
+**Example:**
+
+```python
+if debug_enabled():
+    debug_log("sqlite", describe_changes())
+```

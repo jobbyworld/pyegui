@@ -175,7 +175,7 @@ fn pdf_body(ui: &mut egui::Ui, p: &mut PdfBody) {
         if p.outline.is_none() {
             p.outline = Some(p.doc.lock().unwrap_or_else(|e| e.into_inner()).outline());
         }
-        egui::Panel::left("viewer-pdf-outline").resizable(true).default_size(220.0).show_inside(ui, |ui| {
+        egui::Panel::left("viewer-pdf-outline").resizable(true).default_size(220.0).show(ui, |ui| {
             let marks = p.outline.as_deref().unwrap_or(&[]);
             if marks.is_empty() {
                 ui.label(RichText::new("Pas de signets").weak());

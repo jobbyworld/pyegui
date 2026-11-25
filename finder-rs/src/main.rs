@@ -7,6 +7,7 @@ mod actions;
 mod app;
 mod dock;
 mod glyphs;
+mod indexignore;
 mod model;
 mod openapps;
 mod tagsui;
@@ -26,7 +27,21 @@ fn main() -> eframe::Result {
     let custom = !cfg!(target_os = "macos")
         && !args.iter().any(|a| a == "--system-titlebar")
         && (cfg!(windows) || args.iter().any(|a| a == "--custom-titlebar"));
-    let start = std::env::args().skip(1).find(|a| !a.starts_with("--")).map(std::path::PathBuf::from);
+    // `--debug` logs the events of the app (SQL base, PDF metadata, mermaid diagrams) to this terminal and to a
+    // file (`--log FILE`, by default ~/.local/share/finder-rs/debug.log); the variable FINDER_DEBUG=1 does the same
+    let debug = args.iter().any(|a| a == "--debug") || std::env::var_os("FINDER_DEBUG").is_some_and(|v| v != "0");
+    let log_file = args.iter().position(|a| a == "--log").and_then(|i| args.get(i + 1)).map(std::path::PathBuf::from);
+    if debug || log_file.is_some() {
+        let file = log_file.unwrap_or_else(|| pyegui_core::debuglog::default_path("finder-rs"));
+        if let Err(e) = pyegui_core::debuglog::enable(Some(&file)) {
+            eprintln!("debug log: cannot write {}: {e}", file.display());
+            let _ = pyegui_core::debuglog::enable(None);
+        } else {
+            eprintln!("debug log: {}", file.display());
+        }
+    }
+    let log_value = args.iter().position(|a| a == "--log").map(|i| i + 1);
+    let start = std::env::args().enumerate().skip(1).filter(|(i, _)| Some(*i) != log_value).map(|(_, a)| a).find(|a| !a.starts_with("--")).map(std::path::PathBuf::from);
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Finder")
         .with_inner_size([1200.0, 760.0])
@@ -44,6 +59,8 @@ fn main() -> eframe::Result {
         viewport = viewport.with_decorations(false);
     }
     // the views take part in the drag and drop of the system (out to the Finder, onto a folder)
+    // the fonts of the mermaid diagrams are loaded on a thread while the window opens
+    pyegui_core::markdown::preload_fonts();
     pyegui_core::native_dnd::register();
     let options = eframe::NativeOptions {
         viewport,

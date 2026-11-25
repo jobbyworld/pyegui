@@ -24,6 +24,11 @@ python scripts/make_app_macos.py          # macOS: ~/Applications/Finder.app, dr
 On Windows the app has to set the same AppUserModelID as the shortcut (see the end of
 `examples/finder.py`), or the taskbar groups its window under Python's icon.
 
+Debug mode: `scripts/finder_debug.sh py|rs [folder]` (or `--debug`, `--log FILE`, `FINDER_DEBUG=1`) keeps the
+terminal open and logs the events to it and to `~/.local/share/finder-{py,rs}/debug.log`: files added, updated or
+removed in the SQL base, PDF metadata read, mermaid diagrams pre-rendered. The sink is `core/src/debuglog.rs`
+(`dlog!` in Rust, `pyegui.debug_log_enable` / `debug_log` / `debug_enabled` in Python).
+
 `make develop` is the same without `--release`. Wheels are built by CI (Windows x64 and ARM64, macOS)
 and attached to the GitHub Release of a `v*` tag.
 

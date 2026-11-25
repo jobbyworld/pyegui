@@ -37,7 +37,7 @@ pub fn segmented(ui: &mut Ui, id: &str, size: f32, cells: &[Cell]) -> Segments {
     for (i, c) in cells.iter().enumerate() {
         let cell_rect = Rect::from_min_size(rect.min + egui::vec2(cell_size.x * i as f32, 0.0), cell_size);
         let sense = if c.enabled { Sense::click() } else { Sense::hover() };
-        let mut response = ui.interact(cell_rect, ui.id().with((id, i)), sense);
+        let mut response = ui.interact(cell_rect, ui.scope_id().with((id, i)), sense);
         if !c.tip.is_empty() {
             response = response.on_hover_text(c.tip.as_str());
         }
