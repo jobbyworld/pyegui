@@ -22,14 +22,16 @@ pub enum Pane {
     Tags,
     Recent,
     Search,
+    /// the search in the SQLite index (names, PDF criteria)
+    Index,
     /// the shell of the terminal and its Python prompt
     Shell,
     Python,
 }
 
-pub const PANES: [Pane; 10] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::Recent, Pane::Search, Pane::Appearance, Pane::Activity, Pane::Sql, Pane::Shell, Pane::Python];
+pub const PANES: [Pane; 11] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::Recent, Pane::Search, Pane::Index, Pane::Appearance, Pane::Activity, Pane::Sql, Pane::Shell, Pane::Python];
 /// the panes of the first dock at the right of the folder, and those of the terminals below
-const SIDE: [Pane; 7] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::Recent, Pane::Search, Pane::Appearance, Pane::Activity];
+const SIDE: [Pane; 8] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::Recent, Pane::Search, Pane::Index, Pane::Appearance, Pane::Activity];
 const TERMINALS: [Pane; 2] = [Pane::Shell, Pane::Python];
 
 /// The size of the icon in a tab, and the space after it
@@ -49,6 +51,7 @@ impl Pane {
             Pane::Tags => "tag",
             Pane::Recent => "list",
             Pane::Search => "search",
+            Pane::Index => "search",
             Pane::Shell | Pane::Python => "terminal",
         };
         crate::glyphs::by_name(name)
@@ -67,6 +70,7 @@ impl Pane {
             Pane::Tags => "Étiquettes",
             Pane::Recent => "Récents",
             Pane::Search => "Recherche",
+            Pane::Index => "Index",
         }
     }
 }
@@ -442,6 +446,7 @@ impl Behavior<'_> {
             Pane::Tags => crate::tagsui::pane(self.app, ui),
             Pane::Recent => crate::tagsui::recent_pane(self.app, ui),
             Pane::Search => crate::search::pane(self.app, ui),
+            Pane::Index => crate::indexsearch::pane(self.app, ui),
             Pane::Central(_) | Pane::Shell | Pane::Python => {}
         }));
         UiResponse::None

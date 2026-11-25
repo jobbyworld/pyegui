@@ -334,23 +334,35 @@ fn manager_modal(app: &mut FinderApp, ctx: &egui::Context) {
     }
 }
 
-/// The items opened last, the latest first
+/// How many items the Récents pane loads at first, and with each « Charger plus »
+pub const RECENT_PAGE: usize = 30;
+
+/// The items opened last, the latest first, as cards; the last card loads more
 pub fn recent_pane(app: &mut FinderApp, ui: &mut egui::Ui) {
-    let recent = app.tags.as_ref().map(|t| t.recently_opened(40)).unwrap_or_default();
+    let limit = app.recent_limit;
+    let recent = app.tags.as_ref().map(|t| t.recently_opened(limit)).unwrap_or_default();
     if recent.is_empty() {
         ui.weak("Rien d'ouvert pour l'instant");
     }
+    let more = recent.len() >= limit; // the base may hold older ones
+    let now = crate::cards::now();
     let mut open: Option<PathBuf> = None;
     for (path, when) in recent {
         let path = PathBuf::from(path);
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string_lossy().into_owned());
-        ui.horizontal(|ui| {
-            let label = ui.add(egui::Button::new(name).frame(false)).on_hover_text(path.to_string_lossy());
-            if label.clicked() {
-                open = Some(path.clone());
-            }
-            ui.weak(crate::model::format_date(Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(when))));
-        });
+        let parent = path.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+        let parent = match std::env::var("HOME") {
+            Ok(home) if parent.starts_with(&home) => parent.replacen(&home, "~", 1),
+            _ => parent,
+        };
+        let card = crate::cards::Card { path: &path, is_dir: path.is_dir(), name: &name, date: crate::cards::human_date(when, now), lines: vec![parent] };
+        let response = crate::cards::show(ui, &card, app.selected.contains(&path), None).on_hover_text(path.to_string_lossy());
+        if response.clicked() {
+            open = Some(path.clone());
+        }
+    }
+    if more && crate::cards::empty(ui, "Charger plus").clicked() {
+        app.recent_limit += RECENT_PAGE;
     }
     if let Some(path) = open {
         app.reveal_path(&path);

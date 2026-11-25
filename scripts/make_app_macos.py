@@ -46,6 +46,7 @@ if [ ! -x "$PY" ]; then
   /usr/bin/osascript -e 'display alert "{name}" message "Python not found: '"$PY"'. Recreate the venv and run scripts/make_app_macos.py again."'
   exit 1
 fi
+export PYEGUI_APP_NAME="{name}"  # the app can tell which bundle started it
 cd "$(dirname "$SCRIPT")" || exit 1
 BIN="$(dirname "$0")/{name}-python"
 if [ -x "$BIN" ]; then

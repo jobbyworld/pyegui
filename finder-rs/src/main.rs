@@ -5,9 +5,11 @@
 
 mod actions;
 mod app;
+mod cards;
 mod dock;
 mod glyphs;
 mod indexignore;
+mod indexsearch;
 mod model;
 mod openapps;
 mod tagsui;

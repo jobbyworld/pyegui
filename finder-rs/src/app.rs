@@ -332,6 +332,9 @@ pub struct FinderApp {
     select_after: Vec<PathBuf>,
     pub tags: Option<TagStore>,
     pub search_state: crate::search::Search,
+    pub index_search: crate::indexsearch::IndexSearch,
+    /// how many items the Récents pane asks for
+    pub recent_limit: usize,
     pub tag_filter: Option<i64>,
     /// the search or creation field of the tags pane
     pub tags_query: String,
@@ -641,6 +644,8 @@ impl FinderApp {
             select_after: Vec::new(),
             tags: TagStore::open(None).ok(),
             search_state: Default::default(),
+            index_search: Default::default(),
+            recent_limit: crate::tagsui::RECENT_PAGE,
             tag_filter: None,
             tags_query: String::new(),
             tag_folded: HashSet::new(),

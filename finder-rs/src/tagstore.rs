@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-const SCHEMA: &str = "
+pub(crate) const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -171,7 +171,7 @@ const INDEX_COLUMNS: [(&str, &str); 7] = [
     ("last_full_scan", "REAL"),
 ];
 
-fn add_index_columns(db: &Connection) {
+pub(crate) fn add_index_columns(db: &Connection) {
     let have: HashSet<String> = db
         .prepare("PRAGMA table_info(files)")
         .and_then(|mut s| s.query_map([], |r| r.get::<_, String>(1)).map(|rows| rows.flatten().collect()))

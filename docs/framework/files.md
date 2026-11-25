@@ -354,7 +354,7 @@ in the ui and scrolls; only the visible rows are drawn, so large folders stay fa
 
 - `columns` (list[str]): the columns after the name, among "modified", "size" and "kind". Default is all three. A view narrower than its columns scrolls horizontally
 - `headers` (list[str]): the titles of the columns name, modified, size and kind. Default is ["Name", "Date Modified", "Size", "Kind"]
-- `date_format` (str): format of the dates, like strftime. Default is "%d %b %Y %H:%M"
+- `date_format` (str): format of the dates, like strftime, or `"human"` for the dates in French words ("il y a 5 min", "Hier à 09:10", "12 mars"). Default is `"human"`
 - `row_height` (float): height of a row. Default is 24
 - `extra_columns` (list[tuple]): columns of your own, after the name: a title, a width and a function called with the path of the row inside the cell, to draw it with the usual widgets. They sort and filter when a fourth item, a dict, gives the type of their data and a function that returns the value of a row: {"type": "text" | "number" | "date" | "choice", "value": function(path) -> value}. A date is seconds since 1970 or a datetime. The values are kept for a second (see refresh_columns). The function runs while the view is drawn: it must not read or change the view itself
 - `resizable` (bool): the border of a column can be dragged. Default is True
@@ -434,7 +434,7 @@ when they are opened and watched while they are open.
 - `badges` (callable): called with the path of each item, returns a list of colors drawn as dots at the right end of its row, e.g. the tags of a file
 - `columns` (list[str]): columns of the view at the right end of the rows, among "modified", "size" and "kind". Default is none, the tree is then only names
 - `headers` (list[str]): the titles of the columns name, modified, size and kind. Default is ["Name", "Date Modified", "Size", "Kind"]
-- `date_format` (str): format of the dates, like strftime. Default is "%d %b %Y %H:%M"
+- `date_format` (str): format of the dates, like strftime, or `"human"` for the dates in French words ("il y a 5 min", "Hier à 09:10", "12 mars"). Default is `"human"`
 - `extra_columns` (list[tuple]): columns of your own at the right end of the rows: a title (shown above the tree), a width, and a function called with the path of each row to draw its cell, e.g. ("Tags", 160, lambda path: tags_edit(...)). A fourth item, a dict, makes the column sort and filter: {"type": "text" | "number" | "date" | "choice", "value": function(path) -> value}. A date is seconds since 1970 or a datetime
 - `header` (bool): draws the header of the columns above the tree, pinned at the top while the tree scrolls. Default is True when there are columns
 - `resizable` (bool): the border of a column can be dragged. Default is True

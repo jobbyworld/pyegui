@@ -542,7 +542,8 @@ fn parse_columns(kwargs: Option<&Bound<'_, PyDict>>, extras: usize) -> PyResult<
 ///     headers (list[str]): the titles of the columns name, modified, size and kind. Default is
 ///         ["Name", "Date Modified", "Size", "Kind"]
 ///
-///     date_format (str): format of the dates, like strftime. Default is "%d %b %Y %H:%M"
+///     date_format (str): format of the dates, like strftime, or "human" for the dates in French words
+///         ("il y a 5 min", "Hier à 09:10", "12 mars"). Default is "human"
 ///
 ///     row_height (float): height of a row. Default is 24
 ///
@@ -982,7 +983,8 @@ impl FileTreeView {
 ///     headers (list[str]): the titles of the columns name, modified, size and kind. Default is
 ///         ["Name", "Date Modified", "Size", "Kind"]
 ///
-///     date_format (str): format of the dates, like strftime. Default is "%d %b %Y %H:%M"
+///     date_format (str): format of the dates, like strftime, or "human" for the dates in French words
+///         ("il y a 5 min", "Hier à 09:10", "12 mars"). Default is "human"
 ///
 ///     extra_columns (list[tuple]): columns of your own at the right end of the rows: a title
 ///         (shown above the tree), a width, and a function called with the path of each row to draw

@@ -22,7 +22,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Kind::All => "Tout",
             Kind::Files => "Fichiers",

@@ -130,12 +130,24 @@ pub fn kind(e: &Entry) -> String {
     known.into()
 }
 
+/// The date of an item. `format` is a strftime format or `HUMAN_DATES` for the French wording of the
+/// Finder ("il y a 5 min", "Hier à 09:10", "12 mars", "12 mars 2025")
 pub fn date(time: Option<SystemTime>, format: &str) -> String {
     match time {
-        Some(time) => chrono::DateTime::<chrono::Local>::from(time).format(format).to_string(),
+        Some(time) => {
+            let local = chrono::DateTime::<chrono::Local>::from(time);
+            if format == HUMAN_DATES {
+                crate::human_date::human_datetime(local.naive_local(), chrono::Local::now().naive_local())
+            } else {
+                local.format(format).to_string()
+            }
+        }
         None => "--".into(),
     }
 }
+
+/// The `date_format` that says the dates in words, in French
+pub const HUMAN_DATES: &str = "human";
 
 /// How much of its color a hidden item keeps in the views
 pub const HIDDEN_OPACITY: f32 = 0.5;
@@ -853,7 +865,7 @@ impl Shape {
 pub fn default_width(column: Column, hooks: &Hooks<'_>) -> f32 {
     match column {
         Column::Sort(SortBy::Name) => 0.0,
-        Column::Sort(SortBy::Modified) => 150.0,
+        Column::Sort(SortBy::Modified) => 180.0, // "vendredi dernier à 09:10"
         Column::Sort(SortBy::Size) => 80.0,
         Column::Sort(SortBy::Kind) => 130.0,
         Column::Extra(i) => hooks.extras[i].width,
@@ -1715,7 +1727,7 @@ impl Default for TreeParams {
     }
 }
 
-pub const DATE_FORMAT: &str = "%d %b %Y %H:%M";
+pub const DATE_FORMAT: &str = HUMAN_DATES;
 
 pub fn default_headers() -> [String; 4] {
     ["Name".into(), "Date Modified".into(), "Size".into(), "Kind".into()]

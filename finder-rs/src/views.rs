@@ -20,7 +20,7 @@ use crate::model::SortKey;
 use crate::tagsui;
 
 const ROW_HEIGHT: f32 = 24.0;
-const DATE_FORMAT: &str = "%Y-%m-%d %H:%M";
+const DATE_FORMAT: &str = pyegui_core::files::HUMAN_DATES;
 /// The size of the icons of the icon view
 pub const ICON_SIZE: f32 = 56.0;
 

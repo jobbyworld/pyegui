@@ -22,6 +22,7 @@ import queue
 import shlex
 import shutil
 import sqlite3
+import unicodedata
 import subprocess
 import sys
 import threading
@@ -102,6 +103,8 @@ from pyegui import (
     code_view,
     colored_label,
     color_edit_button_rgb,
+    collapsing,
+    columns,
     combo_box,
     dock_area,
     dock_menu,
@@ -291,6 +294,17 @@ def default_favorites():
     if sys.platform == "darwin":
         favorites.append(("Applications", "folder", "/Applications"))
     return favorites
+
+
+IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "heic", "svg"}
+
+
+def fold_text(text):
+    """lower case without the accents, to compare names and metadata (SQLite's LIKE only ignores the
+    case of the ASCII letters)"""
+    if text is None:
+        return None
+    return "".join(c for c in unicodedata.normalize("NFD", str(text).lower()) if not unicodedata.combining(c))
 
 
 def like_inside(stored):
@@ -869,60 +883,111 @@ class TagStore:
             (f"%{escaped}%", limit),
         ).fetchall()
 
-    def find(self, name="", ext="", under=None, folders=True, limit=500, pdf=None):
+    def find(self, name="", ext="", under=None, folders=True, limit=500, pdf=None, kind=0,
+             size_min=None, size_max=None, days=None, sort=0, desc=False):
         """the indexed items matching all the given criteria, as
-        [(path, is_dir, size, modified, name, pages, encrypted)] (the last two are None for what is
-        not a PDF read by index_pdfs).
-        name: a text the name contains (without the case); ext: one or more extensions, separated
-        by spaces or commas, with or without the dot (a filter on the extension leaves out the
-        folders); under: only what is inside this folder, at any depth (None: everywhere);
-        folders: False leaves out the folders.
-        pdf: criteria on what pdf_info read, which keep only the PDF that were read: a dict with any
-        of pages_min, pages_max, protected (True: encrypted, False: not) and text (in the title,
-        author, subject or keywords). Sorted by name, at most `limit` rows."""
-
-        def contains(text):  # a LIKE pattern, ESCAPE backslash
-            return "%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-
-        where, args = ["f.name IS NOT NULL"], []
-        if name.strip():
-            where.append(r"f.name LIKE ? ESCAPE '\'")
-            args.append(contains(name.strip()))
-        exts = [e.strip().lstrip(".") for e in ext.replace(",", " ").split() if e.strip(". ")]
-        if exts:
-            where.append("f.is_dir = 0 AND (" + " OR ".join([r"f.name LIKE ? ESCAPE '\'"] * len(exts)) + ")")
-            args += ["%." + contains(e)[1:-1] for e in exts]  # ends with .ext
-        elif not folders:
-            where.append("f.is_dir = 0")
-        if under is not None:
-            where.append(r"f.path LIKE ? ESCAPE '\'")
-            args.append(like_inside(tag_key(under)))
-        pdf = pdf or {}
-        if pdf.get("pages_min") is not None:
-            where.append("p.pages >= ?")
-            args.append(pdf["pages_min"])
-        if pdf.get("pages_max") is not None:
-            where.append("p.pages <= ?")
-            args.append(pdf["pages_max"])
-        if pdf.get("protected") is not None:
-            where.append("p.encrypted = ?")
-            args.append(int(pdf["protected"]))
-        if (pdf.get("text") or "").strip():
-            columns = ("title", "author", "subject", "keywords")
-            where.append("(" + " OR ".join(rf"p.{c} LIKE ? ESCAPE '\'" for c in columns) + ")")
-            args += [contains(pdf["text"].strip())] * len(columns)
+        [(path, is_dir, size, modified, name, pages, encrypted, title, author, error, needs_password)]
+        (the PDF columns are None for what is not a PDF read by index_pdfs).
+        name: a text the name contains (without the case nor the accents); ext: one or more
+        extensions, separated by spaces or commas, with or without the dot (a filter on the extension
+        leaves out the folders); under: only what is inside this folder, at any depth (None:
+        everywhere); folders: False leaves out the folders; kind: 0 all, 1 files, 2 folders, 3 PDF,
+        4 images; size_min / size_max: bytes (files only); days: modified within this many days;
+        sort: 0 name, 1 size, 2 modified, 3 pages (without pages last), desc: reversed.
+        pdf: criteria on what pdf_info read, which keep only the PDF that were read: a dict with any of
+        pages_min, pages_max, protected (True: encrypted, False: not), needs_password and error (True
+        or False), no_copy / no_print / no_modify (True: forbidden), text (title, author, subject or
+        keywords), title, author, keywords (keywords or subject), producer (producer or creator),
+        version (starts with), created_days (created within this many days).
+        See find_sql for the query."""
+        sql, args = self.find_sql(name, ext, under, folders, limit, pdf, kind, size_min, size_max, days, sort, desc)
         # own connection outside memory: safe to call from a thread while the window draws
         db = self.db if self.path == ":memory:" else sqlite3.connect(str(self.path), timeout=30)
         try:
-            return db.execute(
-                "SELECT f.path, f.is_dir, f.size, f.modified, f.name, p.pages, p.encrypted "
-                "FROM files f LEFT JOIN pdf_info p ON p.path = f.path "
-                f"WHERE {' AND '.join(where)} ORDER BY f.name COLLATE NOCASE, f.path LIMIT ?",
-                (*args, limit),
-            ).fetchall()
+            db.create_function("fold", 1, fold_text, deterministic=True)
+            return db.execute(sql, args).fetchall()
         finally:
             if db is not self.db:
                 db.close()
+
+    def find_sql(self, name="", ext="", under=None, folders=True, limit=500, pdf=None, kind=0,
+                 size_min=None, size_max=None, days=None, sort=0, desc=False):
+        """the (sql, arguments) of find()"""
+
+        def contains(text):  # a LIKE pattern, ESCAPE backslash, of a text folded like the column
+            return "%" + fold_text(text).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+        like = r" LIKE ? ESCAPE '\'"
+        where, args = ["f.name IS NOT NULL"], []
+        if name.strip():
+            where.append("fold(f.name)" + like)
+            args.append(contains(name.strip()))
+        exts = [e.strip().lstrip(".") for e in ext.replace(",", " ").split() if e.strip(". ")]
+        if kind == 3:
+            exts = exts or ["pdf"]
+        elif kind == 4:
+            exts = exts or sorted(IMAGE_EXTENSIONS)
+        if exts:
+            where.append("f.is_dir = 0 AND (" + " OR ".join(["fold(f.name)" + like] * len(exts)) + ")")
+            args += ["%." + contains(e)[1:-1] for e in exts]  # ends with .ext
+        elif kind == 1 or not folders and kind != 2:
+            where.append("f.is_dir = 0")
+        elif kind == 2:
+            where.append("f.is_dir = 1")
+        if under is not None:
+            where.append(r"f.path LIKE ? ESCAPE '\'")
+            args.append(like_inside(tag_key(under)))
+        if size_min:
+            where.append("(f.is_dir = 1 OR f.size >= ?)")
+            args.append(size_min)
+        if size_max:
+            where.append("(f.is_dir = 1 OR f.size <= ?)")
+            args.append(size_max)
+        if days:
+            where.append("f.modified >= ?")
+            args.append(time.time() - days * 86400)
+        pdf = pdf or {}
+        for key, column, op in (("pages_min", "pages", ">="), ("pages_max", "pages", "<=")):
+            if pdf.get(key) is not None:
+                where.append(f"p.{column} {op} ?")
+                args.append(pdf[key])
+        for key, column in (("protected", "encrypted"), ("needs_password", "needs_password")):
+            if pdf.get(key) is not None:
+                where.append(f"p.{column} = ?")
+                args.append(int(pdf[key]))
+        if pdf.get("error") is not None:
+            where.append("p.error IS NOT NULL AND p.error != ''" if pdf["error"] else "p.path IS NOT NULL AND (p.error IS NULL OR p.error = '')")
+        for key, column in (("no_copy", "can_copy"), ("no_print", "can_print"), ("no_modify", "can_modify")):
+            if pdf.get(key):
+                where.append(f"p.{column} = 0")
+        if (pdf.get("text") or "").strip():
+            columns = ("title", "author", "subject", "keywords")
+            where.append("(" + " OR ".join(f"fold(p.{c})" + like for c in columns) + ")")
+            args += [contains(pdf["text"].strip())] * len(columns)
+        for key, columns in (("title", ("title",)), ("author", ("author",)), ("keywords", ("keywords", "subject")),
+                             ("producer", ("producer", "creator"))):
+            if (pdf.get(key) or "").strip():
+                where.append("(" + " OR ".join(f"fold(p.{c})" + like for c in columns) + ")")
+                args += [contains(pdf[key].strip())] * len(columns)
+        if (pdf.get("version") or "").strip():
+            where.append("p.pdf_version LIKE ?")
+            args.append(pdf["version"].strip() + "%")
+        if pdf.get("created_days"):
+            where.append("p.created >= ?")
+            args.append(time.time() - pdf["created_days"] * 86400)
+        direction = "DESC" if desc else "ASC"
+        order = {
+            0: f"f.name COLLATE NOCASE {direction}",
+            1: f"f.size {direction}",
+            2: f"f.modified {direction}",
+            3: f"p.pages IS NULL, p.pages {direction}",  # the PDF without pages known come last
+        }.get(sort, "f.name COLLATE NOCASE")
+        sql = (
+            "SELECT f.path, f.is_dir, f.size, f.modified, f.name, p.pages, p.encrypted, p.title, p.author, p.error, "
+            "p.needs_password FROM files f LEFT JOIN pdf_info p ON p.path = f.path "
+            f"WHERE {' AND '.join(where)} ORDER BY {order}, f.name COLLATE NOCASE, f.path LIMIT ?"
+        )
+        return sql, (*args, limit)
 
     def index_pdfs(self, root=None, progress=None, cancel=None, on_file=None):
         """reads, with pdf_info, the PDF indexed under a folder (None: the whole index) that are new or
@@ -1082,7 +1147,8 @@ CUSTOM_TITLEBAR = sys.platform == "win32"  # no title bar of the system: the win
 # the id the taskbar groups the windows of the app by: scripts/make_shortcut_windows.py gives the
 # same one to the shortcut, so a pinned Finder opens its window under its own icon
 APP_USER_MODEL_ID = "pyegui.Finder"
-APP_ICON = Path(__file__).resolve().parent / "app_icon" / "finder_256.png"
+# the window icon; the green one for the bundle "Finder Py.app" (made by scripts/make_app_macos.py), to tell it from the Rust Finder
+APP_ICON = Path(__file__).resolve().parent / "app_icon" / ("finder_green_256.png" if os.environ.get("PYEGUI_APP_NAME") == "Finder Py" else "finder_256.png")
 HOME = Path.home()
 ICONS_DIR = (
     Path(__file__).resolve().parent / "icons"
@@ -1209,6 +1275,26 @@ find_pages_min = Str("")  # filters on what pdf_info read of the PDF: number of 
 find_pages_max = Str("")
 find_protect = Int(0)  # 0: all, 1: encrypted, 2: not encrypted
 find_pdf_text = Str("")  # a text of the title, author, subject or keywords
+find_kind = Int(0)  # 0 all, 1 files, 2 folders, 3 PDF, 4 images
+find_size_min = Str("")  # in MB
+find_size_max = Str("")
+find_days = Str("")  # modified within N days
+find_sort = Int(0)  # 0 name, 1 size, 2 modified, 3 pages
+find_desc = Bool(False)
+find_needs_pw = Int(0)  # tri-states: 0 any, 1 yes, 2 no
+find_error = Int(0)
+find_no_copy = Bool(False)
+find_no_print = Bool(False)
+find_no_modify = Bool(False)
+find_title = Str("")
+find_author = Str("")
+find_keywords = Str("")
+find_producer = Str("")
+find_version = Str("")
+find_created_days = Str("")
+FIND_EXTRA = ("find_kind", "find_size_min", "find_size_max", "find_days", "find_sort", "find_desc", "find_needs_pw",
+              "find_error", "find_no_copy", "find_no_print", "find_no_modify", "find_title", "find_author",
+              "find_keywords", "find_producer", "find_version", "find_created_days")
 find_auto = Bool(True)  # search by itself once the typing paused, otherwise with the button
 find_state = {  # applied: the criteria of the rows shown; typed: those of the fields last frame
     "applied": None, "typed": None, "changed_at": 0.0, "rows": [], "more": False,
@@ -2596,20 +2682,35 @@ def find_root():
 
 
 def find_params():
-    """what the fields ask for now: (name, extensions, root folder or None, with folders, and the
-    PDF criteria as (pages min, pages max, protected, text))"""
+    """what the fields ask for now, as the keyword arguments of TagStore.find (without the limit)"""
     root = find_root() if find_scope.value == 0 else None
 
     def number(text):
         return int(text) if text.strip().isdigit() else None
 
-    pdf = (
-        number(find_pages_min.value),
-        number(find_pages_max.value),
-        {0: None, 1: True, 2: False}[find_protect.value],
-        find_pdf_text.value,
-    )
-    return (find_name.value, find_ext.value, root, find_folders.value, pdf)
+    def decimal(text):
+        try:
+            return float(text.replace(",", ".")) if text.strip() else None
+        except ValueError:
+            return None
+
+    def tri(holder):
+        return {0: None, 1: True, 2: False}[holder.value]
+
+    megabytes = lambda holder: None if decimal(holder.value) is None else int(decimal(holder.value) * 1_000_000)
+    pdf = {
+        "pages_min": number(find_pages_min.value), "pages_max": number(find_pages_max.value),
+        "protected": tri(find_protect), "needs_password": tri(find_needs_pw), "error": tri(find_error),
+        "no_copy": find_no_copy.value, "no_print": find_no_print.value, "no_modify": find_no_modify.value,
+        "text": find_pdf_text.value, "title": find_title.value, "author": find_author.value,
+        "keywords": find_keywords.value, "producer": find_producer.value, "version": find_version.value,
+        "created_days": number(find_created_days.value),
+    }
+    return {
+        "name": find_name.value, "ext": find_ext.value, "under": root, "folders": find_folders.value, "pdf": pdf,
+        "kind": find_kind.value, "size_min": megabytes(find_size_min), "size_max": megabytes(find_size_max),
+        "days": number(find_days.value), "sort": find_sort.value, "desc": find_desc.value,
+    }
 
 
 def run_debug_query(sql):
@@ -2710,15 +2811,13 @@ def debug_panel():
 
 
 def run_find(params):
-    name, ext, root, folders, (pages_min, pages_max, protected, text) = params
-    pdf = {"pages_min": pages_min, "pages_max": pages_max, "protected": protected, "text": text}
     find_state["job"] += 1
     job = find_state["job"]
     find_state.update(applied=params, index=find_index_key(), running=True)
 
     def work():
         try:
-            rows = tags.find(name, ext, root, folders, limit=FIND_LIMIT + 1, pdf=pdf)
+            rows = tags.find(limit=FIND_LIMIT + 1, **params)
         except Exception:  # base locked or busy: shown as no result
             rows = []
         if find_state["job"] == job:  # a newer search replaced this one: its result is dropped
@@ -2773,23 +2872,54 @@ def show_found(path, open_it):
 
 
 def find_panel():
-    """the dock pane of the advanced search in the SQLite index: by name and extension, from the
-    current folder or everywhere, automatically (after a pause in the typing) or with a button"""
-    text_edit_singleline(find_name, hint_text="Nom contient")
+    """the dock pane of the advanced search in the SQLite index: by name, kind, size, date and, for
+    the PDF already read, pages, protections and metadata; automatically (after a pause in the typing)
+    or with a button"""
+    text_edit_singleline(find_name, hint_text="Nom contient (sans accents ni casse)")
     text_edit_singleline(find_ext, hint_text="Extensions (py md pdf)")
     segmented_control(find_scope, [(None, "Dossier courant"), (None, "Partout")], tint=icon_tint())
+    kinds = ["Tout", "Fichiers", "Dossiers", "PDF", "Images"]
+    combo_box(find_kind, list(range(len(kinds))), kinds, "Type")
     checkbox(find_folders, "Inclure les dossiers")
+
+    def pair(left, right, left_hint, right_hint, width=None):
+        holders, hints = (left, right), (left_hint, right_hint)
+        columns(2, lambda i: text_edit_singleline(holders[i], hint_text=hints[i]))
+
+    pair(find_size_min, find_size_max, "Taille min (Mo)", "Taille max (Mo)", 110)
+    pair(find_days, find_created_days, "Modifié (jours)", "PDF créé (jours)", 110)
+
+    def sorting():
+        names = ["Nom", "Taille", "Date", "Pages"]
+        combo_box(find_sort, list(range(len(names))), names, "Tri")
+        checkbox(find_desc, "Décroissant")
+
+    horizontal(sorting)
     add_space(2)
-    weak("Filtres PDF (les PDF déjà indexés)")
 
-    def pages_fields():
-        for holder, hint in ((find_pages_min, "Pages min"), (find_pages_max, "Pages max")):
-            set_width(80)
-            text_edit_singleline(holder, hint_text=hint)
+    def pdf_filters():
+        weak("Filtres PDF (les PDF déjà indexés)")
+        pair(find_pages_min, find_pages_max, "Pages min", "Pages max")
+        yes_no = [(None, "Tous"), (None, "Oui"), (None, "Non")]
+        for holder, label in ((find_protect, "Chiffré"), (find_needs_pw, "Mot de passe requis"), (find_error, "Illisible")):
+            weak(label)
+            segmented_control(holder, yes_no, tint=icon_tint())
+        weak("Protections interdites")
 
-    horizontal(pages_fields)
-    segmented_control(find_protect, [(None, "Tous"), (None, "Protégés"), (None, "Non protégés")], tint=icon_tint())
-    text_edit_singleline(find_pdf_text, hint_text="Titre, auteur, sujet, mots-clés")
+        def forbidden():
+            checkbox(find_no_copy, "Copie")
+            checkbox(find_no_print, "Impression")
+            checkbox(find_no_modify, "Modification")
+
+        horizontal(forbidden)
+        text_edit_singleline(find_title, hint_text="Titre")
+        text_edit_singleline(find_author, hint_text="Auteur")
+        text_edit_singleline(find_keywords, hint_text="Mots-clés / sujet")
+        text_edit_singleline(find_producer, hint_text="Producteur / créateur")
+        text_edit_singleline(find_pdf_text, hint_text="Titre, auteur, sujet, mots-clés (au choix)")
+        text_edit_singleline(find_version, hint_text="Version (1.7)")
+
+    collapsing("Critères PDF avancés", pdf_filters)
     add_space(2)
     checkbox(find_auto, "Recherche automatique")
     stale = find_update()
@@ -2816,8 +2946,8 @@ def find_panel():
         weak(count + (f" · seuls les {FIND_LIMIT} premiers sont affichés, affine la recherche" if find_state["more"] else ""))
     add_space(4)
     current_key = tag_key(selected.value) if selected.value else None
-    for path, is_dir, size, modified, name, pages, encrypted in rows:
-        def row(path=path, is_dir=is_dir, size=size, name=name, pages=pages, encrypted=encrypted):
+    for path, is_dir, size, modified, name, pages, encrypted, title, author, error, needs_password in rows:
+        def row(path=path, is_dir=is_dir, size=size, name=name, pages=pages, encrypted=encrypted, error=error):
             icon({"path": Path(path), "emoji": "📁" if is_dir else "📄"}, 16)
             response = selectable_label_response(path == current_key, name)
             if response.clicked:
@@ -2827,10 +2957,19 @@ def find_panel():
             if pages:
                 weak(f"{pages} p.")
             if encrypted:
-                weak("protégé")
+                weak("chiffré")
+            if error:
+                weak("illisible")
 
         horizontal(row)
-        weak(str(Path(path).parent))
+        details = [str(Path(path).parent)]
+        if modified:
+            details.append(datetime.fromtimestamp(modified).strftime("%d/%m/%Y"))
+        if author:
+            details.append(author)
+        if title:
+            details.append(f"« {title} »")
+        weak(" · ".join(details))
 
 
 pane_requests = []  # titles of the panes to bring back, done at the start of the next frame
@@ -3570,30 +3709,44 @@ def view_menu(paths):
 # entered. Kept in the base of the tags (TagStore), read again when it changed
 
 opened_cache = {"version": -1, "dates": {}, "recent": []}
-RECENT_LIMIT = 30  # the items of the Recent pane
+RECENT_LIMIT = 30  # the items of the Recent pane at first, and what each "Charger plus" adds
+recent_shown = [RECENT_LIMIT]  # how many the pane asks for now
 OPENED_COLUMN = 112  # the width of the Last Opened column
 
 
 def opened_data():
-    if opened_cache["version"] != tags.version:
+    key = (tags.version, recent_shown[0])
+    if opened_cache["version"] != key:
         opened_cache.update(
-            version=tags.version,
+            version=key,
             dates=tags.opened_dates(),
-            recent=tags.recently_opened(RECENT_LIMIT),
+            recent=tags.recently_opened(recent_shown[0]),
         )
     return opened_cache
 
 
+FR_MONTHS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]
+FR_DAYS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+
+
 def short_date(when):
-    """a date that fits a narrow column: the hour today, Yesterday, the day this year, else the year"""
-    moment, today = datetime.fromtimestamp(when), datetime.now().date()
-    if moment.date() == today:
-        return moment.strftime("%H:%M")
-    if (today - moment.date()).days == 1:
-        return "Yesterday"
-    if moment.year == today.year:
-        return moment.strftime("%d %b")
-    return moment.strftime("%d %b %Y")
+    """a French date that fits a narrow column: "à l'instant", "il y a 5 min", "il y a 3 h", "hier",
+    the day of the week within the week, then "23 nov." and, another year, "23 nov. 2024" """
+    moment, now = datetime.fromtimestamp(when), datetime.now()
+    seconds = (now - moment).total_seconds()
+    days = (now.date() - moment.date()).days
+    if 0 <= seconds < 60:
+        return "à l'instant"
+    if 0 <= seconds < 3600:
+        return f"il y a {int(seconds // 60)} min"
+    if days == 0:
+        return f"il y a {int(seconds // 3600)} h" if seconds > 0 else moment.strftime("%H:%M")
+    if days == 1:
+        return "hier"
+    if 1 < days < 7:
+        return FR_DAYS[moment.weekday()]
+    text = f"{moment.day} {FR_MONTHS[moment.month - 1]}"
+    return text if moment.year == now.year else f"{text} {moment.year}"
 
 
 def opened_cell(path):
@@ -3610,22 +3763,63 @@ def recent_panel():
     if not items:
         weak("Les fichiers et dossiers ouverts s'afficheront ici")
         return
+    # a card per item: icon, name and the date on the right, the folder under them in a smaller font.
+    # The card stays within `width` (its margins, the spacing of 8 between its parts and the room of
+    # the scrollbar are taken off), or the dates are cut at the right of the pane
+    margin = 8
+    width = available_width() - 2 * margin - 2 * 4 - 16
     for path, when in items:
+        selected_card = selected.value == str(path)
 
-        def row(path=path, when=when):
-            uri = file_icon(str(path), 20)
-            if uri:
-                image(uri, size=20)
+        def card(path=path, when=when, selected_card=selected_card):
+            def content():
+                def line():
+                    set_width(width)
+                    uri = file_icon(str(path), 20)
+                    if uri:
+                        image(uri, size=20)
+                    date = short_date(when)
+                    date_width = text_width(date, size=11) + 4
+                    room = width - (20 + 8 if uri else 0) - date_width - 8
+                    name = path.name or str(path)
+                    while len(name) > 1 and text_width(name) > room:
+                        name = name[:-2] + "…" if name.endswith("…") else name[:-1] + "…"
+                    label(name, selectable=False)
+                    add_space(max(room - text_width(name), 0))
+                    label(date, size=11)  # right-aligned: the space above takes what the name leaves
 
-            def text():
-                # the name, then when and where under it: a narrow pane cuts nothing important
-                if selectable_label_clicked(selected.value == str(path), path.name or str(path)):
-                    go_or_select(path)
-                small(f"{short_date(when)} · {path.parent.name or path.parent}")
+                horizontal(line)
+                label(str(path.parent).replace(str(HOME), "~"), size=10, truncate=True, selectable=False)
 
-            vertical(text)
+            frame(
+                content, fill=(127, 127, 127, 60 if selected_card else 28), rounding=8,
+                inner_margin=margin, outer_margin=(0, 0, 0, 4),
+            )
 
-        tooltip(str(path).replace(str(HOME), "~"), lambda row=row: horizontal(row))
+        result = []
+        tooltip(str(path).replace(str(HOME), "~"), lambda card=card, result=result: result.append(interactive(card)))
+        response = result[0]
+        if response.hovered:
+            draw_rect(response.rect, fill=(127, 127, 127, 35), rounding=8)
+        if response.clicked:
+            go_or_select(path)
+    if len(opened_data()["recent"]) >= recent_shown[0]:  # the base may hold older ones
+        def more():
+            def content():
+                def line():
+                    set_width(width)
+                    add_space(max(width / 2 - 40, 0))
+                    weak("Charger plus")
+
+                horizontal(line)
+
+            frame(content, stroke=EDGE, rounding=8, inner_margin=margin, outer_margin=(0, 0, 0, 4))
+
+        response = interactive(more)
+        if response.hovered:
+            draw_rect(response.rect, fill=(127, 127, 127, 35), rounding=8)
+        if response.clicked:
+            recent_shown[0] += RECENT_LIMIT
 
 
 def tags_value(path):
@@ -5836,7 +6030,7 @@ PER_WINDOW = [
     "tag_filter", "tag_manager_open", "tag_picker_open", "tag_edit", "tag_name", "tag_color", "tag_parent",
     "tags_query", "tag_query", "tag_index", "tag_picker_state",
     "find_name", "find_ext", "find_scope", "find_folders", "find_pages_min", "find_pages_max", "find_protect",
-    "find_pdf_text", "find_auto", "find_state", "note_text", "note_of",
+    "find_pdf_text", "find_auto", "find_state", *FIND_EXTRA, "note_text", "note_of",
     "history", "position", "selected", "picked", "anchor", "scroll_target", "view", "search", "show_sidebar",
     "bg_open", "path_editing", "path_text", "path_edit", "focus_zone", "show_dock", "renaming",
     "integration_note", "new_name", "palette_open", "palette_query", "palette_index", "palette_pointer", "focus_outline",
@@ -5867,6 +6061,11 @@ def make_window(folder):
         "find_name": Str(""), "find_ext": Str(""), "find_scope": Int(0), "find_folders": Bool(True),
         "find_pages_min": Str(""), "find_pages_max": Str(""), "find_protect": Int(0), "find_pdf_text": Str(""),
         "find_auto": Bool(True),
+        "find_kind": Int(0), "find_size_min": Str(""), "find_size_max": Str(""), "find_days": Str(""),
+        "find_sort": Int(0), "find_desc": Bool(False), "find_needs_pw": Int(0), "find_error": Int(0),
+        "find_no_copy": Bool(False), "find_no_print": Bool(False), "find_no_modify": Bool(False),
+        "find_title": Str(""), "find_author": Str(""), "find_keywords": Str(""), "find_producer": Str(""),
+        "find_version": Str(""), "find_created_days": Str(""),
         "find_state": {
             "applied": None, "typed": None, "changed_at": 0.0, "rows": [], "more": False,
             "index": None, "pin": None, "job": 0, "running": False,

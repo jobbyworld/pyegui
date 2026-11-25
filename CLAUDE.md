@@ -142,7 +142,7 @@ The repository is a Cargo workspace of three crates:
   `actions.rs` (one registry of actions read by the pane, the context menu and the shortcuts), `app.rs` (window,
   state, file operations), `dock.rs` (`egui_tiles`), `views.rs` (the file views of the core, fed with the folder, selection and sort of the app), `viewer.rs`
   (markdown, code, image, PDF), `terminals.rs`, `tagstore.rs` (SQLite, same schema as `TagStore` of `examples/finder.py`) and
-  `tagsui.rs`, `search.rs`, `model.rs`. Build `cargo build --profile dist -p finder-rs`; on macOS
+  `tagsui.rs`, `search.rs` (the "Recherche" pane: a walk of the disk), `indexsearch.rs` (the "Index" pane: the same criteria plus the ones of the PDF files, as one bound SQL query on `files` and `pdf_info` of `tags.db`, read only), `model.rs`. Build `cargo build --profile dist -p finder-rs`; on macOS
 
   `python scripts/bundle_finder_macos.py makes dist/Finder.app and dist/Finder.dmg`. The CI builds
   and attaches the executables of Windows (x64, ARM64), macOS (x86_64, aarch64) and Linux to the release.
