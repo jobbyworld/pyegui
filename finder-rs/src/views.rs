@@ -148,7 +148,9 @@ fn hooks(app: &FinderApp) -> Hooks<'_> {
             None => Value::None,
         })),
     };
-    Hooks { badges: None, extras: vec![tags, opened] }
+    let mut extras = vec![tags, opened];
+    extras.extend(crate::metaui::extras(app, &["Nom", "Modifié", "Taille", "Type", "Étiquettes", "Dernière ouverture"]));
+    Hooks { badges: None, extras }
 }
 
 fn headers() -> [String; 4] {
@@ -310,7 +312,8 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
         } else {
             use SortBy::*;
             let mut columns: Vec<(Column, f32)> = [Name, Modified, Size, Kind].into_iter().map(|s| (Column::Sort(s), 0.0)).collect();
-            columns.extend([(Column::Extra(0), 0.0), (Column::Extra(1), 0.0)]);
+            let extra_count = 2 + app.meta_defs().iter().filter(|d| app.meta_columns.contains(&d.id)).count();
+            columns.extend((0..extra_count).map(|i| (Column::Extra(i), 0.0)));
             Shape::List { columns, headers: headers(), date_format: DATE_FORMAT.into(), row_height: ROW_HEIGHT }
         };
         let menus = {

@@ -82,6 +82,12 @@ impl TagStore {
         statement.query_map(params![key(path)], |r| Ok((r.get(0)?, r.get(1)?))).map(|rows| rows.flatten().collect()).unwrap_or_default()
     }
 
+    /// Every own value of a property, by stored path (what inheritance and summaries are computed from)
+    pub fn meta_all(&self, def: i64) -> std::collections::BTreeMap<String, String> {
+        let Ok(mut statement) = self.db.prepare("SELECT path, value FROM meta_values WHERE def_id = ?") else { return Default::default() };
+        statement.query_map(params![def], |r| Ok((r.get(0)?, r.get(1)?))).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
     /// Puts a value on an item; `None` or a blank text removes it
     pub fn set_meta_value(&mut self, path: &Path, def: i64, value: Option<&str>) {
         match value.filter(|v| !v.trim().is_empty()) {
@@ -233,5 +239,19 @@ mod tests {
         s.remove_choice_option(def, a);
         assert_eq!(s.meta_value(f1, def), None, "an emptied value goes away");
         assert_eq!(decode_ids(&s.meta_value(f3, def).unwrap()), vec![c]);
+    }
+
+    #[test]
+    fn all_the_values_of_a_property_resolve_through_the_folders() {
+        use pyegui_core::meta::{resolve, Resolved};
+        let mut s = store();
+        let def = s.create_meta("Client", MetaType::Text).unwrap();
+        s.set_meta_value(Path::new("/tmp/p"), def, Some("ACME"));
+        s.set_meta_value(Path::new("/tmp/q/x"), def, Some("Zed"));
+        let all = s.meta_all(def);
+        assert_eq!(all.len(), 2);
+        let found = resolve(&all, &crate::tagstore::key(Path::new("/tmp/p/a/b.txt")), std::path::MAIN_SEPARATOR, || false);
+        assert!(matches!(found, Resolved::Inherited { ref value, .. } if value == "ACME"));
+        assert!(matches!(resolve(&all, &crate::tagstore::key(Path::new("/tmp/q")), std::path::MAIN_SEPARATOR, || true), Resolved::Summary(_)));
     }
 }

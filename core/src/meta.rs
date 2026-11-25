@@ -259,6 +259,128 @@ pub fn column_value(def: &MetaDef, text: Option<&str>) -> Value {
     }
 }
 
+// inheritance and summary
+
+use std::collections::{BTreeMap, BTreeSet};
+
+/// What an item has for a property once the folders around it are taken into account
+#[derive(Clone, PartialEq, Debug)]
+pub enum Resolved {
+    /// a value put on the item itself
+    Own(String),
+    /// the value of the nearest folder that has one
+    Inherited { value: String, from: String },
+    /// a folder with no value of its own and none inherited: what the items below it hold
+    Summary(Summary),
+    None,
+}
+
+/// The values found below a folder: each different stored value with how many items hold it
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct Summary {
+    pub values: Vec<(String, usize)>,
+    /// how many items below hold a value
+    pub items: usize,
+}
+
+/// The folder that holds a path, `None` at the root
+fn parent_of(path: &str, sep: char) -> Option<&str> {
+    let at = path.trim_end_matches(sep).rfind(sep)?;
+    (at > 0).then(|| &path[..at])
+}
+
+/// The value of a property for a path. `values` holds the own values of the property by stored path, `sep` is the
+/// separator of the paths. The path itself wins, then its nearest folder; a folder that has neither gets the summary
+/// of what is below it (`is_dir`).
+pub fn resolve(values: &BTreeMap<String, String>, path: &str, sep: char, is_dir: impl FnOnce() -> bool) -> Resolved {
+    if let Some(v) = values.get(path) {
+        return Resolved::Own(v.clone());
+    }
+    let mut at = path;
+    while let Some(parent) = parent_of(at, sep) {
+        if let Some(v) = values.get(parent) {
+            return Resolved::Inherited { value: v.clone(), from: parent.to_owned() };
+        }
+        at = parent;
+    }
+    if !is_dir() {
+        return Resolved::None;
+    }
+    let from = format!("{}{sep}", path.trim_end_matches(sep));
+    // every path that starts with `folder/`: the characters after the separator sort right after it
+    let until = format!("{}{}", path.trim_end_matches(sep), char::from_u32(sep as u32 + 1).unwrap_or('\u{10ffff}'));
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut items = 0;
+    for (_, v) in values.range(from..until) {
+        *counts.entry(v.as_str()).or_default() += 1;
+        items += 1;
+    }
+    if items == 0 {
+        return Resolved::None;
+    }
+    Resolved::Summary(Summary { values: counts.into_iter().map(|(v, n)| (v.to_owned(), n)).collect(), items })
+}
+
+/// The text of a summary. `date` writes a day from its seconds.
+pub fn summary_text(def: &MetaDef, summary: &Summary, date: &dyn Fn(f64) -> String) -> String {
+    let numbers = || -> Vec<f64> { summary.values.iter().filter_map(|(v, _)| v.trim().parse().ok()).collect() };
+    match def.ty {
+        MetaType::Number => {
+            let n = numbers();
+            let (lo, hi) = (n.iter().cloned().fold(f64::INFINITY, f64::min), n.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
+            let (a, b) = (display(def, &lo.to_string()), display(def, &hi.to_string()));
+            if lo == hi { a } else { format!("{a} – {b}") }
+        }
+        MetaType::Date => {
+            let n = numbers();
+            let (lo, hi) = (n.iter().cloned().fold(f64::INFINITY, f64::min), n.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
+            if lo == hi { date(lo) } else { format!("{} – {}", date(lo), date(hi)) }
+        }
+        MetaType::Bool => {
+            let yes: usize = summary.values.iter().filter(|(v, _)| v.trim() == "1").map(|(_, n)| n).sum();
+            format!("{yes}/{} oui", summary.items)
+        }
+        MetaType::Choice => {
+            // the labels of the options below, in the order of the list
+            let used: BTreeSet<i64> = summary.values.iter().flat_map(|(v, _)| decode_ids(v)).collect();
+            let labels: Vec<&str> = def.config.options.iter().filter(|o| used.contains(&o.id)).map(|o| o.label.as_str()).collect();
+            more(&labels)
+        }
+        MetaType::Text | MetaType::LongText => {
+            let texts: Vec<&str> = summary.values.iter().map(|(v, _)| v.lines().next().unwrap_or("")).collect();
+            more(&texts)
+        }
+    }
+}
+
+/// "a, b, c (+2)": the first three
+fn more(items: &[&str]) -> String {
+    let shown = items.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+    if items.len() > 3 { format!("{shown} (+{})", items.len() - 3) } else { shown }
+}
+
+/// The text of a resolved value (empty for none); a date is written by `date`
+pub fn resolved_text(def: &MetaDef, resolved: &Resolved, date: &dyn Fn(f64) -> String) -> String {
+    let one = |v: &str| if def.ty == MetaType::Date { date_seconds(v).map(date).unwrap_or_default() } else { display(def, v) };
+    match resolved {
+        Resolved::Own(v) | Resolved::Inherited { value: v, .. } => one(v),
+        Resolved::Summary(s) => summary_text(def, s, date),
+        Resolved::None => String::new(),
+    }
+}
+
+/// The value of a resolved property in a column: a summary of numbers or dates sorts by its lowest
+pub fn resolved_column_value(def: &MetaDef, resolved: &Resolved) -> Value {
+    match resolved {
+        Resolved::Own(v) | Resolved::Inherited { value: v, .. } => column_value(def, Some(v)),
+        Resolved::Summary(s) if matches!(def.ty, MetaType::Number | MetaType::Date) => {
+            s.values.iter().filter_map(|(v, _)| v.trim().parse::<f64>().ok()).fold(None, |lo: Option<f64>, n| Some(lo.map_or(n, |l| l.min(n)))).map_or(Value::None, Value::Num)
+        }
+        Resolved::Summary(s) => Value::Text(summary_text(def, s, &|d| d.to_string())),
+        Resolved::None => Value::None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,5 +496,56 @@ mod tests {
         d.ty = MetaType::Bool;
         assert_eq!(column_value(&d, Some("1")), Value::Text("Oui".into()));
         assert_eq!(d.ty.data_type(), DataType::Choice);
+    }
+
+    fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn an_item_has_its_own_value_then_the_one_of_the_nearest_folder() {
+        let v = map(&[("/p", "1"), ("/p/a", "2"), ("/p/a/f.txt", "3")]);
+        assert_eq!(resolve(&v, "/p/a/f.txt", '/', || false), Resolved::Own("3".into()));
+        assert_eq!(resolve(&v, "/p/a/g.txt", '/', || false), Resolved::Inherited { value: "2".into(), from: "/p/a".into() });
+        assert_eq!(resolve(&v, "/p/b/g.txt", '/', || false), Resolved::Inherited { value: "1".into(), from: "/p".into() });
+        assert_eq!(resolve(&v, "/q/g.txt", '/', || false), Resolved::None);
+        assert_eq!(resolve(&v, "/pp/g.txt", '/', || false), Resolved::None, "/pp is not below /p");
+    }
+
+    #[test]
+    fn a_folder_without_value_sums_up_what_is_below_it() {
+        let v = map(&[("/p/a/1", "5"), ("/p/a/2", "9"), ("/p/b/1", "5"), ("/pp/x", "100"), ("/p0", "100")]);
+        let Resolved::Summary(s) = resolve(&v, "/p", '/', || true) else { panic!("a summary") };
+        assert_eq!(s.items, 3, "/pp and /p0 are not below /p");
+        assert_eq!(s.values, vec![("5".to_owned(), 2), ("9".to_owned(), 1)]);
+        assert_eq!(resolve(&v, "/p", '/', || false), Resolved::None, "a file has no summary");
+        assert_eq!(resolve(&v, "/empty", '/', || true), Resolved::None);
+    }
+
+    #[test]
+    fn summaries_read_by_type() {
+        let num = MetaDef { id: 1, name: "n".into(), ty: MetaType::Number, description: String::new(), config: Config::default() };
+        let s = Summary { values: vec![("5".into(), 2), ("9".into(), 1)], items: 3 };
+        assert_eq!(summary_text(&num, &s, &|d| d.to_string()), "5 – 9");
+        assert_eq!(resolved_column_value(&num, &Resolved::Summary(s.clone())), Value::Num(5.0));
+        let one = Summary { values: vec![("5".into(), 3)], items: 3 };
+        assert_eq!(summary_text(&num, &one, &|d| d.to_string()), "5");
+        let boolean = MetaDef { ty: MetaType::Bool, ..num.clone() };
+        let b = Summary { values: vec![("1".into(), 2), ("0".into(), 1)], items: 3 };
+        assert_eq!(summary_text(&boolean, &b, &|d| d.to_string()), "2/3 oui");
+        let mut list = choice(true);
+        list.config.add_option("Archivé");
+        let c = Summary { values: vec![("[3,1]".into(), 1), ("2".into(), 1)], items: 2 };
+        assert_eq!(summary_text(&list, &c, &|d| d.to_string()), "À faire, En cours, Fini", "in the order of the list");
+        let many = Summary { values: vec![("[1,2,3,4]".into(), 1)], items: 1 };
+        assert_eq!(summary_text(&list, &many, &|d| d.to_string()), "À faire, En cours, Fini (+1)");
+    }
+
+    #[test]
+    fn a_resolved_value_is_written_with_its_type() {
+        let day = MetaDef { id: 1, name: "d".into(), ty: MetaType::Date, description: String::new(), config: Config::default() };
+        let r = Resolved::Inherited { value: "86400".into(), from: "/p".into() };
+        assert_eq!(resolved_text(&day, &r, &|d| format!("jour {d}")), "jour 86400");
+        assert_eq!(resolved_text(&day, &Resolved::None, &|d| d.to_string()), "");
     }
 }

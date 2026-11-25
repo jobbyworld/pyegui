@@ -139,7 +139,11 @@ The value of a property on a file or folder. Only own values are stored.
 | `value` | TEXT NOT NULL | `text`: as typed; `number`: decimal; `bool`: `1`/`0`; `date`: seconds since 1970 (midnight UTC); `choice`: the **id** of an option (`3`), or a JSON list of ids (`[3,5]`) when `multiple` |
 | `source` | TEXT NOT NULL DEFAULT `'user'` | `user` (typed), later `auto` (filled by a rule of the indexation) |
 
-Primary key `(path, def_id)`; index `meta_values_def(def_id)`. A choice keeps the id of its options, never the label:
+Primary key `(path, def_id)`; index `meta_values_def(def_id)`.
+
+Two rules are computed when asked (`pyegui_core::meta::resolve`), never stored: an item **inherits** the value of its
+nearest folder that has one (the item's own value wins), and a folder with no value, own or inherited, shows a
+**summary** of the values of the items below it (range of numbers or dates, union of the options, `2/3 oui`...). A choice keeps the id of its options, never the label:
 renaming or merging an option does not touch the values.
 
 ## Queries to start from

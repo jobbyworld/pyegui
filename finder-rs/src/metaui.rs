@@ -8,7 +8,9 @@ use chrono::{DateTime, NaiveDate, NaiveTime};
 use eframe::egui::{self, Color32, RichText};
 use pyegui_core::date_input::parse_date;
 use pyegui_core::human_date::human_full_date;
-use pyegui_core::meta::{decode_ids, display, encode_ids, ListMode, MetaDef, MetaType};
+use pyegui_core::meta::{decode_ids, display, encode_ids, resolve, resolved_column_value, resolved_text, ListMode, MetaDef, MetaType, Resolved};
+use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use crate::app::FinderApp;
 use crate::glyphs;
@@ -35,6 +37,89 @@ pub struct Manager {
     /// an option waiting for the answer to "delete it?" (with the number of items that hold it)
     confirm_option: Option<i64>,
     confirm_property: bool,
+}
+
+/// The properties of the store, the own values of those that are shown, and what each row resolves to
+/// (own, inherited or summary): read once per version of the store, then looked up while the rows are drawn
+#[derive(Default)]
+pub struct MetaCache {
+    version: u64,
+    defs: Rc<Vec<MetaDef>>,
+    values: HashMap<i64, Rc<BTreeMap<String, String>>>,
+    resolved: HashMap<(i64, PathBuf), Rc<Resolved>>,
+}
+
+/// A day as the columns write it
+pub fn date_text(seconds: f64) -> String {
+    seconds_day(seconds).map(|d| d.format("%d/%m/%Y").to_string()).unwrap_or_default()
+}
+
+impl FinderApp {
+    fn meta_refresh(&self) -> std::cell::RefMut<'_, MetaCache> {
+        let mut cache = self.meta_cache.borrow_mut();
+        let version = self.tags.as_ref().map_or(0, |s| s.version) + 1;
+        if cache.version != version {
+            *cache = MetaCache { version, defs: Rc::new(self.tags.as_ref().map(|s| s.meta_defs()).unwrap_or_default()), ..Default::default() };
+        }
+        cache
+    }
+
+    /// The properties, in their order
+    pub fn meta_defs(&self) -> Rc<Vec<MetaDef>> {
+        self.meta_refresh().defs.clone()
+    }
+
+    /// What a property is for a path: its own value, the one of a folder around it, or the summary of a folder
+    pub fn meta_resolved(&self, def: &MetaDef, path: &std::path::Path) -> Rc<Resolved> {
+        let mut cache = self.meta_refresh();
+        if let Some(found) = cache.resolved.get(&(def.id, path.to_path_buf())) {
+            return found.clone();
+        }
+        let Some(store) = &self.tags else { return Rc::new(Resolved::None) };
+        let values = cache.values.entry(def.id).or_insert_with(|| Rc::new(store.meta_all(def.id))).clone();
+        let key = crate::tagstore::key(path);
+        let resolved = Rc::new(resolve(&values, &key, std::path::MAIN_SEPARATOR, || path.is_dir()));
+        cache.resolved.insert((def.id, path.to_path_buf()), resolved.clone());
+        resolved
+    }
+}
+
+/// The columns of the properties shown: a title (the name of the property) and how a row fills it
+pub fn extras<'a>(app: &'a FinderApp, reserved: &[&str]) -> Vec<pyegui_core::files::Extra<'a>> {
+    let defs = app.meta_defs();
+    defs.iter()
+        .filter(|d| app.meta_columns.contains(&d.id))
+        .map(|d| {
+            let title = if reserved.contains(&d.name.as_str()) { format!("{} (propriété)", d.name) } else { d.name.clone() };
+            let (for_cell, for_value) = (d.clone(), d.clone());
+            pyegui_core::files::Extra {
+                title,
+                width: 130.0,
+                cell: Box::new(move |ui, path| cell(ui, app, &for_cell, path)),
+                ty: d.ty.data_type(),
+                value: Some(Box::new(move |path| resolved_column_value(&for_value, &app.meta_resolved(&for_value, path)))),
+            }
+        })
+        .collect()
+}
+
+/// The cell of a row: the own value as it is, an inherited one or a summary in weak italics
+fn cell(ui: &mut egui::Ui, app: &FinderApp, def: &MetaDef, path: &std::path::Path) {
+    let resolved = app.meta_resolved(def, path);
+    let text = resolved_text(def, &resolved, &date_text);
+    if text.is_empty() {
+        return;
+    }
+    let (rich, hint) = match &*resolved {
+        Resolved::Own(_) => (RichText::new(text), None),
+        Resolved::Inherited { from, .. } => (RichText::new(text).italics().weak(), Some(format!("Hérité de {from}"))),
+        Resolved::Summary(s) => (RichText::new(format!("≈ {text}")).italics().weak(), Some(format!("Résumé de {} élément(s) dans ce dossier", s.items))),
+        Resolved::None => return,
+    };
+    let label = ui.add(egui::Label::new(rich).truncate().selectable(false));
+    if let Some(hint) = hint {
+        label.on_hover_text(hint);
+    }
 }
 
 /// The seconds since 1970 of a day (midnight UTC: a date has no time zone)
@@ -127,9 +212,21 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
         app.meta.new_option.clear();
     }
     let values = app.tags.as_ref().map(|s| s.meta_values_of(&path)).unwrap_or_default();
+    let resolved: Vec<Rc<Resolved>> = defs.iter().map(|d| app.meta_resolved(d, &path)).collect();
+    egui::CollapsingHeader::new("Colonnes des vues").id_salt("meta-columns").show(ui, |ui| {
+        for def in &defs {
+            let mut on = app.meta_columns.contains(&def.id);
+            if ui.checkbox(&mut on, &def.name).changed() {
+                app.meta_columns.retain(|id| *id != def.id);
+                if on {
+                    app.meta_columns.push(def.id);
+                }
+            }
+        }
+    });
     let mut acts: Vec<Act> = vec![];
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        for def in &defs {
+        for (def, resolved) in defs.iter().zip(&resolved) {
             let stored = values.get(&def.id).cloned();
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -143,6 +240,17 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
                     app.meta.buffers.remove(&def.id);
                 }
             });
+            // what the item has without a value of its own: the one of a folder around it, or what is below it
+            match &**resolved {
+                Resolved::Inherited { from, .. } => {
+                    let name = std::path::Path::new(from).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| from.clone());
+                    ui.label(RichText::new(format!("↳ {} · hérité de {name}", resolved_text(def, resolved, &date_text))).italics().weak());
+                }
+                Resolved::Summary(s) => {
+                    ui.label(RichText::new(format!("≈ {} · résumé de {} élément(s)", resolved_text(def, resolved, &date_text), s.items)).italics().weak());
+                }
+                _ => {}
+            }
             match def.ty {
                 MetaType::Bool => {
                     let mut on = stored.as_deref() == Some("1");
