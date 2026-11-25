@@ -493,22 +493,18 @@ fn filter_ui(ui: &mut egui::Ui, ty: DataType, filter: &mut Filter, values: &[Str
             range_edits(ui, filter, "min, ex. 10 Ko", "max", first);
         }
         DataType::Date => {
-            ui.horizontal_wrapped(|ui| {
-                let today = chrono::Local::now().date_naive();
-                let day = |d: chrono::NaiveDate| d.format("%Y-%m-%d").to_string();
-                for (label, from) in [
-                    ("Aujourd'hui", today),
-                    ("7 jours", today - chrono::Duration::days(7)),
-                    ("30 jours", today - chrono::Duration::days(30)),
-                    ("Cette année", chrono::NaiveDate::from_ymd_opt(chrono::Datelike::year(&today), 1, 1).unwrap_or(today)),
-                ] {
-                    if ui.small_button(label).clicked() {
-                        filter.min = day(from);
-                        filter.max.clear();
-                    }
-                }
-            });
-            range_edits(ui, filter, "du AAAA-MM-JJ", "au AAAA-MM-JJ", first);
+            // the calendar and its field in French ("cette semaine", "depuis lundi"): the filter keeps the ends as
+            // YYYY-MM-DD, an empty end is open
+            let today = chrono::Local::now().date_naive();
+            let day = |d: Option<chrono::NaiveDate>| d.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default();
+            let mut range = crate::date_range::DateRange {
+                start: crate::date_input::parse_date(&filter.min, today).filter(|_| !filter.min.trim().is_empty()),
+                end: crate::date_input::parse_date(&filter.max, today).filter(|_| !filter.max.trim().is_empty()),
+            };
+            if crate::date_range::date_range_inline(ui, "column-filter", &mut range) {
+                filter.min = day(range.start);
+                filter.max = day(range.end);
+            }
         }
         DataType::Choice => {
             ui.horizontal(|ui| {

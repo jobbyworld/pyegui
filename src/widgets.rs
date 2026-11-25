@@ -714,6 +714,14 @@ unsafe fn interactive(update_fun: Bound<'_, PyAny>, drag: bool, menu: Option<Bou
 #[pyfunction]
 unsafe fn pointer_pos() -> PyResult<Option<(f32, f32)>> {
     let ctx = panel_parent_ui(&UI)?.ctx().clone(); // no widget: the central panel is not opened
+    // while files are dragged over the window from another application (and in the frame they are dropped)
+    // the window gets no pointer event: the pointer is read from the system
+    let files = !pyegui_core::native_dnd::hovered_files(&ctx).is_empty() || !pyegui_core::native_dnd::dropped_files(&ctx).is_empty();
+    if files {
+        if let Some(p) = pyegui_core::native_dnd::native_pointer() {
+            return Ok(Some((p.x, p.y)));
+        }
+    }
     Ok(ctx.input(|i| i.pointer.latest_pos()).map(|p| (p.x, p.y)))
 }
 

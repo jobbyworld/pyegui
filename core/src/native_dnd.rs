@@ -672,6 +672,66 @@ mod win {
                 p.changed = false;
             }
         }
+
+        /// The files of a drag that started in the window and has not left it yet. `DoDragDrop` keeps the
+        /// thread until the drop, so no frame would be drawn: while the mouse stays in the window the drag is
+        /// ours (the files are hovered, then dropped, each frame draws where they go); the system drag starts
+        /// when the mouse leaves the window.
+        static INTERNAL: Mutex<Option<Vec<PathBuf>>> = Mutex::new(None);
+
+        /// True once the drop target is installed: then a drag can start as ours
+        pub fn installed() -> bool {
+            INSTALLED.load(std::sync::atomic::Ordering::Relaxed)
+        }
+
+        pub fn begin_internal(paths: &[PathBuf]) {
+            if let Ok(mut internal) = INTERNAL.lock() {
+                *internal = Some(paths.to_vec());
+            }
+        }
+
+        /// Called with the input of each frame, after `pump`: the files of our own drag are hovered or dropped
+        /// in the window, or go out of it with the system drag
+        pub fn pump_internal(ctx: &egui::Context, raw: &mut egui::RawInput) {
+            use windows::Win32::Foundation::{POINT, RECT};
+            use windows::Win32::Graphics::Gdi::ScreenToClient;
+            use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+            use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, GetCursorPos};
+            let Some(paths) = INTERNAL.lock().ok().and_then(|i| i.clone()) else { return };
+            let finish = || {
+                if let Ok(mut internal) = INTERNAL.lock() {
+                    *internal = None;
+                }
+            };
+            let Some(hwnd) = super::window() else {
+                finish();
+                return;
+            };
+            let down = unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } as u16 & 0x8000 != 0;
+            let inside = unsafe {
+                let mut at = POINT::default();
+                let mut area = RECT::default();
+                GetCursorPos(&mut at).is_ok()
+                    && ScreenToClient(hwnd, &mut at).as_bool()
+                    && GetClientRect(hwnd, &mut area).is_ok()
+                    && at.x >= area.left
+                    && at.x < area.right
+                    && at.y >= area.top
+                    && at.y < area.bottom
+            };
+            if down && inside {
+                raw.hovered_files = paths.iter().map(|path| egui::HoveredFile { path: Some(path.clone()), mime: String::new() }).collect();
+                ctx.request_repaint(); // the window gets no pointer event while the files are dragged
+            } else if down {
+                finish();
+                super::start(&paths); // out of the window: the system takes the drag
+            } else {
+                finish();
+                if inside {
+                    raw.dropped_files = paths.into_iter().map(|path| std::sync::Arc::new(Dropped(path)) as egui::DroppedFileHandle).collect();
+                }
+            }
+        }
     }
 
     /// Starts the drag and returns when it is over (the drop, or Escape): the system keeps the mouse
@@ -718,14 +778,24 @@ pub fn set_window(_window: &impl raw_window_handle::HasWindowHandle) {}
 pub fn pump_drop_input(ctx: &Context, raw: &mut RawInput) {
     PPP.store(ctx.pixels_per_point().to_bits(), Ordering::Relaxed);
     #[cfg(target_os = "windows")]
-    win::drop_in::pump(ctx, raw);
+    {
+        win::drop_in::pump(ctx, raw);
+        win::drop_in::pump_internal(ctx, raw);
+    }
     #[cfg(not(target_os = "windows"))]
     let _ = raw;
 }
 
 #[cfg(target_os = "windows")]
 pub fn start_drag(paths: &[PathBuf]) -> bool {
-    let started = win::start(paths);
+    // the drag is ours while the mouse stays in the window (see `pump_internal`); without the drop target
+    // of the window, or if the files cannot be given to the system, it is the one of the system at once
+    let started = if win::drop_in::installed() && !paths.is_empty() {
+        win::drop_in::begin_internal(paths);
+        true
+    } else {
+        win::start(paths)
+    };
     if started {
         LAST_DRAG.with(|l| *l.borrow_mut() = paths.to_vec());
     }

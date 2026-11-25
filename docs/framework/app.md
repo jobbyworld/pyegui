@@ -167,7 +167,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.ACRYLIC_DARK` (attribute): str(object='') -> str
@@ -179,7 +179,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.ACRYLIC_LIGHT` (attribute): str(object='') -> str
@@ -191,7 +191,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.BLUR` (attribute): str(object='') -> str
@@ -203,7 +203,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.LIQUID_GLASS` (attribute): str(object='') -> str
@@ -215,7 +215,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.LIQUID_GLASS_CLEAR` (attribute): str(object='') -> str
@@ -227,7 +227,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.MICA` (attribute): str(object='') -> str
@@ -239,7 +239,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.MICA_DARK` (attribute): str(object='') -> str
@@ -251,7 +251,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.MICA_LIGHT` (attribute): str(object='') -> str
@@ -263,7 +263,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.TABBED` (attribute): str(object='') -> str
@@ -275,7 +275,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.TABBED_DARK` (attribute): str(object='') -> str
@@ -287,7 +287,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.TABBED_LIGHT` (attribute): str(object='') -> str
@@ -299,7 +299,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 - `Backdrop.VIBRANCY` (attribute): str(object='') -> str
@@ -311,7 +311,7 @@ ctx.set_backdrop(Backdrop.ACRYLIC_DARK)
   that will be decoded using the given encoding and error handler.
   Otherwise, returns the result of object.__str__() (if defined)
   or repr(object).
-  encoding defaults to sys.getdefaultencoding().
+  encoding defaults to 'utf-8'.
   errors defaults to 'strict'.
 
 

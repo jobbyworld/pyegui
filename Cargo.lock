@@ -3974,6 +3974,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "pulldown-cmark",
  "raw-window-handle",
+ "rosetta-date",
  "ttf-parser",
  "usvg",
  "window-vibrancy",
@@ -4364,6 +4365,16 @@ dependencies = [
  "serde_derive",
  "typeid",
  "unicode-ident",
+]
+
+[[package]]
+name = "rosetta-date"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "676a2ed188c5802f71ecf5d99781ef22893957a11f017ffec1966e92e8cbcb59"
+dependencies = [
+ "chrono",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -751,6 +751,38 @@ impl Date {
     }
 }
 
+/// A range of dates for `date_range_picker`, both ends included. An end that is None is open: a range
+/// with a start and no end is "from this date on" (>=), a range with an end and no start is "up to this
+/// date" (<=), a range with neither is every date.
+///
+/// Usage::
+///
+///     period = DateRange(datetime.date(2026, 1, 1), None)   # >= 2026-01-01
+///     date_range_picker(period)
+///     if period.start is not None:
+///         ...
+#[pyclass]
+struct DateRange {
+    #[pyo3(get, set)]
+    start: Option<NaiveDate>,
+    #[pyo3(get, set)]
+    end: Option<NaiveDate>,
+}
+
+#[pymethods]
+impl DateRange {
+    #[new]
+    #[pyo3(signature = (start=None, end=None))]
+    fn new(start: Option<NaiveDate>, end: Option<NaiveDate>) -> Self {
+        DateRange { start, end }
+    }
+
+    /// True when `day` is in the range (an open end has no limit)
+    fn contains(&self, day: NaiveDate) -> bool {
+        pyegui_core::date_range::DateRange { start: self.start, end: self.end }.contains(day)
+    }
+}
+
 /// Values of this enum are used in Layout
 #[pyclass(from_py_object)]
 #[derive(Clone)]
@@ -2746,6 +2778,67 @@ unsafe fn date_picker_button(selection: &mut Date) -> PyResult<()> {
     Ok(())
 }
 
+/// Shows a range of dates, and opens a calendar when clicked. The calendar has three modes: "Entre" (a
+/// click on the start, then on the end), "À partir de" (>= a date, no end) and "Jusqu'à" (<= a date, no
+/// start). "Effacer" gives every date.
+///
+/// Keyword args:
+///     id (str): tells apart several pickers of the same ui. Default is "range"
+///
+/// Returns:
+///     bool: True during the frame the range was changed
+///
+/// Example::
+///
+///     period = DateRange(None, None)
+///     # inside update_func
+///     if date_range_picker(period):
+///         print(period.start, period.end)   # either can be None: an open end
+#[pyfunction]
+#[pyo3(signature = (selection, **kwargs))]
+unsafe fn date_range_picker(selection: &mut DateRange, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<bool> {
+    let ui = current_ui(&UI)?;
+    let id = kwarg::<String>(kwargs, "id")?.unwrap_or_else(|| "range".into());
+    let mut range = pyegui_core::date_range::DateRange { start: selection.start, end: selection.end };
+    let response = pyegui_core::date_range::date_range_picker(ui, &id, &mut range);
+    selection.start = range.start;
+    selection.end = range.end;
+    Ok(response.changed())
+}
+
+/// The date a text says, in French: "12/03/2026" (day first), "demain", "lundi prochain", "dans 3 jours",
+/// "il y a 2 semaines", "12 mars", "fin mars". None when the text is not understood.
+///
+/// Example::
+///
+///     parse_date("lundi prochain")   # datetime.date(...)
+#[pyfunction]
+fn parse_date(text: &str) -> Option<NaiveDate> {
+    pyegui_core::date_input::parse_date(text, chrono::Local::now().date_naive())
+}
+
+/// A range of dates typed by a person, as (start, end) with None for an open end, or None when it is not
+/// understood: "cette semaine", "ce mois-ci", "depuis lundi", "jusqu'au 20/03", "12/03 au 20/03", "demain",
+/// "tout".
+///
+/// Example::
+///
+///     start, end = parse_date_range("depuis lundi")   # end is None
+#[pyfunction]
+fn parse_date_range(text: &str) -> Option<(Option<NaiveDate>, Option<NaiveDate>)> {
+    pyegui_core::date_input::parse_any_range(text, chrono::Local::now().date_naive())
+}
+
+/// A day said the way people say it: "Aujourd'hui", "Hier", "lundi dernier", "12 mars", "12 mars 2025".
+///
+/// Example::
+///
+///     human_day(datetime.date.today())   # "Aujourd'hui"
+#[pyfunction]
+fn human_day(day: NaiveDate) -> String {
+    pyegui_core::human_date::human_day(day, chrono::Local::now().date_naive())
+}
+
 /// Add extra space before the next widget.
 ///
 /// The direction is dependent on the layout.
@@ -2805,6 +2898,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Float>()?;
     m.add_class::<RGB>()?;
     m.add_class::<Date>()?;
+    m.add_class::<DateRange>()?;
     m.add_class::<Context>()?;
     m.add_class::<Layout>()?;
     m.add_class::<LayoutType>()?;
@@ -2862,6 +2956,10 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(add_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(set_opacity, m)?)?;
     m.add_function(wrap_pyfunction!(date_picker_button, m)?)?;
+    m.add_function(wrap_pyfunction!(date_range_picker, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_date, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_date_range, m)?)?;
+    m.add_function(wrap_pyfunction!(human_day, m)?)?;
     m.add_function(wrap_pyfunction!(add_space, m)?)?;
     containers::register(m)?;
     layout::register(m)?;
