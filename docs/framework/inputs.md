@@ -379,6 +379,51 @@ date_picker_button(date)
 ```
 
 
+## `DateRange`
+
+
+A range of dates for `date_range_picker`, both ends included. An end that is None is open: a range
+with a start and no end is "from this date on" (>=), a range with an end and no start is "up to this
+date" (<=), a range with neither is every date.
+
+**Usage:**
+
+```python
+period = DateRange(datetime.date(2026, 1, 1), None)   # >= 2026-01-01
+date_range_picker(period)
+if period.start is not None:
+    ...
+```
+
+
+- `DateRange.contains(day)` (method): True when `day` is in the range (an open end has no limit)
+- `DateRange.end` (attribute)
+- `DateRange.start` (attribute)
+
+## `date_range_picker(selection, **kwargs)`
+
+Shows a range of dates, and opens a calendar when clicked. The calendar has three modes: "Entre" (a
+click on the start, then on the end), "À partir de" (>= a date, no end) and "Jusqu'à" (<= a date, no
+start). "Effacer" gives every date.
+
+**Keyword args**
+
+- `id` (str): tells apart several pickers of the same ui. Default is "range"
+
+**Returns**
+
+- `bool`: True during the frame the range was changed
+
+**Example:**
+
+```python
+period = DateRange(None, None)
+# inside update_func
+if date_range_picker(period):
+    print(period.start, period.end)   # either can be None: an open end
+```
+
+
 ## `color_edit_button_rgb(rgb)`
 
 Shows a button with the given color. If the user clicks the button, a full color picker is shown.

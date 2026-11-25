@@ -565,8 +565,8 @@ impl FinderApp {
         let home = home();
         let folder = start
             .map(|p| expand(&p))
-            .filter(|p| p.is_dir())
-            .or(saved.folder.filter(|p| p.is_dir()))
+            .filter(|p| is_dir_within(p, 1.5))
+            .or(saved.folder.filter(|p| is_dir_within(p, 1.5)))
             .unwrap_or(home);
         let folder_for_terminal = folder.clone();
         pyegui_core::icons::set_blue(saved.blue_folders);
@@ -677,7 +677,7 @@ impl FinderApp {
     }
 
     pub fn go(&mut self, folder: PathBuf) {
-        if folder.is_dir() {
+        if is_dir_within(&folder, 1.5) {
             self.history.visit(folder);
             self.after_navigation();
         }
@@ -2226,7 +2226,7 @@ impl FinderApp {
             ui.add_space(12.0);
             let (open, _) = self.section_header(ui, "Emplacements");
             let drives: Vec<(String, PathBuf)> = if cfg!(windows) {
-                ('A'..='Z').map(|c| (format!("{c}:"), PathBuf::from(format!("{c}:\\")))).filter(|(_, p)| p.is_dir()).collect()
+                ('A'..='Z').map(|c| (format!("{c}:"), PathBuf::from(format!("{c}:\\")))).filter(|(_, p)| is_dir_fast(p)).collect()
             } else {
                 vec![(root_name(), PathBuf::from("/"))]
             };
@@ -2477,7 +2477,7 @@ impl FinderApp {
             .map(|t| t.favorites())
             .unwrap_or_default()
             .into_iter()
-            .filter(|f| Path::new(&f.path).exists())
+            .filter(|f| exists_fast(Path::new(&f.path)))
             .collect();
         let mut rows = Vec::new();
         let mut act = None;
@@ -2992,20 +2992,66 @@ fn root_name() -> String {
 
 /// The free space of the drive of a folder, read every few seconds (not at every frame)
 fn free_space(path: &Path) -> Option<u64> {
-    thread_local! {
-        static CACHE: std::cell::RefCell<Option<(PathBuf, std::time::Instant, Option<u64>)>> = Default::default();
+    let owned = path.to_path_buf();
+    probe(format!("free:{}", path.display()), None, 10.0, move || fs4::available_space(&owned).ok())
+}
+
+/// The last answer of `call`, asked again in a thread at most every `every` seconds. A call on a disconnected
+/// network drive can block for many seconds: the window never waits for it, it draws with the last answer
+/// (`default` until the first one arrives). Like `probe` of examples/finder.py.
+fn probe<T: Clone + Send + 'static>(key: String, default: T, every: f64, call: impl FnOnce() -> T + Send + 'static) -> T {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    use std::time::Instant;
+    struct Known {
+        value: Box<dyn std::any::Any + Send>,
+        at: Option<Instant>,
+        busy: bool,
     }
-    CACHE.with(|c| {
-        let mut c = c.borrow_mut();
-        if let Some((p, when, value)) = c.as_ref() {
-            if p == path && when.elapsed().as_secs() < 10 {
-                return *value;
-            }
-        }
-        let value = fs4::available_space(path).ok();
-        *c = Some((path.to_path_buf(), std::time::Instant::now(), value));
-        value
-    })
+    static CACHE: OnceLock<Mutex<HashMap<String, Arc<Mutex<Known>>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let known = cache
+        .lock()
+        .unwrap()
+        .entry(key)
+        .or_insert_with(|| Arc::new(Mutex::new(Known { value: Box::new(default.clone()), at: None, busy: false })))
+        .clone();
+    let mut guard = known.lock().unwrap();
+    let due = guard.at.map_or(true, |t| t.elapsed().as_secs_f64() > every);
+    if !guard.busy && due {
+        guard.busy = true; // stays true while the system blocks: no thread piles up
+        let shared = known.clone();
+        std::thread::spawn(move || {
+            let value = call();
+            let mut k = shared.lock().unwrap();
+            k.value = Box::new(value);
+            k.at = Some(Instant::now());
+            k.busy = false;
+        });
+    }
+    guard.value.downcast_ref::<T>().cloned().unwrap_or(default)
+}
+
+/// `Path::is_dir` that gives up (false) after `seconds`: for the start of the app
+fn is_dir_within(path: &Path, seconds: f64) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let owned = path.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = tx.send(owned.is_dir());
+    });
+    rx.recv_timeout(std::time::Duration::from_secs_f64(seconds)).unwrap_or(false)
+}
+
+/// `Path::is_dir` for what is drawn at every frame: never waits for a slow drive
+fn is_dir_fast(path: &Path) -> bool {
+    let owned = path.to_path_buf();
+    probe(format!("dir:{}", path.display()), true, 5.0, move || owned.is_dir())
+}
+
+/// `Path::exists` for what is drawn at every frame: never waits for a slow drive
+fn exists_fast(path: &Path) -> bool {
+    let owned = path.to_path_buf();
+    probe(format!("exists:{}", path.display()), true, 5.0, move || owned.exists())
 }
 
 /// The heights of the top and bottom bands, in the sidebar and in the body

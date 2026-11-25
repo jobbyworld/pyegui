@@ -43,7 +43,7 @@ THEMES = [
       "selectable_label_clicked", "selectable_label_response", "selectable_value",
       "toggle_value", "switch", "segmented_control", "segmented_buttons", "combo_box", "slider_int", "slider_float", "drag_int",
       "drag_float", "drag_angle", "text_edit_singleline", "text_edit_multiline", "code_editor",
-      "date_picker_button", "color_edit_button_rgb", "color_edit_button_rgba", "progress",
+      "date_picker_button", "DateRange", "date_range_picker", "color_edit_button_rgb", "color_edit_button_rgba", "progress",
       "spinner", "Tags", "tags_edit", "TagTreeView", "tag_tree_view"]),
     ("layout", "Layout, sizes and scrolling",
      "Update functions can be nested: a function given to `horizontal`, `group`, `frame`... "

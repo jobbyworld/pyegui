@@ -34,6 +34,7 @@ import pyegui
 from pyegui import (
     RGB,
     table,
+    TableView,
     FileTransfer,
     drop_operation,
     dropped_files,
@@ -1166,7 +1167,10 @@ JOB_PANES = ("Indexation", "Base SQL")  # closed until an indexation starts / un
 DEBUG_LIMIT = 200  # rows shown by the Base SQL pane
 debug_choice = Int(0)  # the Base SQL pane: the table picked,
 debug_query = Str("")  # the query shown (a SELECT: the base is opened read-only),
-debug_state = {"choice": -1, "headers": [], "rows": [], "error": "", "more": False, "ms": 0.0}  # and what it gave
+debug_state = {"choice": -1, "headers": [], "rows": [], "types": [], "view": None, "error": "", "more": False, "ms": 0.0}  # and what it gave
+# the columns of the base that hold a date (seconds since the epoch): shown as YYYY-MM-DD HH:MM:SS
+DEBUG_DATE_COLUMNS = {"last_opened", "modified", "last_seen", "last_full_scan", "created", "read_at", "updated", "mtime"}
+DEBUG_CHOICE_MAX = 12  # a column with at most this many different values is filtered by choice
 indexing = {"running": False, "count": 0, "folder": "", "result": None}  # the folder index job
 note_text = Str("")  # the text of the Notes pane, for the item it holds
 note_of = {"path": ""}  # the item the Notes pane holds
@@ -2562,7 +2566,29 @@ def run_debug_query(sql):
                 return f"<{len(value)} octets>"
             return str(value).replace("\n", " ")[:300]
 
-        debug_state["rows"] = [[cell(v) for v in row] for row in got[:DEBUG_LIMIT]]
+        got = got[:DEBUG_LIMIT]
+        headers = debug_state["headers"]
+        types = []
+        for i, header in enumerate(headers):
+            values = [row[i] for row in got if row[i] is not None]
+            numbers = bool(values) and all(isinstance(v, (int, float)) for v in values)
+            if numbers and header.lower() in DEBUG_DATE_COLUMNS and all(1e8 < v < 4e9 for v in values):
+                types.append("date")
+            elif numbers:
+                types.append("number")
+            elif values and len({str(v) for v in values}) <= DEBUG_CHOICE_MAX:
+                types.append("choice")
+            else:
+                types.append("text")
+
+        def decode(value, kind):
+            if kind == "date" and value is not None:
+                return datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M:%S")
+            return cell(value)
+
+        debug_state["rows"] = [[decode(v, kind) for v, kind in zip(row, types)] for row in got]
+        debug_state["types"] = types
+        debug_state["view"] = TableView()  # the sort and the filters belong to the columns of this query
     except sqlite3.Error as error:
         debug_state["error"] = str(error)
     finally:
@@ -2610,7 +2636,7 @@ def debug_panel():
     if debug_state["headers"]:
         table(
             debug_state["headers"], debug_state["rows"], id="debug_sql",
-            column_widths=[120] * len(debug_state["headers"]),
+            view=debug_state["view"], types=debug_state["types"],
         )
 
 
@@ -3207,7 +3233,9 @@ def section_header(title):
     def line():
         set_width(width)
         weak(title)
-        add_space(max(width - text_width(title, size=12) - 26, 0))
+        # the row must stay within `width`: the title, the space and the chevron (14) are separated by the
+        # spacing of the row (2 x 8), a row that is wider makes the panel grow at every hover
+        add_space(max(width - text_width(title, size=12) - 14 - 2 * 8 - 4, 0))
         if section_hovered.get(title):
             image(svg("chevron-down" if opened else "chevron-right"), size=14, tint=icon_tint())
 
