@@ -113,6 +113,17 @@ pub fn date_range_picker(ui: &mut Ui, id: &str, range: &mut DateRange) -> Respon
     response
 }
 
+/// The calendar with its field, drawn where it is (not in a popup of its own): for a place that is already
+/// a popup, like the filter of a column. Returns true when the range changed in this frame.
+pub fn date_range_inline(ui: &mut Ui, id: &str, range: &mut DateRange) -> bool {
+    let id = Id::new(("date_range_inline", id));
+    let mut popup: Popup = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    let before = *range;
+    calendar(ui, &mut popup, range);
+    ui.data_mut(|d| d.insert_temp(id, popup));
+    *range != before
+}
+
 fn calendar(ui: &mut Ui, popup: &mut Popup, range: &mut DateRange) {
     ui.set_width(250.0);
     let today = chrono::Local::now().date_naive();

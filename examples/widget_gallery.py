@@ -12,6 +12,7 @@ checkbox_value = Bool(False)
 color = Int(RED)
 color_rgb = RGB(69, 69, 69)
 date = Date(datetime.datetime.now())
+date_range = DateRange(None, None)  # no start, no end: every date
 visible = Bool(True)
 is_interactive = Bool(True)
 opacity_value = Float(1)
@@ -69,6 +70,7 @@ def gallery():
     print("clicked on image with text")
 
   date_picker_button(date) 
+  horizontal(lambda: (date_range_picker(date_range), weak("a range of dates, open ends allowed (type: cette semaine, depuis lundi)")))
 
   collapsing("collapsed", lambda: heading("I'm so collapsed now"))
 
