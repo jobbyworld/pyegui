@@ -70,6 +70,12 @@ CREATE TABLE IF NOT EXISTS meta_values (
     PRIMARY KEY (path, def_id)
 );
 CREATE INDEX IF NOT EXISTS meta_values_def ON meta_values(def_id);
+CREATE TABLE IF NOT EXISTS meta_rules (
+    id INTEGER PRIMARY KEY,
+    root TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1
+);
 ";
 
 /// The colors new tags start from, one after the other (the same as `NEW_TAG_COLORS` of finder.py)

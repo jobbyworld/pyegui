@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use pyegui_core::meta::{decode_ids, encode_ids, Config, MetaDef, MetaType};
+use pyegui_core::meta::{decode_ids, encode_ids, parse_input, Config, MetaDef, MetaType, Pattern};
 use rusqlite::{params, OptionalExtension};
 
 use crate::tagstore::{key, TagStore};
@@ -165,6 +165,88 @@ impl TagStore {
     }
 }
 
+/// A rule of the indexation: under `root`, the folders are read with `pattern` (`{project}/{entreprise}`) and what
+/// they are called goes in the properties of those names
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rule {
+    pub id: i64,
+    pub root: String,
+    pub pattern: String,
+    pub enabled: bool,
+}
+
+impl TagStore {
+    pub fn meta_rules(&self) -> Vec<Rule> {
+        let Ok(mut statement) = self.db.prepare("SELECT id, root, pattern, enabled FROM meta_rules ORDER BY id") else { return vec![] };
+        statement
+            .query_map([], |r| Ok(Rule { id: r.get(0)?, root: r.get(1)?, pattern: r.get(2)?, enabled: r.get::<_, i64>(3)? != 0 }))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
+    /// Adds a rule; None if the pattern names nothing
+    pub fn add_meta_rule(&mut self, root: &Path, pattern: &str) -> Option<i64> {
+        Pattern::parse(pattern)?;
+        self.db.execute("INSERT INTO meta_rules (root, pattern, enabled) VALUES (?, ?, 1)", params![key(root), pattern.trim()]).ok()?;
+        self.changed();
+        Some(self.db.last_insert_rowid())
+    }
+
+    pub fn update_meta_rule(&mut self, rule: &Rule) {
+        let _ = self.db.execute("UPDATE meta_rules SET root = ?, pattern = ?, enabled = ? WHERE id = ?", params![rule.root, rule.pattern.trim(), rule.enabled as i64, rule.id]);
+        self.changed();
+    }
+
+    /// Deletes a rule and the values it wrote
+    pub fn delete_meta_rule(&mut self, id: i64) {
+        let _ = self.db.execute("DELETE FROM meta_values WHERE source = ?", params![format!("auto:{id}")]);
+        let _ = self.db.execute("DELETE FROM meta_rules WHERE id = ?", params![id]);
+        self.changed();
+    }
+
+    /// Reads the folders known to the index again with every rule and writes the values they give, on the folders
+    /// themselves (the items below inherit them). A value typed by the person is never replaced: the values a rule
+    /// wrote (source `auto:<id>`) are removed first and put again, the others stay. Returns the number of values
+    /// written and the names of the properties that a pattern uses and that do not exist.
+    pub fn apply_meta_rules(&mut self) -> (usize, Vec<String>) {
+        let rules = self.meta_rules();
+        let mut defs = self.meta_defs();
+        let today = chrono::Local::now().date_naive();
+        let sep = std::path::MAIN_SEPARATOR;
+        let (mut written, mut unknown) = (0, Vec::new());
+        let _ = self.db.execute_batch("BEGIN");
+        for rule in &rules {
+            let source = format!("auto:{}", rule.id);
+            let _ = self.db.execute("DELETE FROM meta_values WHERE source = ?", params![source]);
+            let Some(pattern) = Pattern::parse(&rule.pattern).filter(|_| rule.enabled) else { continue };
+            for name in pattern.names() {
+                if !defs.iter().any(|d| d.name.to_lowercase() == name.to_lowercase()) && !unknown.iter().any(|u: &String| u.to_lowercase() == name.to_lowercase()) {
+                    unknown.push(name.to_owned());
+                }
+            }
+            let prefix = format!("{}{sep}", rule.root.trim_end_matches(sep));
+            let folders: Vec<String> = match self.db.prepare("SELECT path FROM files WHERE is_dir = 1 AND substr(path, 1, ?) = ?") {
+                Ok(mut st) => st.query_map(params![prefix.chars().count() as i64, prefix], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default(),
+                Err(_) => continue,
+            };
+            for folder in folders {
+                let Some((name, text)) = pattern.assign(&rule.root, &folder, sep) else { continue };
+                let Some(def) = defs.iter_mut().find(|d| d.name.to_lowercase() == name.to_lowercase()) else { continue };
+                let before = def.config.clone();
+                let Some(value) = parse_input(def, &text, today) else { continue };
+                if def.config != before {
+                    let _ = self.db.execute("UPDATE meta_defs SET config = ? WHERE id = ?", params![def.config.to_json(), def.id]);
+                }
+                // OR IGNORE: a value that is already there (typed, or from another rule) stays
+                written += self.db.execute("INSERT OR IGNORE INTO meta_values (path, def_id, value, source) VALUES (?, ?, ?, ?)", params![folder, def.id, value, source]).unwrap_or(0);
+            }
+        }
+        let _ = self.db.execute_batch("COMMIT");
+        self.changed();
+        (written, unknown)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,5 +335,47 @@ mod tests {
         let found = resolve(&all, &crate::tagstore::key(Path::new("/tmp/p/a/b.txt")), std::path::MAIN_SEPARATOR, || false);
         assert!(matches!(found, Resolved::Inherited { ref value, .. } if value == "ACME"));
         assert!(matches!(resolve(&all, &crate::tagstore::key(Path::new("/tmp/q")), std::path::MAIN_SEPARATOR, || true), Resolved::Summary(_)));
+    }
+
+    #[test]
+    fn a_rule_reads_the_folder_names_and_never_replaces_a_typed_value() {
+        let mut s = store();
+        let project = s.create_meta("Project", MetaType::Choice).unwrap();
+        let mut d = s.meta_def(project).unwrap();
+        d.config.mode = pyegui_core::meta::ListMode::Open;
+        s.update_meta(&d);
+        let year = s.create_meta("Year", MetaType::Number).unwrap();
+        for (path, dir) in [("/data/Alpha", true), ("/data/Alpha/2024", true), ("/data/Alpha/2024/f.txt", false), ("/data/Beta", true), ("/data/Beta/xx", true), ("/other/Gamma", true)] {
+            s.db.execute("INSERT INTO files (path, is_dir) VALUES (?, ?)", params![path, dir as i64]).unwrap();
+        }
+        let rule = s.add_meta_rule(Path::new("/data"), "{project}/{year}").unwrap();
+        assert_eq!(s.add_meta_rule(Path::new("/data"), "no names"), None);
+        s.set_meta_value(Path::new("/data/Beta"), project, Some("1"));
+        let (written, unknown) = s.apply_meta_rules();
+        assert!(unknown.is_empty());
+        assert_eq!(written, 2, "Alpha and Alpha/2024; Beta is typed and Beta/xx is not a number");
+        let label = |p: &str| s.meta_value(Path::new(p), project).and_then(|v| pyegui_core::meta::decode_ids(&v).first().copied()).and_then(|id| s.meta_def(project).unwrap().config.label_of(id).map(str::to_owned));
+        assert_eq!(label("/data/Alpha").as_deref(), Some("Alpha"));
+        assert_eq!(s.meta_value(Path::new("/data/Alpha/2024"), year).as_deref(), Some("2024"));
+        assert_eq!(s.meta_value(Path::new("/other/Gamma"), project), None, "outside the root");
+        assert_eq!(s.meta_value(Path::new("/data/Beta"), project).as_deref(), Some("1"), "typed value kept");
+        // applying again changes nothing; disabling a rule takes its values away
+        assert_eq!(s.apply_meta_rules().0, 2);
+        let mut r = s.meta_rules()[0].clone();
+        r.enabled = false;
+        s.update_meta_rule(&r);
+        s.apply_meta_rules();
+        assert_eq!(s.meta_value(Path::new("/data/Alpha/2024"), year), None);
+        assert_eq!(s.meta_value(Path::new("/data/Beta"), project).as_deref(), Some("1"));
+        s.delete_meta_rule(rule);
+        assert!(s.meta_rules().is_empty());
+    }
+
+    #[test]
+    fn a_pattern_that_names_a_missing_property_is_reported() {
+        let mut s = store();
+        s.add_meta_rule(Path::new("/data"), "{Client}/{x}").unwrap();
+        s.create_meta("client", MetaType::Text).unwrap();
+        assert_eq!(s.apply_meta_rules(), (0, vec!["x".to_owned()]));
     }
 }

@@ -753,8 +753,25 @@ impl FinderApp {
                 };
                 self.activity.push_back(text);
                 self.indexing = None;
+                // the folders are known now: the rules read their names
+                if n.is_some() {
+                    self.apply_meta_rules_notice();
+                }
             }
             None => ctx.request_repaint_after(std::time::Duration::from_millis(250)),
+        }
+    }
+
+    /// Applies the rules of the properties and says in the activity what they wrote
+    pub fn apply_meta_rules_notice(&mut self) {
+        let Some(store) = self.tags.as_mut() else { return };
+        if store.meta_rules().is_empty() {
+            return;
+        }
+        let (written, unknown) = store.apply_meta_rules();
+        self.activity.push_back(format!("Règles des propriétés : {written} valeur(s) écrite(s)"));
+        if !unknown.is_empty() {
+            self.activity.push_back(format!("Règles des propriétés : propriété inconnue : {}", unknown.join(", ")));
         }
     }
 
@@ -1268,6 +1285,7 @@ impl FinderApp {
     fn modals(&mut self, ctx: &egui::Context) {
         tagsui::modal(self, ctx);
         crate::metaui::modal(self, ctx);
+        crate::metaui::rules_modal(self, ctx);
         self.index_ignore_modal(ctx);
         if let Some((path, mut name)) = self.rename.take() {
             let mut keep = true;

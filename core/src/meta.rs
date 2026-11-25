@@ -479,6 +479,77 @@ pub fn file_var(path: &std::path::Path, name: &str) -> Option<String> {
     })
 }
 
+// rules of the indexation
+
+/// A folder structure that names properties: `{project}/{entreprise}/{chapter}`. The first folder under the root
+/// is the project, the one under it the entreprise, and so on. A part that is not `{name}` (`*`, `_`, or any
+/// text) is a level that gives nothing.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Pattern {
+    levels: Vec<Option<String>>,
+}
+
+impl Pattern {
+    /// None when the text holds no `{name}` at all
+    pub fn parse(text: &str) -> Option<Self> {
+        let levels: Vec<Option<String>> = text
+            .split(['/', '\\'])
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(|part| part.strip_prefix('{').and_then(|p| p.strip_suffix('}')).map(|n| n.trim().to_owned()).filter(|n| !n.is_empty()))
+            .collect();
+        levels.iter().any(Option::is_some).then_some(Pattern { levels })
+    }
+
+    /// The names the pattern fills, in order of level
+    pub fn names(&self) -> Vec<&str> {
+        self.levels.iter().flatten().map(String::as_str).collect()
+    }
+
+    /// How many levels under the root the pattern reads
+    pub fn depth(&self) -> usize {
+        self.levels.len()
+    }
+
+    /// What a folder gives: the name filled and the name of the folder, if it is under `root` at a level the
+    /// pattern names. `root` and `folder` are stored paths, `sep` is their separator.
+    pub fn assign<'a>(&'a self, root: &str, folder: &str, sep: char) -> Option<(&'a str, String)> {
+        let rest = folder.strip_prefix(root.trim_end_matches(sep))?.strip_prefix(sep)?;
+        let parts: Vec<&str> = rest.split(sep).filter(|p| !p.is_empty()).collect();
+        let name = self.levels.get(parts.len().checked_sub(1)?)?.as_deref()?;
+        Some((name, parts.last()?.to_string()))
+    }
+}
+
+/// The stored value of a text for a property (a folder name read by a rule, say). For an open list a new label
+/// joins the list, so `def` may change: the caller saves it if `def.config` differs. None when the text is not a
+/// value of the type (a closed list that does not have it, a number that is not one...).
+pub fn parse_input(def: &mut MetaDef, text: &str, today: chrono::NaiveDate) -> Option<String> {
+    let t = text.trim();
+    if t.is_empty() {
+        return None;
+    }
+    match def.ty {
+        MetaType::Text | MetaType::LongText => Some(text.to_owned()),
+        MetaType::Number => t.replace(',', ".").parse::<f64>().ok().filter(|n| n.is_finite()).map(|n| n.to_string()),
+        MetaType::Date => crate::date_input::parse_date(t, today).map(|d| d.and_time(chrono::NaiveTime::MIN).and_utc().timestamp().to_string()),
+        MetaType::Bool => match t.to_lowercase().as_str() {
+            "1" | "oui" | "yes" | "true" | "vrai" => Some("1".into()),
+            "0" | "non" | "no" | "false" | "faux" => Some("0".into()),
+            _ => None,
+        },
+        MetaType::Choice => {
+            let id = match def.config.find(t) {
+                Some(id) => id,
+                None if def.config.mode == ListMode::Open => def.config.add_option(t)?,
+                None => return None,
+            };
+            Some(encode_ids(&[id], def.config.multiple))
+        }
+        MetaType::Formula => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -676,5 +747,45 @@ mod tests {
         assert_eq!(file_var(p, "folder").as_deref(), Some("Projet"));
         assert_eq!(file_var(p, "size").as_deref(), Some(""), "a file that is not there has no size");
         assert_eq!(file_var(p, "other"), None);
+    }
+
+    #[test]
+    fn a_pattern_names_the_folders_under_a_root() {
+        let p = Pattern::parse("{project}/{entreprise}/*/{chapter}").unwrap();
+        assert_eq!(p.names(), vec!["project", "entreprise", "chapter"]);
+        assert_eq!(p.depth(), 4);
+        assert_eq!(p.assign("/data", "/data/Alpha", '/'), Some(("project", "Alpha".into())));
+        assert_eq!(p.assign("/data/", "/data/Alpha/ACME", '/'), Some(("entreprise", "ACME".into())), "a slash at the end of the root is fine");
+        assert_eq!(p.assign("/data", "/data/Alpha/ACME/misc", '/'), None, "a level that is not named");
+        assert_eq!(p.assign("/data", "/data/Alpha/ACME/misc/Ch1", '/'), Some(("chapter", "Ch1".into())));
+        assert_eq!(p.assign("/data", "/data/Alpha/ACME/misc/Ch1/deeper", '/'), None, "below the pattern");
+        assert_eq!(p.assign("/data", "/data", '/'), None, "the root gives nothing");
+        assert_eq!(p.assign("/data", "/database/x", '/'), None, "/database is not under /data");
+        assert_eq!(Pattern::parse("a/b"), None);
+        assert_eq!(Pattern::parse("{}"), None);
+        assert!(Pattern::parse("{a}\\{b}").is_some(), "both separators");
+    }
+
+    #[test]
+    fn a_text_becomes_a_value_of_the_type() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let mut d = MetaDef { id: 1, name: "x".into(), ty: MetaType::Number, description: String::new(), config: Config::default() };
+        assert_eq!(parse_input(&mut d, " 3,5 ", today).as_deref(), Some("3.5"));
+        assert_eq!(parse_input(&mut d, "abc", today), None);
+        d.ty = MetaType::Bool;
+        assert_eq!(parse_input(&mut d, "Oui", today).as_deref(), Some("1"));
+        assert_eq!(parse_input(&mut d, "peut-être", today), None);
+        d.ty = MetaType::Date;
+        assert_eq!(parse_input(&mut d, "02/01/1970", today).as_deref(), Some("86400"));
+        let mut list = choice(false);
+        assert_eq!(parse_input(&mut list, "en cours", today).as_deref(), Some("2"));
+        assert_eq!(parse_input(&mut list, "Nouveau", today), None, "a closed list does not grow");
+        list.config.mode = ListMode::Open;
+        assert_eq!(parse_input(&mut list, "Nouveau", today).as_deref(), Some("4"));
+        assert_eq!(list.config.label_of(4), Some("Nouveau"));
+        list.config.multiple = true;
+        assert_eq!(parse_input(&mut list, "Fini", today).as_deref(), Some("[3]"));
+        d.ty = MetaType::Formula;
+        assert_eq!(parse_input(&mut d, "x", today), None);
     }
 }

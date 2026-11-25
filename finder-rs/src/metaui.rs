@@ -21,6 +21,8 @@ use crate::tagsui::{parse_color, to_hex};
 #[derive(Default)]
 pub struct MetaUi {
     pub manager: Option<Manager>,
+    /// the window of the rules of the indexation, with the text of the rule being added
+    pub rules: Option<(String, String)>,
     /// the item whose values the pane shows, and the text being typed for each property
     path: Option<PathBuf>,
     buffers: HashMap<i64, String>,
@@ -246,9 +248,14 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
             ui.weak("(dossier affiché)");
         }
     });
-    if ui.button("Gérer les propriétés…").clicked() {
-        app.meta.manager = Some(Manager::default());
-    }
+    ui.horizontal(|ui| {
+        if ui.button("Gérer les propriétés…").clicked() {
+            app.meta.manager = Some(Manager::default());
+        }
+        if ui.button("Règles d'indexation…").clicked() {
+            app.meta.rules = Some((app.folder().to_string_lossy().into_owned(), String::new()));
+        }
+    });
     ui.separator();
     if many {
         ui.weak("Plusieurs éléments sélectionnés : choisis-en un seul pour éditer ses propriétés.");
@@ -659,5 +666,95 @@ pub fn modal(app: &mut FinderApp, ctx: &egui::Context) {
     }
     if !close && !ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         app.meta.manager = Some(manager);
+    }
+}
+
+/// The window of the rules of the indexation: a folder, and the pattern its sub-folders are read with
+pub fn rules_modal(app: &mut FinderApp, ctx: &egui::Context) {
+    let Some((mut root, mut pattern)) = app.meta.rules.take() else { return };
+    let folder = app.folder().to_string_lossy().into_owned();
+    let Some(store) = app.tags.as_mut() else { return };
+    let rules = store.meta_rules();
+    let names: Vec<String> = store.meta_defs().iter().map(|d| d.name.to_lowercase()).collect();
+    let (mut close, mut apply, mut add) = (false, false, false);
+    let mut delete: Option<i64> = None;
+    let mut change: Option<crate::metastore::Rule> = None;
+    egui::Modal::new(egui::Id::unique("meta-rules")).show(ctx, |ui| {
+        // a fixed size: nothing inside may ask for more, or the window grows at every frame
+        ui.set_width(640.0);
+        ui.set_max_width(640.0);
+        ui.set_max_height(520.0);
+        ui.heading("Règles d'indexation");
+        ui.weak("Sous un dossier, chaque niveau de sous-dossiers remplit une propriété : {project}/{entreprise}/{chapter}. Les valeurs se mettent sur les dossiers (leur contenu en hérite) à la fin d'une indexation ou avec « Appliquer ». Une valeur tapée à la main n'est jamais remplacée. * ignore un niveau.");
+        ui.add_space(6.0);
+        egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
+            for rule in &rules {
+                let mut r = rule.clone();
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut r.enabled, "");
+                    ui.add(egui::TextEdit::singleline(&mut r.root).desired_width(250.0));
+                    ui.add(egui::TextEdit::singleline(&mut r.pattern).desired_width(250.0));
+                    if glyphs::button(ui, glyphs::CLOSE, 12.0, false, "Supprimer la règle et ses valeurs").clicked() {
+                        delete = Some(r.id);
+                    }
+                });
+                match pyegui_core::meta::Pattern::parse(&r.pattern) {
+                    None => {
+                        ui.colored_label(Color32::from_rgb(220, 90, 90), "Aucun {nom} dans le motif");
+                    }
+                    Some(p) => {
+                        let missing: Vec<&str> = p.names().into_iter().filter(|n| !names.contains(&n.to_lowercase())).collect();
+                        if !missing.is_empty() {
+                            ui.colored_label(Color32::from_rgb(220, 90, 90), format!("Propriété inconnue : {}", missing.join(", ")));
+                        }
+                    }
+                }
+                if r != *rule {
+                    change = Some(r);
+                }
+            }
+            if rules.is_empty() {
+                ui.weak("Aucune règle");
+            }
+        });
+        ui.separator();
+        ui.label("Nouvelle règle");
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut root).hint_text("Dossier").desired_width(250.0));
+            ui.add(egui::TextEdit::singleline(&mut pattern).hint_text("{project}/{entreprise}").desired_width(250.0));
+        });
+        ui.horizontal(|ui| {
+            if ui.button("Dossier affiché").clicked() {
+                root = folder.clone();
+            }
+            let ok = !root.trim().is_empty() && pyegui_core::meta::Pattern::parse(&pattern).is_some();
+            if ui.add_enabled(ok, egui::Button::new("Ajouter")).clicked() {
+                add = true;
+            }
+        });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if ui.button("Appliquer").on_hover_text("Relit les dossiers déjà indexés").clicked() {
+                apply = true;
+            }
+            if ui.button("Fermer").clicked() {
+                close = true;
+            }
+        });
+    });
+    if let Some(r) = change {
+        store.update_meta_rule(&r);
+    }
+    if let Some(id) = delete {
+        store.delete_meta_rule(id);
+    }
+    if add && store.add_meta_rule(std::path::Path::new(root.trim()), &pattern).is_some() {
+        pattern.clear();
+    }
+    if apply {
+        app.apply_meta_rules_notice();
+    }
+    if !close && !ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        app.meta.rules = Some((root, pattern));
     }
 }

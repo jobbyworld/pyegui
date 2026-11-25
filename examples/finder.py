@@ -276,6 +276,12 @@ CREATE TABLE IF NOT EXISTS meta_values (
     PRIMARY KEY (path, def_id)
 );
 CREATE INDEX IF NOT EXISTS meta_values_def ON meta_values(def_id);
+CREATE TABLE IF NOT EXISTS meta_rules (
+    id INTEGER PRIMARY KEY,
+    root TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1
+);
 """
 
 
