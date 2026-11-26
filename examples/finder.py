@@ -146,6 +146,7 @@ from pyegui import (
     pointer_pressed,
     PropertySet,
     property_set,
+    choice_edit,
     radio_value,
     run_native,
     window_controls,
@@ -2757,6 +2758,7 @@ def snapshot():
         "blue_folders": blue_folders.value,
         "index_ignore": {"hidden": index_ignore_hidden.value, "names": list(index_ignore_names)},
         "meta_columns": list(meta_columns),
+        "meta_seen": list(meta_seen),
         "background": {
             "on": bg_on.value,
             "image": bg_image.value,
@@ -2779,6 +2781,7 @@ def snapshot():
                 "order": v.column_order,
                 "pinned_left": v.pinned_left,
                 "pinned_right": v.pinned_right,
+                "hidden": v.hidden_columns,
                 "sort_by": v.sort_by,
                 "ascending": v.ascending,
             }
@@ -2808,6 +2811,8 @@ def restore(saved):
         index_ignore_hidden.value = bool(ignore.get("hidden", True))
         if isinstance(ignore.get("names"), list):
             index_ignore_names[:] = [n for n in ignore["names"] if isinstance(n, str)]
+    if isinstance(saved.get("meta_seen"), list):
+        meta_seen[:] = [i for i in saved["meta_seen"] if isinstance(i, int)]
     if isinstance(saved.get("meta_columns"), list):
         meta_columns[:] = [i for i in saved["meta_columns"] if isinstance(i, int)]
     set_hidden(bool(saved.get("show_hidden", show_hidden.value)))
@@ -2838,6 +2843,7 @@ def restore(saved):
             v.column_order = columns.get("order", [])
             v.pinned_left = columns.get("pinned_left", [])
             v.pinned_right = columns.get("pinned_right", [])
+            v.hidden_columns = columns.get("hidden", [])
             v.sort_by = columns.get("sort_by", v.sort_by)
             v.ascending = bool(columns.get("ascending", True))
     for folder in saved.get("watched", []):
@@ -3164,9 +3170,10 @@ def tags_cell(path):
         cell,
         small=True,
         icon=True,
+        tree=True,
         fit=True,
         field_width=64,
-        hint_text="+ tag",
+        hint_text="Chercher ou créer un tag",
         on_hover=True,
         dropdown=True,
         suggestions=list(library_state["ids"]),
@@ -6759,7 +6766,8 @@ def zone_pane(zone, ui, margin=0):
 # definitions, the window of the rules of the indexation, and the columns of the views. What a value
 # means is in the functions after TagStore, the data is in TagStore (meta_defs, meta_values, meta_rules).
 
-meta_columns = []  # ids of the properties shown as columns of the views
+meta_columns = []  # ids of the properties that were shown as columns (before the settings of the header)
+meta_seen = []  # ids of the properties already seen: a new one is hidden in the views until the settings show it
 meta_open = {"manager": False, "rules": False}  # the windows
 meta_cache = {"version": -1, "defs": [], "values": {}, "resolved": {}, "computed": {}, "rules": []}
 meta_holders = {}  # what is being typed in the pane, by kind and property id
@@ -6876,67 +6884,63 @@ def meta_edit_cell(d, path):
 
 
 def meta_choice_cell(d, path, resolved):
-    """a list property as chips, like the tags: the color of the option, a cross to remove, a field to add (an open
-    list takes a new label, a closed one only the ones it has)"""
+    """a list property in a cell: the editor of the properties pane, flat (a check box per option, a round for one
+    choice: a click on the chosen one clears it)"""
     config = d["config"]
     options = config["options"]
     order = {o["id"]: i for i, o in enumerate(options)}
-    label_of = {o["id"]: o["label"].replace("/", "-") for o in options}
     if resolved is None:
-        base = shown = []
+        shown = []
     elif resolved[0] == "summary":
-        base = []
         shown = sorted({i for value in resolved[1] for i in decode_ids(value)}, key=lambda i: order.get(i, 0))
     else:
-        base = shown = decode_ids(resolved[1])
-    labels = [label_of[i] for i in shown if i in label_of]
-    cell = Tags(labels, colors={label_of[o["id"]]: o["color"] or "#64748b" for o in options})
-    if not tags_edit(
-        cell,
-        small=True,
-        fit=True,
-        field_width=64,
-        hint_text="+",
-        on_hover=True,
-        dropdown=True,
-        list_height=420,
-        pick=config["multiple"],
-        suggestions=list(label_of.values()),
-        muted=[] if resolved and resolved[0] == "own" else labels,
-        id=f"meta cell {d['id']} {path}",
-    ):
+        shown = decode_ids(resolved[1])
+    change = choice_edit(
+        [dict(id=str(o["id"]), label=o["label"], color=o["color"] or None) for o in options],
+        [str(i) for i in shown],
+        multiple=config["multiple"],
+        open=config["mode"] == "open",
+        id=f"meta multi {d['id']} {path}",
+        add_hint="Nouvelle valeur",
+        flat=True,
+    )
+    if change is None:
         return
-    by_label = {label.lower(): i for i, label in label_of.items()}
-    removed = {by_label[label.lower()] for label in labels if label not in cell.tags and label.lower() in by_label}
-    ids = [i for i in base if i not in removed]
-    put, new_labels = [], []
-    for tag in cell.tags:
-        if tag in labels:
-            continue
-        if tag.lower() in by_label:
-            put.append(by_label[tag.lower()])
-        elif config["mode"] == "open":
-            new_labels.append(tag)
-    if not config["multiple"] and (put or new_labels):
-        ids, put = [], put[:1]
-        new_labels = [] if put else new_labels[:1]
-    ids += [i for i in put if i not in ids]
-    for label in new_labels:
-        option = tags.add_choice_option(d["id"], label)
+    if change[0] == "choose":
+        ids = [int(i) for i in change[1]]
+    elif change[0] == "add_option":
+        ids = list(shown) if config["multiple"] else []
+        option = tags.add_choice_option(d["id"], change[1])
         if option is not None:
             ids.append(option)
+    else:
+        ids = []
     ids.sort(key=lambda i: order.get(i, len(order)))
-    if not config["multiple"]:
-        ids = ids[:1]
     tags.set_meta_value(path, d["id"], encode_ids(ids, config["multiple"]) or None)
 
 
+def meta_column_title(d, reserved):
+    return f"{d['name']} (propriété)" if d["name"] in reserved else d["name"]
+
+
+def hide_new_properties():
+    """a property never seen is hidden in the views (the ones that were shown stay): the settings icon of the
+    header shows it"""
+    new = [d for d in meta_refresh()["defs"] if d["id"] not in meta_seen]
+    for d in new:
+        if d["id"] not in meta_columns:
+            for v, reserved in ((tree, TREE_COLUMNS), (files_list, LIST_COLUMNS)):
+                title = meta_column_title(d, reserved)
+                if title not in v.hidden_columns:
+                    v.hidden_columns = v.hidden_columns + [title]
+        meta_seen.append(d["id"])
+
+
 def meta_extra_columns(reserved):
-    """the columns of the properties shown, to add to extra_columns of a view"""
+    """the columns of the properties, to add to extra_columns of a view"""
+    hide_new_properties()
     columns = []
     for d in meta_refresh()["defs"]:
-        if d["id"] not in meta_columns:
-            continue
         title = f"{d['name']} (propriété)" if d["name"] in reserved else d["name"]
         if d["type"] == "formula":
             columns.append((title, 160, lambda p, d=d: label(meta_formula(d, p)), {"type": "text", "value": lambda p, d=d: meta_formula(d, p) or None, "icon": str(ICONS_DIR / "property.svg")}))
@@ -7045,18 +7049,6 @@ def meta_apply(change, defs, path, values):
             tags.set_meta_value(path, d["id"], encode_ids(picked_ids, d["config"]["multiple"]))
 
 
-def meta_columns_ui(defs):
-    for d in defs:
-        box = meta_holders.setdefault(("c", d["id"]), Bool(False))
-        box.value = d["id"] in meta_columns
-        checkbox(box, d["name"])
-        if box.value != (d["id"] in meta_columns):
-            if box.value:
-                meta_columns.append(d["id"])
-            else:
-                meta_columns.remove(d["id"])
-
-
 def meta_panel():
     """the dock pane of the properties: for the selected item (or the folder shown), one editor per property"""
     path, is_selected = meta_target()
@@ -7083,7 +7075,6 @@ def meta_panel():
     if not defs:
         weak("Aucune propriété : crée-en une avec « Gérer les propriétés… ».")
         return
-    collapsing("Colonnes des vues", lambda: meta_columns_ui(defs))
     values = tags.meta_values_of(path)
     changes = property_set(
         meta_set,
@@ -7103,7 +7094,7 @@ def meta_panel():
 
 # the window that manages the definitions
 
-mm = {"selected": 0, "loaded": 0, "options": {}, "confirm_option": 0, "confirm_property": False}
+mm = {"selected": 0, "loaded": 0, "options": {}, "confirm_option": 0, "confirm_frame": False, "grips": {}, "drag": 0, "confirm_property": False}
 mm_name, mm_desc, mm_unit, mm_formula, mm_group = Str(""), Str(""), Str(""), Str(""), Str("")
 mm_new_name, mm_new_option = Str(""), Str("")
 mm_new_type = Int(0)
@@ -7147,6 +7138,18 @@ def meta_manager_options(d, draft):
 
             def row(option=option, text=text, color=color, loaded_hex=loaded_hex):
                 used = usage.get(option["id"], 0)
+                # the grip: the option follows the mouse to another place
+                grip = interactive(lambda: weak("⋮⋮"), drag=True)
+                mm["grips"][option["id"]] = grip.rect
+                if grip.drag_started:
+                    mm["drag"] = option["id"]
+                if grip.dragged and mm["drag"] == option["id"]:
+                    y = pointer_pos()[1]
+                    ids = [o["id"] for o in draft["config"]["options"]]
+                    near = min((i for i in ids if i in mm["grips"]), key=lambda i: abs((mm["grips"][i][1] + mm["grips"][i][3]) / 2 - y), default=option["id"])
+                    cfg_move(draft["config"], option["id"], ids.index(near) - ids.index(option["id"]))
+                if grip.drag_stopped:
+                    mm["drag"] = 0
                 color_edit_button_rgb(color)
                 if to_hex(color) != loaded_hex:
                     option["color"] = to_hex(color)
@@ -7154,22 +7157,24 @@ def meta_manager_options(d, draft):
                 if text.value.strip() and text.value.strip() != option["label"]:
                     cfg_rename(draft["config"], option["id"], text.value)  # refused when empty or taken
                 weak(str(used))
-                if small_button_clicked("▲"):
-                    cfg_move(draft["config"], option["id"], -1)
-                if small_button_clicked("▼"):
-                    cfg_move(draft["config"], option["id"], 1)
-                if mm["confirm_option"] == option["id"]:
-                    label(f"Retirer de {used} élément(s) ?" if used else "Supprimer ?")
-                    if button_clicked("Oui"):
+                # the trash: a first click asks, a second one deletes
+                armed = mm["confirm_option"] == option["id"]
+                # no text: it would move the icon, the tip says what a second click does
+                if image_button_clicked(
+                    svg("trash"),
+                    size=13,
+                    tint=(230, 80, 80) if armed else icon_tint(),
+                    frame=False,
+                    tooltip=(f"Cliquer encore pour retirer de {used} élément(s) et supprimer" if used else "Cliquer encore pour supprimer")
+                    if armed
+                    else "Supprimer l'option",
+                ):
+                    if armed:
                         action["remove"] = option["id"]
-                    if button_clicked("Non"):
-                        mm["confirm_option"] = 0
-                else:
-                    if image_button_clicked(svg("close"), size=12, tint=icon_tint(), tooltip="Supprimer l'option"):
-                        if used:
-                            mm["confirm_option"] = option["id"]
-                        else:
-                            action["remove"] = option["id"]
+                    else:
+                        mm["confirm_option"] = option["id"]
+                        mm["confirm_frame"] = True
+                if not armed:
                     if len(labels) > 1:
 
                         def targets():
@@ -7196,6 +7201,12 @@ def meta_manager_options(d, draft):
                 mm_new_option.value = ""
 
     horizontal(add)
+    # Escape takes the question of the trash back
+    if mm["confirm_option"]:
+        if mm["confirm_frame"]:
+            mm["confirm_frame"] = False
+        elif key_pressed("Escape", when_typing=True):
+            mm["confirm_option"] = 0
     # what changes the values goes to the base at once, then the fields are read again
     if action["remove"]:
         tags.update_meta(draft)

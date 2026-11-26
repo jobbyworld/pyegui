@@ -112,5 +112,6 @@ pub(crate) fn header_options(kwargs: Option<&Bound<'_, PyDict>>, grow_left: bool
         drag_out: flag("drag_out")?,
         grow_left,
         tinted: false,
+        settings: flag("settings")?,
     })
 }

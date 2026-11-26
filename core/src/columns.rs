@@ -183,6 +183,14 @@ pub struct ColumnsState {
     given_name_text: Option<String>,
     /// the column whose icon was clicked since the last `take_icon_click`
     pub icon_clicked: Option<String>,
+    /// the columns the user hid with the eye of the settings (by key)
+    pub hidden: Vec<String>,
+    /// every column the view can show, hidden or not, as (key, title): given by the view at each frame
+    pub catalog: Vec<(String, String)>,
+    /// the popup of the settings is open
+    settings_open: bool,
+    /// the column being moved in the popup of the settings
+    settings_drag: Option<String>,
 }
 
 impl ColumnsState {
@@ -200,6 +208,10 @@ impl ColumnsState {
             menu: None,
             given_name_text: None,
             icon_clicked: None,
+            hidden: vec![],
+            catalog: vec![],
+            settings_open: false,
+            settings_drag: None,
         }
     }
 
@@ -285,6 +297,8 @@ pub struct HeaderOptions {
     pub grow_left: bool,
     /// the cells of the header are filled with the tint of the bars (the one of the inactive tabs)
     pub tinted: bool,
+    /// the settings icon at the right of the header (needs the view to give its catalog of columns)
+    pub settings: bool,
 }
 
 /// The size of the icon at the left of a title
@@ -703,6 +717,7 @@ pub fn zoned_header(
         }
     }
     pin_menu(ui, id, state, opts, &hits);
+    settings_menu(ui, id, rect, state, opts);
 }
 
 /// The menu of a title: pin the column at the left or at the right, or unpin it
@@ -780,4 +795,161 @@ pub fn hscroll_bar(ui: &mut egui::Ui, id: Id, state: &mut ColumnsState, zones: &
     let painter = ui.painter().with_clip_rect(area);
     painter.rect_filled(track, 3.0, text.gamma_multiply(0.08));
     painter.rect_filled(thumb, 3.0, color);
+}
+
+const ICON_SLIDERS: &[u8] = include_bytes!("../../examples/icons/sliders.svg");
+const ICON_PIN: &[u8] = include_bytes!("../../examples/icons/pin.svg");
+const ICON_EYE: &[u8] = include_bytes!("../../examples/icons/eye.svg");
+const ICON_EYE_OFF: &[u8] = include_bytes!("../../examples/icons/eye-off.svg");
+
+fn paint_svg(ui: &egui::Ui, uri: &'static str, bytes: &'static [u8], rect: Rect, color: Color32) {
+    egui::Image::from_bytes(uri, bytes).tint(color).fit_to_exact_size(rect.size()).paint_at(ui, rect);
+}
+
+/// The settings of the columns: an icon at the right end of the header, seen while the mouse is over
+/// the header, which opens a popup to order the columns by drag and drop (the grip), to hide them
+/// (the eye) and to pin them (the pin: at the left, at the right, or not pinned)
+fn settings_menu(ui: &mut egui::Ui, id: Id, header: Rect, state: &mut ColumnsState, opts: HeaderOptions) {
+    if !opts.settings || state.catalog.is_empty() {
+        return;
+    }
+    let was_open = state.settings_open;
+    let hovered = ui.rect_contains_pointer(header);
+    let slot = Rect::from_min_size(pos2(header.right() - 26.0, header.center().y - 11.0), vec2(22.0, 22.0));
+    let gear = ui.interact(slot, id.with("settings-icon"), Sense::click());
+    if hovered || was_open || gear.hovered() {
+        let visuals = ui.visuals();
+        let fill = if was_open || gear.hovered() { visuals.widgets.hovered.bg_fill } else { visuals.widgets.inactive.weak_bg_fill };
+        ui.painter().rect_filled(slot, 5.0, fill);
+        let ink = visuals.text_color();
+        paint_svg(ui, "bytes://pyegui-columns-sliders.svg", ICON_SLIDERS, Rect::from_center_size(slot.center(), vec2(14.0, 14.0)), ink);
+    }
+    gear.clone().on_hover_text("Affichage des colonnes");
+    if gear.clicked() {
+        state.settings_open = !was_open;
+    }
+    if !was_open {
+        return;
+    }
+    let keys: Vec<String> = state.catalog.iter().map(|(k, _)| k.clone()).collect();
+    let mut order = state.ordered(&keys);
+    let title_of = |key: &str| state.catalog.iter().find(|(k, _)| k == key).map(|(_, t)| t.clone()).unwrap_or_else(|| key.to_owned());
+    let titles: Vec<String> = order.iter().map(|k| title_of(k)).collect();
+    let (row_h, width) = (26.0, 260.0);
+    let mut rows: Vec<Rect> = vec![];
+    let area = egui::Area::new(id.with("settings-popup"))
+        .order(egui::Order::Foreground)
+        .pivot(egui::Align2::RIGHT_TOP)
+        .fixed_pos(slot.right_bottom() + vec2(0.0, 4.0))
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_width(width);
+                ui.label(egui::RichText::new("Colonnes").small().strong().weak());
+                ui.add_space(2.0);
+                let accent = ui.visuals().selection.bg_fill;
+                let ink = ui.visuals().text_color();
+                let weak = ink.gamma_multiply(0.45);
+                for (index, key) in order.iter().enumerate() {
+                    let (row, _) = ui.allocate_exact_size(vec2(width, row_h), Sense::hover());
+                    rows.push(row);
+                    let hidden = state.hidden.contains(key);
+                    let dragged = state.settings_drag.as_deref() == Some(key.as_str());
+                    if dragged {
+                        ui.painter().rect_filled(row, 5.0, accent.gamma_multiply(0.35));
+                    } else if ui.rect_contains_pointer(row) && state.settings_drag.is_none() {
+                        ui.painter().rect_filled(row, 5.0, ui.visuals().widgets.hovered.weak_bg_fill);
+                    }
+                    // the grip: six dots, the handle of the drag and drop
+                    let grip = Rect::from_min_size(row.min, vec2(22.0, row_h));
+                    let grip_response = ui.interact(grip, id.with(("settings-grip", key)), Sense::drag());
+                    if grip_response.drag_started() {
+                        state.settings_drag = Some(key.clone());
+                    }
+                    if grip_response.hovered() || dragged {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                    }
+                    for dx in [-2.5f32, 2.5] {
+                        for dy in [-4.0f32, 0.0, 4.0] {
+                            ui.painter().circle_filled(grip.center() + vec2(dx, dy), 1.2, weak);
+                        }
+                    }
+                    // the eye: the name always stays
+                    let eye = Rect::from_center_size(pos2(row.right() - 18.0, row.center().y), vec2(22.0, 22.0));
+                    let can_hide = key != "name";
+                    let eye_response = ui.interact(eye, id.with(("settings-eye", key)), if can_hide { Sense::click() } else { Sense::hover() });
+                    if eye_response.clicked() {
+                        if hidden {
+                            state.hidden.retain(|k| k != key);
+                        } else {
+                            state.hidden.push(key.clone());
+                        }
+                    }
+                    let (uri, bytes) = if hidden { ("bytes://pyegui-columns-eye-off.svg", ICON_EYE_OFF) } else { ("bytes://pyegui-columns-eye.svg", ICON_EYE) };
+                    let eye_color = if !can_hide { weak.gamma_multiply(0.6) } else if hidden { weak } else { ink };
+                    paint_svg(ui, uri, bytes, Rect::from_center_size(eye.center(), vec2(15.0, 15.0)), eye_color);
+                    eye_response.on_hover_text(if !can_hide { "Toujours visible" } else if hidden { "Afficher la colonne" } else { "Masquer la colonne" });
+                    // the pin: not pinned, then at the left, then at the right
+                    let pin = Rect::from_center_size(pos2(eye.left() - 16.0, row.center().y), vec2(22.0, 22.0));
+                    let at_left = state.pinned_left.contains(key);
+                    let at_right = state.pinned_right.contains(key);
+                    let pin_response = ui.interact(pin, id.with(("settings-pin", key)), Sense::click());
+                    if pin_response.clicked() {
+                        state.pinned_left.retain(|k| k != key);
+                        state.pinned_right.retain(|k| k != key);
+                        if !at_left && !at_right {
+                            state.pinned_left.push(key.clone());
+                        } else if at_left {
+                            state.pinned_right.push(key.clone());
+                        }
+                    }
+                    let pin_color = if at_left || at_right { accent } else if pin_response.hovered() { ink } else { weak };
+                    paint_svg(ui, "bytes://pyegui-columns-pin.svg", ICON_PIN, Rect::from_center_size(pin.center(), vec2(14.0, 14.0)), pin_color);
+                    if at_left || at_right {
+                        let mark = if at_left { "◂" } else { "▸" };
+                        let at = pin.center() + vec2(if at_left { -10.0 } else { 10.0 }, 0.0);
+                        ui.painter().text(at, egui::Align2::CENTER_CENTER, mark, egui::FontId::proportional(10.0), accent);
+                    }
+                    pin_response.on_hover_text(if at_left {
+                        "Épinglée à gauche : cliquer pour épingler à droite"
+                    } else if at_right {
+                        "Épinglée à droite : cliquer pour détacher"
+                    } else {
+                        "Épingler à gauche"
+                    });
+                    // the title
+                    let text_rect = Rect::from_min_max(pos2(grip.right() + 2.0, row.top()), pos2(pin.left() - 14.0, row.bottom()));
+                    let color = if hidden { weak } else { ink };
+                    let galley = ui.painter().layout(titles[index].clone(), egui::FontId::proportional(13.5), color, text_rect.width());
+                    ui.painter().with_clip_rect(text_rect).galley(pos2(text_rect.left(), row.center().y - galley.size().y / 2.0), galley, color);
+                }
+            });
+        });
+    // the drag: the column follows the row under the mouse
+    if let Some(key) = state.settings_drag.clone() {
+        if ui.input(|i| i.pointer.any_down()) {
+            if let Some(p) = ui.input(|i| i.pointer.interact_pos()) {
+                let under = if p.y < rows.first().map_or(0.0, |r| r.top()) {
+                    Some(0)
+                } else if p.y > rows.last().map_or(0.0, |r| r.bottom()) {
+                    Some(order.len().saturating_sub(1))
+                } else {
+                    rows.iter().position(|r| r.y_range().contains(p.y))
+                };
+                if let (Some(to), Some(from)) = (under, order.iter().position(|k| *k == key)) {
+                    if to != from {
+                        let moved = order.remove(from);
+                        order.insert(to, moved);
+                        state.order = order;
+                    }
+                }
+            }
+            ui.ctx().request_repaint();
+        } else {
+            state.settings_drag = None;
+        }
+    }
+    let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    if escape || (!gear.clicked() && state.settings_drag.is_none() && area.response.clicked_elsewhere()) {
+        state.settings_open = false;
+    }
 }

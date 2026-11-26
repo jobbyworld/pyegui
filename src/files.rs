@@ -347,6 +347,18 @@ macro_rules! folder_view_methods {
                 self.view.columns.order = order;
             }
 
+            /// The keys of the columns hidden with the eye of the settings icon at the right of the header
+            /// (it also orders and pins them). Save and give it back at the next run
+            #[getter]
+            fn get_hidden_columns(&self) -> Vec<String> {
+                self.view.columns.hidden.clone()
+            }
+
+            #[setter]
+            fn set_hidden_columns(&mut self, columns: Vec<String>) {
+                self.view.columns.hidden = columns;
+            }
+
             /// The filters of the columns, by column key: a text for a column of text (the items whose value
             /// contains it, without case), a (min, max) tuple for a number or a date (None for no bound; a
             /// size is "10 KB", a date "2024-05-01"), a list of values for a column of choices. The funnel of
@@ -570,6 +582,10 @@ fn parse_columns(kwargs: Option<&Bound<'_, PyDict>>, extras: usize) -> PyResult<
 ///     resizable (bool): the border of a column can be dragged. Default is True
 ///
 ///     reorderable (bool): the title of a column can be dragged to another place. Default is True
+///
+///     settings (bool): a settings icon at the right end of the header, seen while the mouse is over it, opens a
+///         popup to order the columns by drag and drop, hide them (the eye, see hidden_columns) and pin them at
+///         the left, at the right or not. Default is True
 ///
 ///     drag_out (bool): a drag of the selection starts a drag of the files to the Finder (the Explorer,
 ///         another application), see start_file_drag. Default is True
@@ -918,6 +934,18 @@ impl FileTreeView {
         self.v().columns.order = order;
     }
 
+    /// The keys of the columns hidden with the eye of the settings icon at the right of the header
+    /// (it also orders and pins them). Save and give it back at the next run
+    #[getter]
+    fn get_hidden_columns(&self) -> Vec<String> {
+        self.v().columns.hidden.clone()
+    }
+
+    #[setter]
+    fn set_hidden_columns(&mut self, columns: Vec<String>) {
+        self.v().columns.hidden = columns;
+    }
+
     /// The filters of the columns, by column key: a text for a column of text (the items whose value
     /// contains it, without case), a (min, max) tuple for a number or a date (None for no bound; a
     /// size is "10 KB", a date "2024-05-01"), a list of values for a column of choices. The funnel of
@@ -1017,6 +1045,10 @@ impl FileTreeView {
 ///     resizable (bool): the border of a column can be dragged. Default is True
 ///
 ///     reorderable (bool): the title of a column can be dragged to another place. Default is True
+///
+///     settings (bool): a settings icon at the right end of the header, seen while the mouse is over it, opens a
+///         popup to order the columns by drag and drop, hide them (the eye, see hidden_columns) and pin them at
+///         the left, at the right or not. Default is True
 ///
 ///     drag_out (bool): a drag of the selection starts a drag of the files to the Finder (the Explorer,
 ///         another application), see start_file_drag. Default is True

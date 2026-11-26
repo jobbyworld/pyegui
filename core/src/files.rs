@@ -874,6 +874,20 @@ pub fn default_width(column: Column, hooks: &Hooks<'_>) -> f32 {
     }
 }
 
+/// Tells the state of the columns every column the view can show (for the settings of the header)
+pub fn set_catalog(state: &mut ColumnsState, wanted: &[Column], headers: &[String], hooks: &Hooks<'_>) {
+    state.catalog = wanted
+        .iter()
+        .map(|c| {
+            let title = match c {
+                Column::Sort(sort) => headers[*sort as usize].clone(),
+                Column::Extra(k) => hooks.extras[*k].title.clone(),
+            };
+            (c.key(hooks), title)
+        })
+        .collect();
+}
+
 /// The columns of a list, in the order the user chose. The name takes what the others leave (at
 /// least 160), unless the user gave it a width
 pub fn resolve_columns(state: &ColumnsState, wanted: &[Column], hooks: &Hooks<'_>, width: f32) -> Vec<(Column, f32)> {
@@ -881,6 +895,7 @@ pub fn resolve_columns(state: &ColumnsState, wanted: &[Column], hooks: &Hooks<'_
     let columns: Vec<Column> = state
         .ordered(&default)
         .iter()
+        .filter(|key| !state.hidden.contains(key))
         .filter_map(|key| wanted.iter().copied().find(|c| c.key(hooks) == *key))
         .collect();
     let name = Column::Sort(SortBy::Name);
@@ -1083,7 +1098,8 @@ pub fn draw_folder_in(
         Shape::List { columns, .. } => columns.iter().map(|(c, _)| *c).collect(),
         Shape::Icons { .. } => vec![],
     };
-    if let Shape::List { columns, .. } = &mut shape {
+    if let Shape::List { columns, headers, .. } = &mut shape {
+        set_catalog(&mut view.columns, &wanted, headers, hooks);
         *columns = resolve_columns(&view.columns, &wanted, hooks, width);
     }
 
@@ -1417,6 +1433,7 @@ pub fn tree_columns(state: &ColumnsState, hooks: &Hooks<'_>, builtin: &[SortBy])
     state
         .ordered(&default)
         .iter()
+        .filter(|key| !state.hidden.contains(key))
         .filter_map(|key| wanted.iter().copied().find(|c| c.key(hooks) == *key))
         .map(|c| (c, state.widths.get(&c.key(hooks)).copied().unwrap_or_else(|| default_width(c, hooks))))
         .collect()
@@ -1729,7 +1746,7 @@ pub struct TreeParams {
 impl Default for TreeParams {
     fn default() -> Self {
         TreeParams {
-            opts: HeaderOptions { resizable: true, pinnable: true, reorderable: true, filterable: true, drag_out: true, grow_left: false, tinted: false },
+            opts: HeaderOptions { resizable: true, pinnable: true, reorderable: true, filterable: true, drag_out: true, grow_left: false, tinted: false, settings: true },
             headers: default_headers(),
             date_format: DATE_FORMAT.into(),
             builtin: vec![],
@@ -1757,6 +1774,11 @@ pub fn draw_tree(
     let ctx = ui.ctx().clone();
 
     let id = ui.make_persistent_id(&view.borrow().id);
+    {
+        let wanted: Vec<Column> =
+            (0..hooks.extras.len()).map(Column::Extra).chain(builtin.iter().map(|s| Column::Sort(*s))).collect();
+        set_catalog(&mut view.borrow_mut().columns, &wanted, headers, hooks);
+    }
     let columns = tree_columns(&view.borrow().columns, hooks, builtin);
     let mut values = std::mem::take(&mut view.borrow_mut().values);
     values.refresh();
@@ -1765,7 +1787,7 @@ pub fn draw_tree(
     let origin_x = ui.cursor().min.x;
     // the room of the header, which is drawn once the rows are, over them
     let slot = match (&layout, *header) {
-        (Some(layout), true) if layout.finite && !columns.is_empty() => Some(ui.allocate_exact_size(vec2(layout.width, columns::HEADER_H), Sense::hover()).0),
+        (Some(layout), true) if layout.finite && (!columns.is_empty() || !view.borrow().columns.catalog.is_empty()) => Some(ui.allocate_exact_size(vec2(layout.width, columns::HEADER_H), Sense::hover()).0),
         _ => None,
     };
     // the columns that are not pinned scroll with the wheel over the tree

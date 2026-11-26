@@ -606,6 +606,7 @@ removes the last tag.
 - `compact` (bool): only a dot per tag in its color, the full path on hover, e.g. in a row of a list; read only
 - `dot_size` (float): the diameter of the dots of compact, 10 by default
 - `icon` (bool): the tag icon in the color of the tag at the left of a chip, instead of a dot. False by default
+- `tree` (bool): a flat cell: the tags as chips with no field and no outline, an arrow while the mouse is over it; a click opens the tree of `suggestions` (the paths of all the tags, in the order of the tree), an indented row per level with a check box. A field filters them and Enter puts the typed tag on (created when new). The `muted` tags are shown but not changed. False by default
 - `muted` (list[str]): tags drawn with their colors desaturated, e.g. those an item inherits
 - `small` (bool): smaller chips, with the small text, e.g. in a row of a list or of a tree
 - `fit` (bool): shows as many tags as the room of the ui allows and the others in the "+5" badge, e.g. in a cell of a table; the room of the crosses and of the field is kept even when they do not show. Replaces max_visible. False by default
@@ -809,4 +810,37 @@ def update_func(ctx):
             values["name"] = change[2]
         elif change[0] == "set" and change[1] == "done":
             values["done"] = change[2] == "1"
+```
+
+
+## `choice_edit(options, selected, **kwargs)`
+
+The editor of a list in a cell or anywhere else: the one of the rows of `property_set` (a combo box with the
+labels chosen, which opens a list of the options, a check box for each one when `multiple`), alone.
+
+**Args**
+
+- `options` (list): the options, each a str or a dict with `id`, `label` and `color`
+- `selected` (list[str]): the ids of the options chosen
+
+**Keyword args**
+
+- `multiple` (bool): a check box per option, several can be chosen. False by default
+- `open` (bool): a field adds a new option (and chooses it). False by default
+- `id` (str): tells apart two editors that have the same options (give each cell its own)
+- `width` (float): width of the combo box. Default is the room that is left
+- `add_hint` (str): the hint of the field of a new option. Default is "New value"
+- `enabled` (bool): False to show it without editing. True by default
+- `flat` (bool): no outline and no fill, the arrow shows while the mouse is over it (for a cell). False by default
+
+**Returns**
+
+- tuple | None: None while nothing changed, else ("choose", ids), ("clear",) or ("add_option", label)
+
+**Example:**
+
+```python
+change = choice_edit(options, chosen, multiple=True, id=f"status {path}")
+if change and change[0] == "choose":
+    chosen = change[1]
 ```

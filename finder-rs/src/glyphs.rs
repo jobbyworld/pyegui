@@ -36,6 +36,7 @@ pub const COPY: Glyph = glyph!("copy");
 pub const CHEVRON_DOWN: Glyph = glyph!("chevron-down");
 pub const TAG: Glyph = glyph!("tag");
 pub const PROPERTY: Glyph = glyph!("property");
+pub const TRASH: Glyph = glyph!("trash");
 
 /// The icon at the left of the title of a column
 pub fn column_icon(glyph: Glyph) -> pyegui_core::columns::ColumnIcon {

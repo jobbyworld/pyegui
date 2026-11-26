@@ -211,6 +211,10 @@ struct Saved {
     column_widths: std::collections::BTreeMap<String, std::collections::BTreeMap<String, f32>>,
     /// the meta properties shown as columns (ids of `meta_defs`)
     meta_columns: Vec<i64>,
+    /// the columns hidden with the settings of the header, by view and column key
+    hidden_columns: std::collections::BTreeMap<String, Vec<String>>,
+    /// the properties already seen: a new one is hidden in the views until the settings show it
+    meta_seen: Vec<i64>,
     /// the look of the light theme and of the dark theme, kept apart
     looks: [Look; 2],
     /// an accent chosen with the color picker
@@ -245,6 +249,8 @@ impl Default for Saved {
             terminal_font_size: 13.0,
             column_widths: Default::default(),
             meta_columns: Vec::new(),
+            hidden_columns: Default::default(),
+            meta_seen: Vec::new(),
             looks: Default::default(),
             accent_custom: None,
             show_hidden: false,
@@ -282,6 +288,7 @@ pub struct FinderApp {
     pub terminal_font_size: f32,
     pub column_widths: std::collections::BTreeMap<String, std::collections::BTreeMap<String, f32>>,
     pub meta_columns: Vec<i64>,
+    pub meta_seen: Vec<i64>,
     pub looks: [Look; 2],
     pub accent_custom: Option<[u8; 3]>,
     /// the picture behind the glasses, blurred: the file, the blur and its texture
@@ -577,6 +584,8 @@ impl FinderApp {
             terminal_font_size: self.terminal_font_size,
             column_widths: self.column_widths.clone(),
             meta_columns: self.meta_columns.clone(),
+            meta_seen: self.meta_seen.clone(),
+            hidden_columns: self.views.hidden_columns(),
             ..Saved::default()
         };
         let mut app = Self::build(ctx, saved, Some(folder), false);
@@ -600,6 +609,7 @@ impl FinderApp {
         let core = default_core();
         let mut views = Views::new(&core, &folder, saved.show_hidden);
         views.set_column_widths(&saved.column_widths);
+        views.set_hidden_columns(&saved.hidden_columns);
         views.open_in_tree(&saved.open_folders);
         let app = FinderApp {
             core,
@@ -619,6 +629,7 @@ impl FinderApp {
             terminal_font_size: saved.terminal_font_size.clamp(8.0, 30.0),
             column_widths: saved.column_widths.clone(),
             meta_columns: saved.meta_columns.clone(),
+            meta_seen: saved.meta_seen.clone(),
             looks: saved.looks,
             accent_custom: saved.accent_custom,
             bg_texture: None,
@@ -1028,6 +1039,19 @@ impl FinderApp {
         let value = std::rc::Rc::new(row);
         self.tag_paths_cache.borrow_mut().1.insert(path.to_path_buf(), value.clone());
         value
+    }
+
+    /// A property that was never seen before is hidden in the views (the old `meta_columns` keep the ones that
+    /// were shown): the settings of the header show it
+    fn hide_new_properties(&mut self) {
+        let defs = self.meta_defs();
+        let new: Vec<_> = defs.iter().filter(|d| !self.meta_seen.contains(&d.id)).cloned().collect();
+        if new.is_empty() {
+            return;
+        }
+        let keys: Vec<String> = new.iter().filter(|d| !self.meta_columns.contains(&d.id)).map(|d| crate::metaui::column_key(d)).collect();
+        self.views.hide_columns(&keys);
+        self.meta_seen.extend(new.iter().map(|d| d.id));
     }
 
     pub fn opened_at(&self, path: &Path) -> Option<std::time::SystemTime> {
@@ -2885,6 +2909,8 @@ impl eframe::App for FinderApp {
             terminal_font_size: self.terminal_font_size,
             column_widths: self.column_widths.clone(),
             meta_columns: self.meta_columns.clone(),
+            meta_seen: self.meta_seen.clone(),
+            hidden_columns: self.views.hidden_columns(),
             looks: self.looks.clone(),
             accent_custom: self.accent_custom,
             show_hidden: self.show_hidden,
@@ -3116,6 +3142,7 @@ impl FinderApp {
         let mut central = egui::Frame::central_panel(ui.style()).inner_margin(0);
         central = central.fill(egui::Color32::TRANSPARENT); // the dock lays the glass of the bands itself
         egui::CentralPanel::default().frame(central).show(ui, |ui| {
+            self.hide_new_properties();
             if let Some(mut tree) = self.dock.take() {
                 if let Some(pane) = self.pending_pane.take() {
                     dock::reveal(&mut tree, pane);

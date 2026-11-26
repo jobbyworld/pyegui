@@ -425,53 +425,161 @@ fn editor(ui: &mut Ui, state: &mut PropertySetState, p: &Property, o: &PropertyS
 
 #[allow(clippy::too_many_arguments)]
 fn choice(ui: &mut Ui, state: &mut PropertySetState, p: &Property, options: &[PropOption], multiple: bool, open: bool, width: f32, o: &PropertySetOptions, changes: &mut Vec<Change>) {
-    let shown = if p.selected.is_empty() {
-        if p.note.is_empty() { RichText::new("—").weak() } else { weak_note(ui, &p.note) }
+    let note = if p.note.is_empty() { None } else { Some(p.note.as_str()) };
+    let new_option = state.new_option.entry(p.id.clone()).or_default();
+    let spec = ChoiceSpec { salt: o.id.with(("choice", &p.id)), options, selected: &p.selected, multiple, open, editable: p.editable(), width, add_hint: &o.add_hint, note, flat: false };
+    match choice_combo(ui, &spec, new_option) {
+        Some(ChoiceChange::Choose(ids)) => changes.push(Change::Choose { id: p.id.clone(), ids }),
+        Some(ChoiceChange::Clear) => changes.push(Change::Clear { id: p.id.clone() }),
+        Some(ChoiceChange::AddOption(label)) => changes.push(Change::AddOption { id: p.id.clone(), label }),
+        None => {}
+    }
+}
+
+/// What a list editor shows
+pub struct ChoiceSpec<'a> {
+    pub salt: egui::Id,
+    pub options: &'a [PropOption],
+    pub selected: &'a [String],
+    pub multiple: bool,
+    /// a field adds a new option (and chooses it)
+    pub open: bool,
+    pub editable: bool,
+    pub width: f32,
+    pub add_hint: &'a str,
+    /// shown weak instead of the dash when nothing is chosen (e.g. the values of a folder differ)
+    pub note: Option<&'a str>,
+    /// no outline and no fill (the arrow shows while the mouse is over it), e.g. in a cell of a view
+    pub flat: bool,
+}
+
+/// What the person did in a list editor
+#[derive(Clone, PartialEq, Debug)]
+pub enum ChoiceChange {
+    Choose(Vec<String>),
+    Clear,
+    AddOption(String),
+}
+
+/// The editor of a list: a combo box with the chosen labels, which opens a list of the options (a check box
+/// for each one when it takes several). It is the editor of the properties pane, also used in the cells of the
+/// views. `new_option` is the text being typed for a new option of an open list
+pub fn choice_combo(ui: &mut Ui, spec: &ChoiceSpec<'_>, new_option: &mut String) -> Option<ChoiceChange> {
+    let mut change = None;
+    // the list stays open for a click inside (a check box, the field of a new value) until a click outside (or Escape);
+    // the choice of a list of one value closes it by itself
+    let behavior = egui::PopupCloseBehavior::CloseOnClickOutside;
+    if spec.flat {
+        ui.add_enabled_ui(spec.editable, |ui| flat_choice(ui, spec, new_option, behavior, &mut change));
+        return change;
+    }
+    let (options, selected) = (spec.options, spec.selected);
+    let shown = if selected.is_empty() {
+        match spec.note {
+            None => RichText::new("—").weak(),
+            Some(note) => weak_note(ui, note),
+        }
     } else {
-        let labels: Vec<&str> = p.selected.iter().filter_map(|id| options.iter().find(|o| &o.id == id)).map(|o| o.label.as_str()).collect();
+        let labels: Vec<&str> = selected.iter().filter_map(|id| options.iter().find(|o| &o.id == id)).map(|o| o.label.as_str()).collect();
         RichText::new(labels.join(", "))
     };
-    let new_option = state.new_option.entry(p.id.clone()).or_default();
-    ui.add_enabled_ui(p.editable(), |ui| {
-        egui::ComboBox::from_id_salt(o.id.with(("choice", &p.id))).selected_text(shown).width((width - 4.0).max(40.0)).show_ui(ui, |ui| {
-            for option in options {
-                ui.horizontal(|ui| {
-                    if let Some(color) = option.color {
-                        let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
-                        ui.painter().circle_filled(rect.center(), 5.0, color);
-                    }
-                    if multiple {
-                        let mut on = p.selected.contains(&option.id);
-                        if ui.checkbox(&mut on, &option.label).changed() {
-                            let mut next = p.selected.clone();
-                            if on {
-                                next.push(option.id.clone());
-                            } else {
-                                next.retain(|i| *i != option.id);
-                            }
-                            // the order of the list, not the order of the clicks
-                            next.sort_by_key(|id| options.iter().position(|o| &o.id == id));
-                            changes.push(if next.is_empty() { Change::Clear { id: p.id.clone() } } else { Change::Choose { id: p.id.clone(), ids: next } });
-                        }
-                    } else if ui.selectable_label(p.selected == [option.id.clone()], &option.label).clicked() {
-                        changes.push(Change::Choose { id: p.id.clone(), ids: vec![option.id.clone()] });
-                        ui.close();
-                    }
-                });
+    ui.add_enabled_ui(spec.editable, |ui| {
+        egui::ComboBox::from_id_salt(spec.salt)
+            .selected_text(shown)
+            .width((spec.width - 4.0).max(40.0))
+            .close_behavior(behavior)
+            .show_ui(ui, |ui| choice_rows(ui, spec, new_option, &mut change));
+    });
+    change
+}
+
+/// The flat editor of a cell: the values chosen as tags (a chip in the color of the option), no outline, no fill, an
+/// arrow while the mouse is over it; a click opens the list of the options
+fn flat_choice(ui: &mut Ui, spec: &ChoiceSpec<'_>, new_option: &mut String, behavior: egui::PopupCloseBehavior, change: &mut Option<ChoiceChange>) {
+    use crate::tags::{tags_edit, Tags, TagsOptions};
+    let neutral = egui::Color32::from_rgb(100, 116, 139);
+    let clean = |label: &str| label.replace('/', "-");
+    let mut tags = Tags::new(vec![], Default::default());
+    for id in spec.selected {
+        if let Some(option) = spec.options.iter().find(|o| &o.id == id) {
+            let label = clean(&option.label);
+            tags.colors.insert(label.clone(), option.color.unwrap_or(neutral));
+            tags.insert(&label);
+        }
+    }
+    let height = ui.text_style_height(&egui::TextStyle::Body) + 6.0;
+    let rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(spec.width.max(40.0), height));
+    ui.allocate_rect(rect, Sense::hover());
+    let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    inner.shrink_clip_rect(rect);
+    if tags.tags.is_empty() {
+        match spec.note {
+            None => inner.weak("—"),
+            Some(note) => inner.label(weak_note(&inner, note)),
+        };
+    } else {
+        let mut options = TagsOptions::new(spec.salt.with("chips"));
+        options.editable = false;
+        options.small = true;
+        options.fit = true;
+        tags_edit(&mut inner, &mut tags, &options);
+    }
+    // after the chips, so that it is above them and gets the click
+    let response = ui.interact(rect, spec.salt.with("button"), Sense::click());
+    if response.hovered() || egui::Popup::is_id_open(ui.ctx(), spec.salt.with("popup")) {
+        let c = egui::pos2(rect.right() - 10.0, rect.center().y);
+        let points = vec![c + egui::vec2(-4.0, -2.0), c + egui::vec2(4.0, -2.0), c + egui::vec2(0.0, 3.0)];
+        ui.painter().add(egui::Shape::convex_polygon(points, ui.visuals().widgets.inactive.fg_stroke.color, egui::Stroke::NONE));
+    }
+    egui::Popup::menu(&response)
+        .id(spec.salt.with("popup"))
+        .close_behavior(behavior)
+        .show(|ui| choice_rows(ui, spec, new_option, change));
+}
+
+/// The options of a list: a check box for each (a round when only one is chosen) and, for an open list, a field
+fn choice_rows(ui: &mut Ui, spec: &ChoiceSpec<'_>, new_option: &mut String, change: &mut Option<ChoiceChange>) {
+    let (options, selected, multiple) = (spec.options, spec.selected, spec.multiple);
+    for option in options {
+        ui.horizontal(|ui| {
+            if let Some(color) = option.color {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
+                ui.painter().circle_filled(rect.center(), 5.0, color);
             }
-            if options.is_empty() {
-                ui.weak("—");
-            }
-            if open {
-                ui.separator();
-                let edit = ui.add(egui::TextEdit::singleline(new_option).hint_text(&o.add_hint).desired_width(160.0));
-                if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !new_option.trim().is_empty() {
-                    changes.push(Change::AddOption { id: p.id.clone(), label: std::mem::take(new_option) });
-                    edit.request_focus();
+            if multiple {
+                let mut on = selected.contains(&option.id);
+                if ui.checkbox(&mut on, &option.label).changed() {
+                    let mut next = selected.to_vec();
+                    if on {
+                        next.push(option.id.clone());
+                    } else {
+                        next.retain(|i| *i != option.id);
+                    }
+                    // the order of the list, not the order of the clicks
+                    next.sort_by_key(|id| options.iter().position(|o| &o.id == id));
+                    *change = Some(if next.is_empty() { ChoiceChange::Clear } else { ChoiceChange::Choose(next) });
+                }
+            } else {
+                // a round for each one, only one is chosen: a click on it chooses it, a click on the chosen one clears it
+                let on = selected == [option.id.clone()];
+                if ui.radio(on, &option.label).clicked() {
+                    *change = Some(if on { ChoiceChange::Clear } else { ChoiceChange::Choose(vec![option.id.clone()]) });
+                    ui.close();
                 }
             }
         });
-    });
+    }
+    if options.is_empty() {
+        ui.weak("—");
+    }
+    if spec.open {
+        ui.separator();
+        let edit = ui.add(egui::TextEdit::singleline(new_option).hint_text(spec.add_hint).desired_width(160.0));
+        if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !new_option.trim().is_empty() {
+            *change = Some(ChoiceChange::AddOption(std::mem::take(new_option)));
+            edit.request_focus();
+        }
+    }
 }
 
 fn description_pane(ui: &mut Ui, state: &PropertySetState, props: &[Property], height: f32) {

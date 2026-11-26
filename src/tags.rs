@@ -200,6 +200,11 @@ impl Tags {
 ///     icon (bool): the tag icon in the color of the tag at the left of a chip, instead of a dot.
 ///         False by default
 ///
+///     tree (bool): a flat cell: the tags as chips with no field and no outline, an arrow while the mouse is over it;
+///         a click opens the tree of `suggestions` (the paths of all the tags, in the order of the tree), an indented
+///         row per level with a check box. A field filters them and Enter puts the typed tag on (created when new).
+///         The `muted` tags are shown but not changed. False by default
+///
 ///     muted (list[str]): tags drawn with their colors desaturated, e.g. those an item inherits
 ///
 ///     small (bool): smaller chips, with the small text, e.g. in a row of a list or of a tree
@@ -249,6 +254,7 @@ unsafe fn tags_edit(tags: &Bound<'_, Tags>, kwargs: Option<&Bound<'_, PyDict>>) 
     o.compact = kwarg::<bool>(kwargs, "compact")?.unwrap_or(false);
     o.dot_size = kwarg::<f32>(kwargs, "dot_size")?.unwrap_or(10.0);
     o.icon = kwarg::<bool>(kwargs, "icon")?.unwrap_or(false);
+    o.tree = kwarg::<bool>(kwargs, "tree")?.unwrap_or(false);
     let mut state = tags.borrow_mut();
     Ok(pyegui_core::tags::tags_edit(ui, &mut state.0, &o))
 }

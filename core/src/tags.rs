@@ -331,6 +331,9 @@ pub struct TagsOptions {
     pub dot_size: f32,
     /// the tag icon in the color of the tag at the left of a chip, instead of a dot
     pub icon: bool,
+    /// a flat cell: the tags as chips with no field, a click opens the tree of `suggestions` with a check box for
+    /// each level (a field filters and creates), see `tags_pick`
+    pub tree: bool,
 }
 
 impl TagsOptions {
@@ -352,6 +355,7 @@ impl TagsOptions {
             compact: false,
             dot_size: 10.0,
             icon: false,
+            tree: false,
         }
     }
 }
@@ -360,6 +364,9 @@ impl TagsOptions {
 /// hover. With `editable` a cross removes a tag, a right click changes the color of each of its
 /// levels, and a field adds one. Returns true when a tag was added or removed, or a color changed.
 pub fn tags_edit(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
+    if o.tree {
+        return tags_pick(ui, tags, o);
+    }
     let editable = o.editable;
     let hint = o.hint_text.clone();
     let suggestions = &o.suggestions;
@@ -597,14 +604,25 @@ pub fn tags_edit(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
             let wanted = (matching.len() as f32 * row_h + 20.0).min(list_height + 20.0);
             let below = screen.bottom() - field.rect.bottom() - 12.0;
             let above = field.rect.top() - screen.top() - 12.0;
-            let up = below < wanted && above > below;
+            // the place is chosen when the list opens and kept while it is open: the field moves when a chip
+            // is added, the list must not follow it
+            let anchor_id = popup_id.with("anchor");
+            let (up, anchor) = match ui.ctx().data(|d| d.get_temp::<(bool, egui::Pos2)>(anchor_id)) {
+                Some(kept) => kept,
+                None => {
+                    let up = below < wanted && above > below;
+                    let at = if up { field.rect.left_top() - vec2(0.0, 4.0) } else { field.rect.left_bottom() + vec2(0.0, 4.0) };
+                    ui.ctx().data_mut(|d| d.insert_temp(anchor_id, (up, at)));
+                    (up, at)
+                }
+            };
             let room = if up { above } else { below };
             let list_max = list_height.min((room - 20.0).max(60.0));
             let area = egui::Area::new(popup_id).order(egui::Order::Foreground);
             let area = if up {
-                area.pivot(egui::Align2::LEFT_BOTTOM).fixed_pos(field.rect.left_top() - vec2(0.0, 4.0))
+                area.pivot(egui::Align2::LEFT_BOTTOM).fixed_pos(anchor)
             } else {
-                area.fixed_pos(field.rect.left_bottom() + vec2(0.0, 4.0))
+                area.fixed_pos(anchor)
             };
             area
                 .show(ui.ctx(), |ui| {
@@ -664,7 +682,7 @@ pub fn tags_edit(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
                             }
                             // on the press: on the release the field has lost the focus and the
                             // list is gone
-                            if hit.is_pointer_button_down_on() {
+                            if hit.hovered() && ui.input(|i| i.pointer.primary_pressed()) {
                                 picked = Some(suggestion.clone());
                             }
                         }
@@ -683,6 +701,9 @@ pub fn tags_edit(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
                 highlight = None;
             }
         }
+        if !(field.has_focus() && !matching.is_empty()) {
+            ui.ctx().data_mut(|d| d.remove_temp::<(bool, egui::Pos2)>(popup_id.with("anchor")));
+        }
         // for the next frame: the rows of the list, the one highlighted
         let shown = if field.has_focus() { matching.len() } else { 0 };
         let highlight = highlight.filter(|h| *h < shown);
@@ -696,5 +717,119 @@ pub fn tags_edit(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
     } else {
         state.input = input;
     }
+    changed
+}
+
+/// The flat editor of the tags of a cell: the tags as small chips, no outline, no fill, an arrow while the mouse is
+/// over it. A click opens the tree of `suggestions` (the paths of all the tags, in the order of the tree): an indented
+/// row per level with a check box, the one of the tags that are on. A field filters them (the full paths then) and
+/// Enter puts the typed tag on, creating it when it is new. The `muted` tags (inherited) are shown but not changed.
+/// Returns true when a tag was put on or taken off.
+pub fn tags_pick(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
+    let id = o.id;
+    let muted: HashSet<String> = o.muted.iter().map(|t| normalize(t)).collect();
+    let height = ui.text_style_height(&chip_style(true)) + 8.0;
+    let rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().max(60.0), height.max(ui.text_style_height(&TextStyle::Body) + 6.0)));
+    ui.allocate_rect(rect, Sense::hover());
+    let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    inner.shrink_clip_rect(rect);
+    if tags.tags.is_empty() {
+        inner.weak("—");
+    } else {
+        let mut shown = TagsOptions::new(id.with("chips"));
+        shown.editable = false;
+        shown.small = true;
+        shown.icon = o.icon;
+        shown.fit = true;
+        shown.muted = o.muted.clone();
+        tags_edit(&mut inner, tags, &shown);
+    }
+    // after the chips, so that it is above them and gets the click
+    let response = ui.interact(rect, id.with("button"), Sense::click());
+    let popup_id = id.with("popup");
+    let open = egui::Popup::is_id_open(ui.ctx(), popup_id);
+    if o.editable && (response.hovered() || open) {
+        let c = egui::pos2(rect.right() - 10.0, rect.center().y);
+        let points = vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 3.0)];
+        ui.painter().add(egui::Shape::convex_polygon(points, ui.visuals().widgets.inactive.fg_stroke.color, Stroke::NONE));
+    }
+    if !o.editable {
+        return false;
+    }
+    let (focus_id, input_id) = (id.with("focus"), id.with("input"));
+    if !open {
+        ui.ctx().data_mut(|d| d.remove_temp::<bool>(focus_id));
+    }
+    let mut changed = false;
+    egui::Popup::menu(&response).id(popup_id).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.set_min_width(240.0);
+        let mut input: String = ui.ctx().data(|d| d.get_temp(input_id)).unwrap_or_default();
+        let field = ui.add(egui::TextEdit::singleline(&mut input).hint_text(&o.hint_text).desired_width(f32::INFINITY));
+        if !ui.ctx().data(|d| d.get_temp::<bool>(focus_id)).unwrap_or(false) {
+            field.request_focus();
+            ui.ctx().data_mut(|d| d.insert_temp(focus_id, true));
+        }
+        ui.add_space(2.0);
+        let typed = normalize(&input);
+        let filter = typed.to_lowercase();
+        let rows: Vec<&String> = o.suggestions.iter().filter(|s| filter.is_empty() || normalize(s).to_lowercase().contains(&filter)).collect();
+        let mut toggled: Option<String> = None;
+        egui::ScrollArea::vertical().max_height(o.list_height.max(120.0)).auto_shrink([true, true]).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            for path in &rows {
+                let path = normalize(path);
+                let depth = if filter.is_empty() { path.matches('/').count() } else { 0 };
+                let on = tags.tags.contains(&path);
+                let inherited = on && muted.contains(&path);
+                let (row, row_response) = ui.allocate_exact_size(vec2(ui.available_width().max(220.0), 24.0), Sense::click());
+                let ink = ui.visuals().text_color();
+                if row_response.hovered() && !inherited {
+                    ui.painter().rect_filled(row, 5.0, ui.visuals().widgets.hovered.weak_bg_fill);
+                }
+                let boxed = Rect::from_center_size(egui::pos2(row.left() + 12.0 + depth as f32 * 16.0, row.center().y), vec2(14.0, 14.0));
+                if on {
+                    ui.painter().rect_filled(boxed, 3.0, ui.visuals().hyperlink_color.gamma_multiply(if inherited { 0.5 } else { 1.0 }));
+                    let (m, white) = (boxed.center(), Stroke::new(1.6, Color32::WHITE));
+                    ui.painter().line_segment([m + vec2(-3.5, 0.5), m + vec2(-1.0, 3.0)], white);
+                    ui.painter().line_segment([m + vec2(-1.0, 3.0), m + vec2(3.8, -3.0)], white);
+                } else {
+                    ui.painter().rect_stroke(boxed, 3.0, Stroke::new(1.3, ink.gamma_multiply(0.7)), StrokeKind::Inside);
+                }
+                let color = tags.color_of(&path);
+                let icon_at = egui::pos2(boxed.right() + 12.0, row.center().y);
+                paint_tag_icon(ui, icon_at, 14.0, color);
+                let name = if filter.is_empty() { last_level(&path).to_owned() } else { path.clone() };
+                let text_color = if inherited { color.gamma_multiply(0.6) } else { color };
+                let galley = ui.painter().layout_no_wrap(name, TextStyle::Body.resolve(ui.style()), text_color);
+                ui.painter().galley(egui::pos2(icon_at.x + 12.0, row.center().y - galley.size().y / 2.0), galley, text_color);
+                if inherited {
+                    row_response.on_hover_text("Hérité d'un dossier");
+                } else if row_response.clicked() {
+                    toggled = Some(path);
+                }
+            }
+            if rows.is_empty() && typed.is_empty() {
+                ui.weak("Aucune étiquette");
+            }
+        });
+        if let Some(path) = toggled {
+            changed |= tags.toggle(&path);
+        }
+        let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if enter && !typed.is_empty() {
+            // an existing tag is toggled, a new one is created and put on
+            let known = o.suggestions.iter().map(|s| normalize(s)).find(|s| s.to_lowercase() == filter);
+            changed |= match known {
+                Some(path) if muted.contains(&path) => false,
+                Some(path) => tags.toggle(&path),
+                None => tags.insert(&typed),
+            };
+            input.clear();
+            field.request_focus();
+        } else if !typed.is_empty() && rows.is_empty() {
+            ui.weak(format!("Entrée : créer « {typed} »"));
+        }
+        ui.ctx().data_mut(|d| d.insert_temp(input_id, input));
+    });
     changed
 }

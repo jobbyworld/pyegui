@@ -29,7 +29,7 @@ pub struct TableOptions {
 impl Default for TableOptions {
     fn default() -> Self {
         TableOptions {
-            header: HeaderOptions { resizable: true, pinnable: true, reorderable: true, filterable: true, drag_out: false, grow_left: false, tinted: false },
+            header: HeaderOptions { resizable: true, pinnable: true, reorderable: true, filterable: true, drag_out: false, grow_left: false, tinted: false, settings: false },
             sortable: true,
             striped: true,
             max_height: None,

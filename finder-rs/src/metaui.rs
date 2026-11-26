@@ -40,6 +40,10 @@ pub struct Manager {
     new_option: String,
     /// an option waiting for the answer to "delete it?" (with the number of items that hold it)
     confirm_option: Option<i64>,
+    /// the trash was clicked this frame: the same click does not cancel
+    confirm_fresh: bool,
+    /// the option being moved by its grip
+    drag_option: Option<i64>,
     confirm_property: bool,
 }
 
@@ -134,11 +138,18 @@ impl FinderApp {
     }
 }
 
-/// The columns of the properties shown: a title (the name of the property) and how a row fills it
+/// The names the columns of the views already have
+pub const RESERVED: &[&str] = &["Nom", "Modifié", "Taille", "Type", "Étiquettes", "Dernière ouverture"];
+
+/// The key of the column of a property in the views: its name, told apart when a column has it already
+pub fn column_key(def: &MetaDef) -> String {
+    if RESERVED.contains(&def.name.as_str()) { format!("{} (propriété)", def.name) } else { def.name.clone() }
+}
+
+/// The columns of the properties: a title (the name of the property) and how a row fills it
 pub fn extras<'a>(app: &'a FinderApp, reserved: &[&str]) -> Vec<pyegui_core::files::Extra<'a>> {
     let defs = app.meta_defs();
     defs.iter()
-        .filter(|d| app.meta_columns.contains(&d.id))
         .map(|d| {
             let title = if reserved.contains(&d.name.as_str()) { format!("{} (propriété)", d.name) } else { d.name.clone() };
             let (for_cell, for_value) = (d.clone(), d.clone());
@@ -277,67 +288,40 @@ fn edit_cell(ui: &mut egui::Ui, app: &FinderApp, def: &MetaDef, path: &std::path
     }
 }
 
-/// A list property as chips, like the tags: the color of the option, a cross to remove, a field to add (an open list
-/// takes a new label, a closed one only the ones it has)
+/// A list property in a cell: the editor of the properties pane, flat (a check box per option, a round for one choice)
 fn choice_cell(ui: &mut egui::Ui, app: &FinderApp, def: &MetaDef, path: &std::path::Path, resolved: &Resolved) {
-    use pyegui_core::tags::{tags_edit, Tags, TagsOptions};
     let order = |id: &i64| def.config.options.iter().position(|o| o.id == *id);
-    let (mut base, shown): (Vec<i64>, Vec<i64>) = match resolved {
-        Resolved::Own(v) | Resolved::Inherited { value: v, .. } => (decode_ids(v), decode_ids(v)),
+    let shown: Vec<i64> = match resolved {
+        Resolved::Own(v) | Resolved::Inherited { value: v, .. } => decode_ids(v),
         Resolved::Summary(s) => {
             let mut all: Vec<i64> = s.values.iter().flat_map(|(v, _)| decode_ids(v)).collect();
             all.sort_by_key(order);
             all.dedup();
-            (vec![], all)
+            all
         }
-        Resolved::None => (vec![], vec![]),
+        Resolved::None => vec![],
     };
-    let clean = |label: &str| label.replace('/', "-");
-    let labels: Vec<String> = shown.iter().filter_map(|id| def.config.label_of(*id)).map(clean).collect();
-    let neutral = Color32::from_rgb(100, 116, 139);
-    let colors: HashMap<String, Color32> = def.config.options.iter().map(|o| (clean(&o.label), if o.color.is_empty() { neutral } else { parse_color(&o.color) })).collect();
-    let mut tags = Tags::new(labels.clone(), colors);
-    let mut options = TagsOptions::new(egui::Id::unique(("meta-choice-cell", def.id, path)));
-    options.small = true;
-    options.fit = true;
-    options.field_width = 64.0;
-    options.hint_text = "+".into();
-    options.on_hover = true;
-    options.dropdown = true;
-    options.list_height = 420.0;
-    options.pick = def.config.multiple;
-    options.suggestions = def.config.options.iter().map(|o| clean(&o.label)).collect();
-    if !matches!(resolved, Resolved::Own(_)) {
-        options.muted = labels.iter().cloned().collect();
-    }
-    if !tags_edit(ui, &mut tags, &options) {
+    {
+        // the editor of the properties pane: a combo box with a check box (or a round, for one choice) per option
+        use pyegui_core::property_set::{choice_combo, ChoiceChange, ChoiceSpec, PropOption};
+        let options: Vec<PropOption> = def.config.options.iter().map(|o| PropOption { id: o.id.to_string(), label: o.label.clone(), color: (!o.color.is_empty()).then(|| parse_color(&o.color)) }).collect();
+        let selected: Vec<String> = shown.iter().map(|i| i.to_string()).collect();
+        let salt = egui::Id::unique(("meta-multi-cell", def.id, path));
+        let mut typed: String = ui.data(|d| d.get_temp(salt.with("new"))).unwrap_or_default();
+        let spec = ChoiceSpec { salt, options: &options, selected: &selected, multiple: def.config.multiple, open: def.config.mode == ListMode::Open, editable: true, width: ui.available_width(), add_hint: "Nouvelle valeur", note: None, flat: true };
+        let change = choice_combo(ui, &spec, &mut typed);
+        ui.data_mut(|d| d.insert_temp(salt.with("new"), typed));
+        let edit = match change {
+            Some(ChoiceChange::Choose(ids)) => Some((ids.iter().filter_map(|i| i.parse().ok()).collect::<Vec<i64>>(), vec![])),
+            Some(ChoiceChange::Clear) => Some((vec![], vec![])),
+            Some(ChoiceChange::AddOption(label)) => Some((if def.config.multiple { shown.clone() } else { vec![] }, vec![label])),
+            None => None,
+        };
+        if let Some((ids, new_labels)) = edit {
+            app.meta_edits.borrow_mut().push(MetaEdit::Choice { path: path.to_path_buf(), def: def.id, ids, new_labels });
+        }
         return;
     }
-    let find = |label: &str| def.config.options.iter().find(|o| clean(&o.label).to_lowercase() == label.to_lowercase()).map(|o| o.id);
-    // what was taken off, then what was put on (a closed list only knows its own options)
-    let removed: Vec<i64> = labels.iter().filter(|l| !tags.tags.contains(l)).filter_map(|l| find(l)).collect();
-    base.retain(|id| !removed.contains(id));
-    let mut new_labels = vec![];
-    let mut put: Vec<i64> = vec![];
-    for tag in tags.tags.iter().filter(|t| !labels.contains(t)) {
-        match find(tag) {
-            Some(id) => put.push(id),
-            None if def.config.mode == ListMode::Open => new_labels.push(tag.clone()),
-            None => {}
-        }
-    }
-    if !def.config.multiple && !(put.is_empty() && new_labels.is_empty()) {
-        base.clear();
-        put.truncate(1);
-        new_labels = if put.is_empty() { new_labels.into_iter().take(1).collect() } else { vec![] };
-    }
-    for id in put {
-        if !base.contains(&id) {
-            base.push(id);
-        }
-    }
-    base.sort_by_key(order);
-    app.meta_edits.borrow_mut().push(MetaEdit::Choice { path: path.to_path_buf(), def: def.id, ids: base, new_labels });
 }
 
 /// The seconds since 1970 of a day (midnight UTC: a date has no time zone)
@@ -479,17 +463,6 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
     }
     let values = app.tags.as_ref().map(|s| s.meta_values_of(&path)).unwrap_or_default();
     let resolved: Vec<Rc<Resolved>> = defs.iter().map(|d| if d.ty == MetaType::Formula { Rc::new(Resolved::None) } else { app.meta_resolved(d, &path) }).collect();
-    egui::CollapsingHeader::new("Colonnes des vues").id_salt("meta-columns").show(ui, |ui| {
-        for def in &defs {
-            let mut on = app.meta_columns.contains(&def.id);
-            if ui.checkbox(&mut on, &def.name).changed() {
-                app.meta_columns.retain(|id| *id != def.id);
-                if on {
-                    app.meta_columns.push(def.id);
-                }
-            }
-        }
-    });
     let rows: Vec<Property> = defs.iter().zip(&resolved).map(|(def, resolved)| property_of(app, def, resolved, values.get(&def.id).map(String::as_str), &path)).collect();
     let mut options = PropertySetOptions::new(egui::Id::unique("meta-set"));
     options.key = path.to_string_lossy().into_owned();
@@ -691,12 +664,27 @@ pub fn modal(app: &mut FinderApp, ctx: &egui::Context) {
                     let ids: Vec<i64> = draft.config.options.iter().map(|o| o.id).collect();
                     let mut remove: Option<i64> = None;
                     let mut merge: Option<(i64, i64)> = None;
+                    let mut rows: Vec<(i64, egui::Rect)> = vec![];
                     egui::ScrollArea::vertical().id_salt("meta-options").max_height(170.0).auto_shrink([false, true]).show(ui, |ui| {
                         let labels: Vec<(i64, String)> = draft.config.options.iter().map(|o| (o.id, o.label.clone())).collect();
                         for id in &ids {
                             let used = store.choice_usage(draft.id, *id);
                             let Some(at) = draft.config.options.iter().position(|o| o.id == *id) else { continue };
-                            ui.horizontal(|ui| {
+                            let row = ui.horizontal(|ui| {
+                                // the grip: drag the option to another place
+                                let (grip, grip_response) = ui.allocate_exact_size(egui::vec2(14.0, 22.0), egui::Sense::drag());
+                                if grip_response.drag_started() {
+                                    manager.drag_option = Some(*id);
+                                }
+                                if grip_response.hovered() || manager.drag_option == Some(*id) {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                                }
+                                let dots = ui.visuals().text_color().gamma_multiply(0.5);
+                                for dx in [-2.5f32, 2.5] {
+                                    for dy in [-4.0f32, 0.0, 4.0] {
+                                        ui.painter().circle_filled(grip.center() + egui::vec2(dx, dy), 1.2, dots);
+                                    }
+                                }
                                 let option = &mut draft.config.options[at];
                                 let mut color = if option.color.is_empty() { Color32::from_gray(150) } else { parse_color(&option.color) };
                                 if ui.color_edit_button_srgba(&mut color).changed() {
@@ -712,43 +700,58 @@ pub fn modal(app: &mut FinderApp, ctx: &egui::Context) {
                                     }
                                 }
                                 ui.weak(format!("{used}"));
-                                if ui.small_button("▲").clicked() {
-                                    draft.config.move_option(*id, -1);
-                                    save = true;
+                                // the trash: a first click asks, a second one deletes
+                                let armed = manager.confirm_option == Some(*id);
+                                // no text: it would move the icon, the tip says what a second click does
+                                let tip = if armed { if used > 0 { format!("Cliquer encore pour retirer de {used} élément(s) et supprimer") } else { "Cliquer encore pour supprimer".to_owned() } } else { "Supprimer l'option".to_owned() };
+                                let trash = glyphs::button(ui, glyphs::TRASH, 13.0, armed, &tip);
+                                if trash.clicked() {
+                                    if armed { remove = Some(*id) } else { manager.confirm_option = Some(*id); manager.confirm_fresh = true; }
                                 }
-                                if ui.small_button("▼").clicked() {
-                                    draft.config.move_option(*id, 1);
-                                    save = true;
-                                }
-                                if manager.confirm_option == Some(*id) {
-                                    ui.label(if used > 0 { format!("Retirer de {used} élément(s) ?") } else { "Supprimer ?".to_owned() });
-                                    if ui.button("Oui").clicked() {
-                                        remove = Some(*id);
-                                    }
-                                    if ui.button("Non").clicked() {
-                                        manager.confirm_option = None;
-                                    }
-                                } else {
-                                    if glyphs::button(ui, glyphs::CLOSE, 12.0, false, "Supprimer l'option").clicked() {
-                                        if used == 0 { remove = Some(*id) } else { manager.confirm_option = Some(*id) }
-                                    }
-                                    if labels.len() > 1 {
-                                        ui.menu_button("Fusionner dans…", |ui| {
-                                            for (other, name) in &labels {
-                                                if other != id && ui.button(name).clicked() {
-                                                    merge = Some((*id, *other));
-                                                    ui.close();
-                                                }
+                                if !armed && labels.len() > 1 {
+                                    ui.menu_button("Fusionner dans…", |ui| {
+                                        for (other, name) in &labels {
+                                            if other != id && ui.button(name).clicked() {
+                                                merge = Some((*id, *other));
+                                                ui.close();
                                             }
-                                        });
-                                    }
+                                        }
+                                    });
+                                }
+                                if armed && !manager.confirm_fresh && !trash.hovered() && ui.input(|i| i.pointer.any_pressed() || i.key_pressed(egui::Key::Escape)) {
+                                    manager.confirm_option = None;
                                 }
                             });
+                            rows.push((*id, row.response.rect));
                         }
                         if ids.is_empty() {
                             ui.weak("Aucune option");
                         }
                     });
+                    // the drag: the option follows the row under the mouse
+                    if let Some(moving) = manager.drag_option {
+                        if ui.input(|i| i.pointer.any_down()) {
+                            if let Some(p) = ui.input(|i| i.pointer.interact_pos()) {
+                                let to = if p.y < rows.first().map_or(0.0, |r| r.1.top()) {
+                                    rows.first().map(|r| r.0)
+                                } else if p.y > rows.last().map_or(0.0, |r| r.1.bottom()) {
+                                    rows.last().map(|r| r.0)
+                                } else {
+                                    rows.iter().find(|r| r.1.y_range().contains(p.y)).map(|r| r.0)
+                                };
+                                if let (Some(to), Some(from)) = (to.and_then(|t| ids.iter().position(|i| *i == t)), ids.iter().position(|i| *i == moving)) {
+                                    if to != from {
+                                        draft.config.move_option(moving, to as isize - from as isize);
+                                        save = true;
+                                    }
+                                }
+                            }
+                            ui.ctx().request_repaint();
+                        } else {
+                            manager.drag_option = None;
+                        }
+                    }
+                    manager.confirm_fresh = false;
                     ui.horizontal(|ui| {
                         let edit = ui.add(egui::TextEdit::singleline(&mut manager.new_option).hint_text("Ajouter une option").desired_width(200.0));
                         let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));

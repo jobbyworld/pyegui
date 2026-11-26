@@ -126,6 +126,10 @@ where
 
 fn read_options(d: &Bound<'_, PyDict>) -> PyResult<Vec<PropOption>> {
     let Some(list) = d.get_item("options")?.filter(|v| !v.is_none()) else { return Ok(vec![]) };
+    read_option_list(&list)
+}
+
+fn read_option_list(list: &Bound<'_, PyAny>) -> PyResult<Vec<PropOption>> {
     let mut out = Vec::new();
     for o in list.try_iter()? {
         let o = o?;
@@ -313,8 +317,71 @@ unsafe fn property_set(py: Python<'_>, state: &Bound<'_, PropertySet>, propertie
     Ok(out.unbind())
 }
 
+/// The editor of a list in a cell or anywhere else: the one of the rows of `property_set` (a combo box with the
+/// labels chosen, which opens a list of the options, a check box for each one when `multiple`), alone.
+///
+/// Args:
+///     options (list): the options, each a str or a dict with `id`, `label` and `color`
+///     selected (list[str]): the ids of the options chosen
+///
+/// Keyword args:
+///     multiple (bool): a check box per option, several can be chosen. False by default
+///
+///     open (bool): a field adds a new option (and chooses it). False by default
+///
+///     id (str): tells apart two editors that have the same options (give each cell its own)
+///
+///     width (float): width of the combo box. Default is the room that is left
+///
+///     add_hint (str): the hint of the field of a new option. Default is "New value"
+///
+///     enabled (bool): False to show it without editing. True by default
+///
+///     flat (bool): no outline and no fill, the arrow shows while the mouse is over it (for a cell). False by default
+///
+/// Returns:
+///     tuple | None: None while nothing changed, else ("choose", ids), ("clear",) or ("add_option", label)
+///
+/// Example::
+///
+///     change = choice_edit(options, chosen, multiple=True, id=f"status {path}")
+///     if change and change[0] == "choose":
+///         chosen = change[1]
+#[pyfunction]
+#[pyo3(signature = (options, selected, **kwargs))]
+unsafe fn choice_edit(py: Python<'_>, options: &Bound<'_, PyAny>, selected: Vec<String>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Option<Py<PyTuple>>> {
+    use pyegui_core::property_set::{choice_combo, ChoiceChange, ChoiceSpec};
+    let ui = current_ui(&UI)?;
+    let options = read_option_list(options)?;
+    let salt = Id::unique(("pyegui-choice-edit", kwarg::<String>(kwargs, "id")?.unwrap_or_default()));
+    let typed_id = salt.with("typed");
+    let mut typed: String = ui.data(|d| d.get_temp(typed_id)).unwrap_or_default();
+    let add_hint = kwarg::<String>(kwargs, "add_hint")?.unwrap_or_else(|| "New value".into());
+    let spec = ChoiceSpec {
+        salt,
+        options: &options,
+        selected: &selected,
+        multiple: kwarg::<bool>(kwargs, "multiple")?.unwrap_or(false),
+        open: kwarg::<bool>(kwargs, "open")?.unwrap_or(false),
+        editable: kwarg::<bool>(kwargs, "enabled")?.unwrap_or(true),
+        width: kwarg::<f32>(kwargs, "width")?.unwrap_or_else(|| ui.available_width()),
+        add_hint: &add_hint,
+        note: None,
+        flat: kwarg::<bool>(kwargs, "flat")?.unwrap_or(false),
+    };
+    let change = choice_combo(ui, &spec, &mut typed);
+    ui.data_mut(|d| d.insert_temp(typed_id, typed));
+    Ok(match change {
+        Some(ChoiceChange::Choose(ids)) => Some(PyTuple::new(py, [("choose").into_pyobject(py)?.into_any(), ids.into_pyobject(py)?.into_any()])?.unbind()),
+        Some(ChoiceChange::Clear) => Some(PyTuple::new(py, ["clear"])?.unbind()),
+        Some(ChoiceChange::AddOption(label)) => Some(PyTuple::new(py, ["add_option", label.as_str()])?.unbind()),
+        None => None,
+    })
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PropertySet>()?;
     m.add_function(wrap_pyfunction!(property_set, m)?)?;
+    m.add_function(wrap_pyfunction!(choice_edit, m)?)?;
     Ok(())
 }

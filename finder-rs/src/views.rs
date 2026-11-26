@@ -74,6 +74,31 @@ impl Views {
         self.tree.borrow_mut().columns.set_widths(map("tree"));
     }
 
+    /// The columns hidden by the user, by view ("list" and "tree") and column key
+    pub fn hidden_columns(&self) -> BTreeMap<String, Vec<String>> {
+        let mut out = BTreeMap::new();
+        if let Some(list) = &self.list {
+            out.insert("list".to_owned(), list.columns.hidden.clone());
+        }
+        out.insert("tree".to_owned(), self.tree.borrow().columns.hidden.clone());
+        out.retain(|_, h| !h.is_empty());
+        out
+    }
+
+    pub fn set_hidden_columns(&mut self, hidden: &BTreeMap<String, Vec<String>>) {
+        if let Some(list) = &mut self.list {
+            list.columns.hidden = hidden.get("list").cloned().unwrap_or_default();
+        }
+        self.tree.borrow_mut().columns.hidden = hidden.get("tree").cloned().unwrap_or_default();
+    }
+
+    /// Hides columns in the list and in the tree
+    pub fn hide_columns(&mut self, keys: &[String]) {
+        for state in self.list.iter_mut().map(|l| &mut l.columns).chain(std::iter::once(&mut self.tree.borrow_mut().columns)) {
+            state.hidden.extend(keys.iter().filter(|k| !state.hidden.contains(k)).cloned().collect::<Vec<_>>());
+        }
+    }
+
     /// Opens these folders in the tree
     pub fn open_in_tree(&self, folders: &[PathBuf]) {
         let mut tree = self.tree.borrow_mut();
@@ -142,7 +167,7 @@ fn hooks(app: &FinderApp) -> Hooks<'_> {
         icon: None,
         width: 140.0,
         cell: Box::new(move |ui, path| {
-            ui.add(egui::Label::new(egui::RichText::new(crate::model::format_date(app.opened_at(path))).weak()).selectable(false));
+            ui.add(egui::Label::new(egui::RichText::new(pyegui_core::files::date(app.opened_at(path), DATE_FORMAT).replace("--", "")).weak()).selectable(false));
         }),
         ty: DataType::Date,
         value: Some(Box::new(move |path| match app.opened_at(path).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()) {
@@ -151,7 +176,7 @@ fn hooks(app: &FinderApp) -> Hooks<'_> {
         })),
     };
     let mut extras = vec![tags, opened];
-    extras.extend(crate::metaui::extras(app, &["Nom", "Modifié", "Taille", "Type", "Étiquettes", "Dernière ouverture"]));
+    extras.extend(crate::metaui::extras(app, crate::metaui::RESERVED));
     Hooks { badges: None, extras }
 }
 
@@ -160,7 +185,7 @@ fn headers() -> [String; 4] {
 }
 
 fn options() -> HeaderOptions {
-    HeaderOptions { resizable: true, pinnable: true, reorderable: true, filterable: true, drag_out: true, grow_left: false, tinted: true }
+    HeaderOptions { resizable: true, pinnable: true, reorderable: true, filterable: true, drag_out: true, grow_left: false, tinted: true, settings: true }
 }
 
 /// The paths of the tag view, read again only when the tag or the store changes
@@ -318,7 +343,7 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
         } else {
             use SortBy::*;
             let mut columns: Vec<(Column, f32)> = [Name, Modified, Size, Kind].into_iter().map(|s| (Column::Sort(s), 0.0)).collect();
-            let extra_count = 2 + app.meta_defs().iter().filter(|d| app.meta_columns.contains(&d.id)).count();
+            let extra_count = 2 + app.meta_defs().len();
             columns.extend((0..extra_count).map(|i| (Column::Extra(i), 0.0)));
             Shape::List { columns, headers: headers(), date_format: DATE_FORMAT.into(), row_height: ROW_HEIGHT }
         };

@@ -99,9 +99,11 @@ pub fn cell(ui: &mut egui::Ui, app: &FinderApp, path: &std::path::Path) {
     let mut options = TagsOptions::new(egui::Id::unique(("finder-tags", path)));
     options.small = true;
     options.icon = true;
+    options.tree = true;
     options.fit = true;
     options.field_width = 64.0;
-    options.hint_text = "+ tag".into();
+    options.hint_text = "Chercher ou créer un tag".into();
+    options.list_height = 360.0;
     options.on_hover = true;
     options.dropdown = true;
     options.suggestions = library.paths.clone();
