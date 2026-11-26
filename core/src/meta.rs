@@ -100,6 +100,8 @@ pub struct ChoiceOption {
 #[derive(Clone, PartialEq, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// the group (category) of the property in the property set
+    pub group: String,
     // choice
     pub mode: ListMode,
     pub multiple: bool,

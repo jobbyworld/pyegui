@@ -144,6 +144,8 @@ from pyegui import (
     pdf_view,
     pointer_pos,
     pointer_pressed,
+    PropertySet,
+    property_set,
     radio_value,
     run_native,
     window_controls,
@@ -1351,7 +1353,7 @@ META_COLUMN_TYPE = {"text": "text", "longtext": "text", "formula": "text", "numb
 
 def meta_config(text):
     """the configuration of a property (meta_defs.config, JSON) with its defaults: mode ("closed" or "open"),
-    multiple, options [{id, label, color}], next_id, unit, decimals and formula"""
+    multiple, options [{id, label, color}], next_id, unit, decimals, formula and group (the category in the pane)"""
     try:
         raw = json.loads(text)
     except (TypeError, ValueError):
@@ -1365,6 +1367,7 @@ def meta_config(text):
     ]
     decimals = raw.get("decimals")
     return {
+        "group": str(raw.get("group") or ""),
         "mode": "open" if raw.get("mode") == "open" else "closed",
         "multiple": bool(raw.get("multiple")),
         "options": options,
@@ -6694,7 +6697,6 @@ meta_columns = []  # ids of the properties shown as columns of the views
 meta_open = {"manager": False, "rules": False}  # the windows
 meta_cache = {"version": -1, "defs": [], "values": {}, "resolved": {}, "computed": {}, "rules": []}
 meta_holders = {}  # what is being typed in the pane, by kind and property id
-meta_pane = {"path": None}
 
 
 def meta_refresh():
@@ -6815,103 +6817,67 @@ def meta_typed(d, text, stored):
     return text
 
 
-def meta_choice_editor(d, path, stored):
-    config = d["config"]
-    ids = decode_ids(stored) if stored else []
-    order = [o["id"] for o in config["options"]]
-
-    def chips():
-        for option in config["options"]:
-
-            def one(option=option):
-                if option["color"]:
-                    dot(hex_color(option["color"]) + (255,))
-                if selectable_label_clicked(option["id"] in ids, option["label"]):
-                    if config["multiple"]:
-                        chosen_ids = [i for i in ids if i != option["id"]] if option["id"] in ids else ids + [option["id"]]
-                        chosen_ids.sort(key=lambda i: order.index(i) if i in order else len(order))  # the order of the list
-                        tags.set_meta_value(path, d["id"], encode_ids(chosen_ids, True) or None)
-                    else:
-                        tags.set_meta_value(path, d["id"], str(option["id"]))
-
-            horizontal(one)
-
-    if config["options"]:
-        horizontal_wrapped(chips)
-    else:
-        weak("Aucune option")
-    if config["mode"] == "open":
-        box = meta_holders.setdefault(("n", d["id"]), Str(""))
-
-        def add():
-            text_edit_singleline(box, hint_text="Ajouter une option")
-            if (small_button_clicked("+") or key_pressed("Enter", when_typing=True)) and box.value.strip():
-                option = tags.add_choice_option(d["id"], box.value)
-                box.value = ""
-                if option is not None:
-                    picked_ids = ids if config["multiple"] else []
-                    if option not in picked_ids:
-                        picked_ids = picked_ids + [option]
-                    tags.set_meta_value(path, d["id"], encode_ids(picked_ids, config["multiple"]))
-
-        horizontal(add)
+META_SET_TYPES = {"text": "text", "longtext": "longtext", "number": "number", "date": "date", "bool": "bool", "choice": "choice", "formula": "readonly"}
+meta_set = PropertySet()  # the look of the pane: by group or by name, the groups folded, the filter
 
 
-def meta_value_editor(d, path, stored):
-    """the editor of one property for an item: what the person changes goes to the base at once"""
+def meta_property(d, path, stored):
+    """the row of the property set for a property: its editor, its value, and what the item has without a value
+    of its own (inherited from a folder, summary of a folder)"""
     kind = d["type"]
-    if kind == "bool":
-        box = meta_holders.setdefault(("b", d["id"]), Bool(False))
-        box.value = stored == "1"
-        checkbox(box, "Oui" if box.value else "Non")
-        if box.value != (stored == "1"):
-            tags.set_meta_value(path, d["id"], "1" if box.value else "0")
-    elif kind == "choice":
-        meta_choice_editor(d, path, stored)
+    config = d["config"]
+    row = dict(id=str(d["id"]), name=d["name"], group=config["group"], description=d["description"], type=META_SET_TYPES[kind])
+    if kind == "formula":
+        row["value"] = meta_formula(d, path)
+        return row
+    if kind == "choice":
+        row.update(
+            options=[dict(id=str(o["id"]), label=o["label"], color=o["color"]) for o in config["options"]],
+            multiple=config["multiple"],
+            open=config["mode"] == "open",
+            value=[str(i) for i in decode_ids(stored)] if stored else [],
+        )
+    elif kind == "bool":
+        row["value"] = (stored == "1") if stored is not None else None
     else:
-        buffer = meta_holders.get(("t", d["id"]))
-        if buffer is None:
-            buffer = meta_holders[("t", d["id"])] = Str(meta_editable(d, stored))
-        hint = {"date": "jj/mm/aaaa, demain, 12 mars…", "number": "nombre"}.get(kind, "")
-        if kind == "longtext":
-            text_edit_multiline(buffer, hint_text=hint)
-        else:
-            text_edit_singleline(buffer, hint_text=hint)
-        typed = meta_typed(d, buffer.value, stored)
-        if typed != stored:
-            tags.set_meta_value(path, d["id"], typed)
-        if kind == "date" and stored:
-            try:
-                weak(human_day(datetime.fromtimestamp(float(stored), timezone.utc).date()))
-            except (ValueError, OverflowError, OSError):
-                pass
-        if kind == "number" and d["config"]["unit"] and stored:
-            weak(meta_display(d, stored))
+        row["value"] = meta_editable(d, stored) if stored is not None else None
+        row["hint"] = {"date": "jj/mm/aaaa, demain, 12 mars…", "number": "nombre"}.get(kind, "")
+        if kind == "number":
+            row["unit"] = config["unit"]
+    if stored is None:
+        resolved = meta_resolved(d, path)
+        if resolved and resolved[0] == "inherited":
+            row["note"] = f"↳ {meta_resolved_text(d, resolved)} · hérité de {Path(resolved[2]).name or resolved[2]}"
+        elif resolved and resolved[0] == "summary":
+            row["note"] = f"≈ {meta_resolved_text(d, resolved)} · résumé de {resolved[2]} élément(s)"
+    return row
 
 
-def meta_row(d, path, stored):
-    def head():
-        strong(d["name"])
-        weak(META_LABELS[d["type"]])
-        if stored is not None and image_button_clicked(svg("close"), size=12, tint=icon_tint(), tooltip="Effacer la valeur"):
-            tags.set_meta_value(path, d["id"], None)
-            for kind in ("t", "b"):
-                meta_holders.pop((kind, d["id"]), None)
-
-    add_space(4)
-    horizontal(head)
-    if d["description"]:
-        weak(d["description"])
-    if d["type"] == "formula":
-        text = meta_formula(d, path)
-        label(text if text else "—")
+def meta_apply(change, defs, path, values):
+    """what the person did in the property set goes to the base at once"""
+    d = next((d for d in defs if str(d["id"]) == change[1]), None)
+    if d is None:
         return
-    resolved = meta_resolved(d, path)
-    if resolved and resolved[0] == "inherited":
-        weak(f"↳ {meta_resolved_text(d, resolved)} · hérité de {Path(resolved[2]).name or resolved[2]}")
-    elif resolved and resolved[0] == "summary":
-        weak(f"≈ {meta_resolved_text(d, resolved)} · résumé de {resolved[2]} élément(s)")
-    meta_value_editor(d, path, stored)
+    action = change[0]
+    if action == "clear":
+        tags.set_meta_value(path, d["id"], None)
+    elif action == "set":
+        if d["type"] == "bool":
+            tags.set_meta_value(path, d["id"], change[2])
+        else:
+            typed = meta_typed(d, change[2], values.get(d["id"]))
+            if typed != values.get(d["id"]):
+                tags.set_meta_value(path, d["id"], typed)
+    elif action == "choose":
+        ids = [int(i) for i in change[2]]
+        tags.set_meta_value(path, d["id"], encode_ids(ids, d["config"]["multiple"]) or None)
+    elif action == "add_option":
+        option = tags.add_choice_option(d["id"], change[2])
+        if option is not None:
+            picked_ids = decode_ids(values[d["id"]]) if d["config"]["multiple"] and values.get(d["id"]) else []
+            if option not in picked_ids:
+                picked_ids = picked_ids + [option]
+            tags.set_meta_value(path, d["id"], encode_ids(picked_ids, d["config"]["multiple"]))
 
 
 def meta_columns_ui(defs):
@@ -6952,19 +6918,28 @@ def meta_panel():
     if not defs:
         weak("Aucune propriété : crée-en une avec « Gérer les propriétés… ».")
         return
-    if meta_pane["path"] != str(path):
-        meta_pane["path"] = str(path)
-        meta_holders.clear()
     collapsing("Colonnes des vues", lambda: meta_columns_ui(defs))
     values = tags.meta_values_of(path)
-    for d in defs:
-        meta_row(d, path, values.get(d["id"]))
+    changes = property_set(
+        meta_set,
+        [meta_property(d, path, values.get(d["id"])) for d in defs],
+        key=str(path),
+        default_group="Divers",
+        grouped_label="Par groupe",
+        alphabetical_label="A–Z",
+        filter_hint="Filtrer",
+        clear_tip="Effacer la valeur",
+        add_hint="Ajouter une option",
+        empty_text="Aucune propriété",
+    )
+    for change in changes:
+        meta_apply(change, defs, path, values)
 
 
 # the window that manages the definitions
 
 mm = {"selected": 0, "loaded": 0, "options": {}, "confirm_option": 0, "confirm_property": False}
-mm_name, mm_desc, mm_unit, mm_formula = Str(""), Str(""), Str(""), Str("")
+mm_name, mm_desc, mm_unit, mm_formula, mm_group = Str(""), Str(""), Str(""), Str(""), Str("")
 mm_new_name, mm_new_option = Str(""), Str("")
 mm_new_type = Int(0)
 mm_mode = Int(0)  # 0: closed list, 1: open list
@@ -6977,6 +6952,7 @@ def meta_manager_load(d):
     mm.update(loaded=d["id"], confirm_option=0, confirm_property=False, options={})
     mm_name.value, mm_desc.value = d["name"], d["description"]
     mm_unit.value, mm_formula.value = d["config"]["unit"], d["config"]["formula"]
+    mm_group.value = d["config"]["group"]
     mm_mode.value = 1 if d["config"]["mode"] == "open" else 0
     mm_multiple.value = d["config"]["multiple"]
     mm_new_option.value = ""
@@ -7074,6 +7050,9 @@ def meta_manager_fields(d, draft):
         label("Type")
         label(META_LABELS[d["type"]])
         end_row()
+        label("Groupe")
+        text_edit_singleline(mm_group, hint_text="Divers")
+        end_row()
         label("Description")
         text_edit_multiline(mm_desc)
         end_row()
@@ -7107,6 +7086,7 @@ def meta_manager_fields(d, draft):
     draft["name"], draft["description"] = mm_name.value.strip(), mm_desc.value
     config = draft["config"]
     config["unit"], config["formula"] = mm_unit.value, mm_formula.value
+    config["group"] = mm_group.value.strip()
     config["mode"], config["multiple"] = ("open" if mm_mode.value else "closed"), mm_multiple.value
 
 
@@ -7316,7 +7296,7 @@ PANES = {
     "Preview": zone_pane("dock", lambda: scroll_area_vertical(preview)),
     "Notes": zone_pane("dock", notes_panel),
     "Tags": zone_pane("dock", lambda: scroll_area_vertical(tags_panel)),
-    "Propriétés": zone_pane("dock", lambda: scroll_area_vertical(meta_panel)),
+    "Propriétés": zone_pane("dock", meta_panel),
     "Recent": zone_pane("dock", lambda: scroll_area_vertical(recent_panel)),
     "Recherche": zone_pane("dock", lambda: scroll_area_vertical(find_panel)),
     "Dossiers surveillés": zone_pane("dock", lambda: scroll_area_vertical(watched_panel)),

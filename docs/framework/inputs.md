@@ -705,3 +705,95 @@ def update_func(ctx):
             print("show", clicked)
     left_panel("tags", sidebar)
 ```
+
+
+## `PropertySet`
+
+
+The state of a property set: by group or by name, the groups folded, the filter typed and the row
+selected. Create it once, outside the update function, and draw it with property_set().
+
+**Args**
+
+- `grouped` (bool): rows in groups (categories) that fold (True, default) or sorted by name
+
+Attributes (read and write):
+    grouped (bool): the order of the rows
+
+    filter (str): the text of the filter field
+
+    selected (str | None): the id of the row selected
+
+    split (float): the width of the name column, from 0.2 to 0.8 of the width
+
+    collapsed (list[str]): the groups folded
+
+**Usage:**
+
+```python
+props = PropertySet()
+
+def update_func(ctx):
+    for change in property_set(props, [...]):
+        print(change)
+```
+
+
+- `PropertySet.collapsed` (attribute)
+- `PropertySet.filter` (attribute)
+- `PropertySet.grouped` (attribute)
+- `PropertySet.selected` (attribute)
+- `PropertySet.split` (attribute)
+
+## `property_set(state, properties, **kwargs)`
+
+Draws a property set and returns what the person changed.
+
+A property set is the property grid of an IDE (the "Properties" window of Visual Studio): a table of two
+columns, the name and an editor of the value. The rows are kept in groups (categories) that fold when their
+header is clicked, or sorted by name; a filter field looks in the names, groups, descriptions and values; the
+splitter between the columns can be dragged; the description of the row selected is shown at the bottom.
+
+The widget keeps no value. Give it the current properties at each frame, apply the changes it returns,
+and give it the new values at the next frame. A change the caller does not apply (a text that is not a
+number) is undone by itself when the field loses the focus.
+
+**Args**
+
+- `state` (PropertySet): the state (create it once, outside the update function)
+- `properties` (list[dict]): the rows, in order. A row is a dict with - ``id`` (str): what a change names (default: ``name``) - ``name`` (str): the text of the name column - ``type`` (str): ``"text"`` (default), ``"longtext"``, ``"number"``, ``"bool"``, ``"date"``, ``"choice"`` or ``"readonly"`` - ``value``: a str for a text, number or date (what is typed), a bool for a bool, the id (or a list of ids) of the options chosen for a choice; None for no value - ``group`` (str): its group (category) - ``description`` (str): shown at the bottom when the row is selected, and when the mouse is over its name - ``options`` (list): for a choice, ``str`` or ``{"id", "label", "color"}`` - ``multiple`` (bool), ``open`` (bool): a choice that takes several options, and one the person can add options to - ``note`` (str): what the row has without a value of its own (``"inherited from X"``), shown weak where the value would be - ``hint`` (str): shown in an empty field - ``unit`` (str): after a number - ``readonly`` (bool): shown, not editable
+
+**Keyword args**
+
+- `key` (str): what the properties are about (a path, a name): when it changes, the texts being typed and the selection are dropped (default "")
+- `id` (str): tells two property sets with one state apart
+- `toolbar` (bool): the order buttons and the filter field (default True)
+- `description` (bool): the description of the row selected at the bottom (default True)
+- `row_height` (float): default 26
+- `default_group` (str): the group of the rows that have none (default "Misc")
+- grouped_label, alphabetical_label, filter_hint, clear_tip, add_hint, empty_text (str): the texts of the widget, to translate it
+
+**Returns**
+
+- list[tuple]: the changes of this frame, each ``("set", id, text)`` (a text, or "1" / "0" for a bool),
+- ``("clear", id)``, ``("choose", id, [option ids])`` or ``("add_option", id, label)`` (a new option of an
+- open list, to add and choose)
+
+**Example:**
+
+```python
+values = {"name": "Report", "done": False}
+props = PropertySet()
+
+def update_func(ctx):
+    rows = [
+        dict(id="name", name="Name", group="General", value=values["name"], description="The title"),
+        dict(id="done", name="Done", type="bool", group="General", value=values["done"]),
+        dict(id="size", name="Size", type="number", group="Layout", unit="cm", value="21"),
+    ]
+    for change in property_set(props, rows):
+        if change[0] == "set" and change[1] == "name":
+            values["name"] = change[2]
+        elif change[0] == "set" and change[1] == "done":
+            values["done"] = change[2] == "1"
+```
