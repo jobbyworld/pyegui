@@ -39,6 +39,7 @@ mod style;
 mod table;
 mod table_view;
 mod tags;
+mod property_set;
 mod terminal;
 mod titlebar;
 mod viewport;
@@ -2990,6 +2991,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "pdf")]
     pdf_view::register(m)?;
     tags::register(m)?;
+    property_set::register(m)?;
     debuglog::register(m)?;
     Ok(())
 }

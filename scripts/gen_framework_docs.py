@@ -44,7 +44,8 @@ THEMES = [
       "toggle_value", "switch", "segmented_control", "segmented_buttons", "combo_box", "slider_int", "slider_float", "drag_int",
       "drag_float", "drag_angle", "text_edit_singleline", "text_edit_multiline", "code_editor",
       "date_picker_button", "DateRange", "date_range_picker", "parse_date", "parse_date_range", "human_day", "color_edit_button_rgb", "color_edit_button_rgba", "progress",
-      "spinner", "Tags", "tags_edit", "TagTreeView", "tag_tree_view"]),
+      "spinner", "Tags", "tags_edit", "TagTreeView", "tag_tree_view",
+      "PropertySet", "property_set"]),
     ("layout", "Layout, sizes and scrolling",
      "Update functions can be nested: a function given to `horizontal`, `group`, `frame`... "
      "draws in a child ui with its own layout and style. Panels must be added before any other "

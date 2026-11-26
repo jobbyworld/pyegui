@@ -29,6 +29,7 @@ pub mod human_date;
 pub mod files;
 pub mod terminal;
 pub mod tags;
+pub mod property_set;
 pub mod dock_draw;
 pub mod segmented;
 pub mod markdown;

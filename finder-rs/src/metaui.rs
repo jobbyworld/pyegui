@@ -8,10 +8,11 @@ use chrono::{DateTime, NaiveDate, NaiveTime};
 use eframe::egui::{self, Color32, RichText};
 use pyegui_core::columns::Value;
 use pyegui_core::date_input::parse_date;
-use pyegui_core::human_date::human_full_date;
-use pyegui_core::meta::{eval_formula, file_var, decode_ids, display, encode_ids, resolve, resolved_column_value, resolved_text, ListMode, MetaDef, MetaType, Resolved};
+use pyegui_core::meta::{resolve_with, rule_value, RuleSet, eval_formula, file_var, decode_ids, encode_ids, resolved_column_value, resolved_text, ListMode, MetaDef, MetaType, Resolved};
 use std::collections::BTreeMap;
 use std::rc::Rc;
+
+use pyegui_core::property_set::{Change, Kind, PropOption, Property, PropertySetOptions};
 
 use crate::app::FinderApp;
 use crate::glyphs;
@@ -25,8 +26,8 @@ pub struct MetaUi {
     pub rules: Option<(String, String)>,
     /// the item whose values the pane shows, and the text being typed for each property
     path: Option<PathBuf>,
-    buffers: HashMap<i64, String>,
-    new_option: HashMap<i64, String>,
+    /// the look of the property set: by group or by name, the groups folded, the filter
+    set: pyegui_core::property_set::PropertySetState,
 }
 
 #[derive(Default)]
@@ -48,6 +49,8 @@ pub struct Manager {
 pub struct MetaCache {
     version: u64,
     defs: Rc<Vec<MetaDef>>,
+    /// the enabled rules, the most precise first
+    rules: Rc<RuleSet>,
     values: HashMap<i64, Rc<BTreeMap<String, String>>>,
     resolved: HashMap<(i64, PathBuf), Rc<Resolved>>,
     computed: HashMap<(i64, PathBuf), Rc<String>>,
@@ -63,7 +66,12 @@ impl FinderApp {
         let mut cache = self.meta_cache.borrow_mut();
         let version = self.tags.as_ref().map_or(0, |s| s.version) + 1;
         if cache.version != version {
-            *cache = MetaCache { version, defs: Rc::new(self.tags.as_ref().map(|s| s.meta_defs()).unwrap_or_default()), ..Default::default() };
+            *cache = MetaCache {
+                version,
+                defs: Rc::new(self.tags.as_ref().map(|s| s.meta_defs()).unwrap_or_default()),
+                rules: Rc::new(self.tags.as_ref().map(|s| s.ordered_rules()).unwrap_or_default()),
+                ..Default::default()
+            };
         }
         cache
     }
@@ -82,7 +90,9 @@ impl FinderApp {
         let Some(store) = &self.tags else { return Rc::new(Resolved::None) };
         let values = cache.values.entry(def.id).or_insert_with(|| Rc::new(store.meta_all(def.id))).clone();
         let key = crate::tagstore::key(path);
-        let resolved = Rc::new(resolve(&values, &key, std::path::MAIN_SEPARATOR, || path.is_dir()));
+        let (rules, today) = (cache.rules.clone(), chrono::Local::now().date_naive());
+        let virt = |folder: &str, is_self: bool| if is_self && !path.is_dir() { None } else { rule_value(&rules, def, folder, std::path::MAIN_SEPARATOR, today) };
+        let resolved = Rc::new(resolve_with(&values, &key, std::path::MAIN_SEPARATOR, || path.is_dir(), &virt));
         cache.resolved.insert((def.id, path.to_path_buf()), resolved.clone());
         resolved
     }
@@ -232,6 +242,51 @@ fn target(app: &FinderApp) -> (PathBuf, bool) {
     }
 }
 
+/// The row of the property set for a property: its editor, its value, and what the item has without a value of its own
+fn property_of(app: &FinderApp, def: &MetaDef, resolved: &Resolved, stored: Option<&str>, path: &std::path::Path) -> Property {
+    let kind = match def.ty {
+        MetaType::Text => Kind::Text,
+        MetaType::LongText => Kind::LongText,
+        MetaType::Number => Kind::Number,
+        MetaType::Date => Kind::Date,
+        MetaType::Bool => Kind::Bool,
+        MetaType::Formula => Kind::Readonly,
+        MetaType::Choice => Kind::Choice {
+            options: def.config.options.iter().map(|o| PropOption { id: o.id.to_string(), label: o.label.clone(), color: (!o.color.is_empty()).then(|| parse_color(&o.color)) }).collect(),
+            multiple: def.config.multiple,
+            open: def.config.mode == ListMode::Open,
+        },
+    };
+    let mut p = Property::new(&def.id.to_string(), &def.name, kind);
+    p.group = def.config.group.clone();
+    p.description = def.description.clone();
+    p.hint = match def.ty {
+        MetaType::Date => "jj/mm/aaaa, demain, 12 mars…".into(),
+        MetaType::Number => "nombre".into(),
+        _ => String::new(),
+    };
+    if def.ty == MetaType::Number {
+        p.unit = def.config.unit.clone();
+    }
+    match (def.ty, stored) {
+        (MetaType::Formula, _) => p.value = app.meta_formula(def, path).to_string(),
+        (MetaType::Choice, Some(v)) => p.selected = decode_ids(v).iter().map(|i| i.to_string()).collect(),
+        (_, Some(v)) => p.value = editable(def, v),
+        _ => {}
+    }
+    if stored.is_none() && def.ty != MetaType::Formula {
+        p.note = match resolved {
+            Resolved::Inherited { from, .. } => {
+                let name = std::path::Path::new(from).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| from.clone());
+                format!("↳ {} · hérité de {name}", resolved_text(def, resolved, &date_text))
+            }
+            Resolved::Summary(s) => format!("≈ {} · résumé de {} élément(s)", resolved_text(def, resolved, &date_text), s.items),
+            _ => String::new(),
+        };
+    }
+    p
+}
+
 /// The pane of the properties: for the selected item (or the folder shown), one editor per property
 pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
     if app.tags.is_none() {
@@ -267,8 +322,6 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
     }
     if app.meta.path.as_ref() != Some(&path) {
         app.meta.path = Some(path.clone());
-        app.meta.buffers.clear();
-        app.meta.new_option.clear();
     }
     let values = app.tags.as_ref().map(|s| s.meta_values_of(&path)).unwrap_or_default();
     let resolved: Vec<Rc<Resolved>> = defs.iter().map(|d| if d.ty == MetaType::Formula { Rc::new(Resolved::None) } else { app.meta_resolved(d, &path) }).collect();
@@ -283,122 +336,51 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
             }
         }
     });
+    let rows: Vec<Property> = defs.iter().zip(&resolved).map(|(def, resolved)| property_of(app, def, resolved, values.get(&def.id).map(String::as_str), &path)).collect();
+    let mut options = PropertySetOptions::new(egui::Id::unique("meta-set"));
+    options.key = path.to_string_lossy().into_owned();
+    options.default_group = "Divers".into();
+    options.grouped_label = "Par groupe".into();
+    options.alphabetical_label = "A–Z".into();
+    options.filter_hint = "Filtrer".into();
+    options.clear_tip = "Effacer la valeur".into();
+    options.add_hint = "Ajouter une option".into();
+    options.empty_text = "Aucune propriété".into();
+    let changes = pyegui_core::property_set::property_set(ui, &mut app.meta.set, &rows, &options);
     let mut acts: Vec<Act> = vec![];
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        for (def, resolved) in defs.iter().zip(&resolved) {
-            let stored = values.get(&def.id).cloned();
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                let label = ui.label(RichText::new(&def.name).strong());
-                if !def.description.is_empty() {
-                    label.on_hover_text(&def.description);
-                }
-                ui.weak(def.ty.label());
-                if stored.is_some() && glyphs::button(ui, glyphs::CLOSE, 12.0, false, "Effacer la valeur").clicked() {
+    for change in changes {
+        let def_of = |id: &str| id.parse::<i64>().ok().and_then(|id| defs.iter().find(|d| d.id == id));
+        match change {
+            Change::Clear { id } => {
+                if let Some(def) = def_of(&id) {
                     acts.push(Act::Set(def.id, None));
-                    app.meta.buffers.remove(&def.id);
                 }
-            });
-            // what the item has without a value of its own: the one of a folder around it, or what is below it
-            if def.ty == MetaType::Formula {
-                let text = app.meta_formula(def, &path);
-                ui.label(if text.is_empty() { RichText::new("—").weak() } else { RichText::new(&*text) });
-                continue;
             }
-            match &**resolved {
-                Resolved::Inherited { from, .. } => {
-                    let name = std::path::Path::new(from).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| from.clone());
-                    ui.label(RichText::new(format!("↳ {} · hérité de {name}", resolved_text(def, resolved, &date_text))).italics().weak());
+            Change::Set { id, value } => {
+                let Some(def) = def_of(&id) else { continue };
+                if def.ty == MetaType::Bool {
+                    acts.push(Act::Set(def.id, Some(value)));
+                } else {
+                    match parse_typed(def, &value) {
+                        Typed::Value(v) => acts.push(Act::Set(def.id, Some(v))),
+                        Typed::Empty => acts.push(Act::Set(def.id, None)),
+                        Typed::Invalid => {}
+                    }
                 }
-                Resolved::Summary(s) => {
-                    ui.label(RichText::new(format!("≈ {} · résumé de {} élément(s)", resolved_text(def, resolved, &date_text), s.items)).italics().weak());
-                }
-                _ => {}
             }
-            match def.ty {
-                MetaType::Bool => {
-                    let mut on = stored.as_deref() == Some("1");
-                    let words = if on { "Oui" } else { "Non" };
-                    if ui.checkbox(&mut on, words).changed() {
-                        acts.push(Act::Set(def.id, Some(if on { "1" } else { "0" }.into())));
-                    }
-                }
-                MetaType::Choice => {
-                    let ids = stored.as_deref().map(decode_ids).unwrap_or_default();
-                    let shown = if ids.is_empty() { "—".to_owned() } else { display(def, stored.as_deref().unwrap_or("")) };
-                    let new_option = app.meta.new_option.entry(def.id).or_default();
-                    egui::ComboBox::from_id_salt(("meta-choice", def.id)).selected_text(shown).width(ui.available_width() - 8.0).show_ui(ui, |ui| {
-                        for option in &def.config.options {
-                            let swatch = if option.color.is_empty() { None } else { Some(parse_color(&option.color)) };
-                            ui.horizontal(|ui| {
-                                if let Some(color) = swatch {
-                                    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                                    ui.painter().circle_filled(rect.center(), 5.0, color);
-                                }
-                                if def.config.multiple {
-                                    let mut on = ids.contains(&option.id);
-                                    if ui.checkbox(&mut on, &option.label).changed() {
-                                        let mut next = ids.clone();
-                                        if on { next.push(option.id) } else { next.retain(|i| *i != option.id) }
-                                        // the order of the list, not the order of the clicks
-                                        next.sort_by_key(|id| def.config.options.iter().position(|o| o.id == *id));
-                                        let text = encode_ids(&next, true);
-                                        acts.push(Act::Set(def.id, (!text.is_empty()).then_some(text)));
-                                    }
-                                } else if ui.selectable_label(ids == [option.id], &option.label).clicked() {
-                                    acts.push(Act::Set(def.id, Some(option.id.to_string())));
-                                    ui.close();
-                                }
-                            });
-                        }
-                        if def.config.options.is_empty() {
-                            ui.weak("Aucune option");
-                        }
-                        if def.config.mode == ListMode::Open {
-                            ui.separator();
-                            let edit = ui.add(egui::TextEdit::singleline(new_option).hint_text("Ajouter une option").desired_width(160.0));
-                            if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !new_option.trim().is_empty() {
-                                acts.push(Act::AddAndPick(def.id, std::mem::take(new_option)));
-                                edit.request_focus();
-                            }
-                        }
-                    });
-                }
-                _ => {
-                    let current = stored.as_deref().map(|v| editable(def, v)).unwrap_or_default();
-                    let buffer = app.meta.buffers.entry(def.id).or_insert_with(|| current.clone());
-                    let edit = if def.ty == MetaType::LongText {
-                        ui.add(egui::TextEdit::multiline(buffer).desired_rows(3).desired_width(f32::INFINITY))
-                    } else {
-                        let hint = match def.ty {
-                            MetaType::Date => "jj/mm/aaaa, demain, 12 mars…",
-                            MetaType::Number => "nombre",
-                            _ => "",
-                        };
-                        ui.add(egui::TextEdit::singleline(buffer).hint_text(hint).desired_width(f32::INFINITY))
-                    };
-                    if edit.lost_focus() && *buffer != current {
-                        match parse_typed(def, buffer) {
-                            Typed::Value(v) => acts.push(Act::Set(def.id, Some(v))),
-                            Typed::Empty => acts.push(Act::Set(def.id, None)),
-                            Typed::Invalid => *buffer = current.clone(),
-                        }
-                    } else if !edit.has_focus() && *buffer != current {
-                        // changed elsewhere (a cleared value, another window of the app)
-                        *buffer = current.clone();
-                    }
-                    if def.ty == MetaType::Date {
-                        if let Some(day) = stored.as_deref().and_then(|v| v.trim().parse().ok()).and_then(seconds_day) {
-                            ui.weak(human_full_date(day));
-                        }
-                    }
-                    if def.ty == MetaType::Number && !def.config.unit.is_empty() && stored.is_some() {
-                        ui.weak(display(def, stored.as_deref().unwrap_or("")));
-                    }
+            Change::Choose { id, ids } => {
+                let Some(def) = def_of(&id) else { continue };
+                let ids: Vec<i64> = ids.iter().filter_map(|i| i.parse().ok()).collect();
+                let text = encode_ids(&ids, def.config.multiple);
+                acts.push(Act::Set(def.id, (!text.is_empty()).then_some(text)));
+            }
+            Change::AddOption { id, label } => {
+                if let Some(def) = def_of(&id) {
+                    acts.push(Act::AddAndPick(def.id, label));
                 }
             }
         }
-    });
+    }
     if acts.is_empty() {
         return;
     }
@@ -417,7 +399,6 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
             }
         }
     }
-    app.meta.buffers.clear();
 }
 
 /// The window that manages the definitions
@@ -439,12 +420,14 @@ pub fn modal(app: &mut FinderApp, ctx: &egui::Context) {
     }
     let mut close = false;
     let mut save = false;
-    egui::Modal::new(egui::Id::unique("meta-manager")).show(ctx, |ui| {
+    crate::glyphs::modal(ctx, "meta-manager").show(ctx, |ui| {
         // a fixed size: nothing inside may ask for more, or the window grows at every frame
         ui.set_width(660.0);
         ui.set_max_width(660.0);
         ui.set_max_height(560.0);
-        ui.heading("Propriétés");
+        if crate::glyphs::modal_title(ui, "Propriétés") {
+            close = true;
+        }
         ui.weak("Un nom, un type et une description. Les valeurs se mettent sur les fichiers et dossiers depuis le panneau Propriétés.");
         ui.add_space(6.0);
         ui.horizontal_top(|ui| {
@@ -502,6 +485,11 @@ pub fn modal(app: &mut FinderApp, ctx: &egui::Context) {
                     ui.end_row();
                     ui.label("Type");
                     ui.label(draft.ty.label());
+                    ui.end_row();
+                    ui.label("Groupe");
+                    if ui.add(egui::TextEdit::singleline(&mut draft.config.group).hint_text("Divers").desired_width(280.0)).lost_focus() {
+                        save = true;
+                    }
                     ui.end_row();
                     ui.label("Description");
                     let description = ui.add(egui::TextEdit::multiline(&mut draft.description).desired_rows(2).desired_width(280.0));
@@ -679,13 +667,15 @@ pub fn rules_modal(app: &mut FinderApp, ctx: &egui::Context) {
     let (mut close, mut apply, mut add) = (false, false, false);
     let mut delete: Option<i64> = None;
     let mut change: Option<crate::metastore::Rule> = None;
-    egui::Modal::new(egui::Id::unique("meta-rules")).show(ctx, |ui| {
+    crate::glyphs::modal(ctx, "meta-rules").show(ctx, |ui| {
         // a fixed size: nothing inside may ask for more, or the window grows at every frame
         ui.set_width(640.0);
         ui.set_max_width(640.0);
         ui.set_max_height(520.0);
-        ui.heading("Règles d'indexation");
-        ui.weak("Sous un dossier, chaque niveau de sous-dossiers remplit une propriété : {project}/{entreprise}/{chapter}. Les valeurs se mettent sur les dossiers (leur contenu en hérite) à la fin d'une indexation ou avec « Appliquer ». Une valeur tapée à la main n'est jamais remplacée. * ignore un niveau.");
+        if crate::glyphs::modal_title(ui, "Règles d'indexation") {
+            close = true;
+        }
+        ui.weak("Sous un dossier, chaque niveau de sous-dossiers remplit une propriété : {project}/{entreprise}/{chapter}. Les valeurs se mettent sur les dossiers (leur contenu en hérite) à la fin d'une indexation ou avec « Appliquer ». Une valeur tapée à la main n'est jamais remplacée. * ignore un niveau ; un nom de dossier fixe (00 - DOE Livrés) ne s'applique qu'à ce dossier ; [Statut=Terminé] après un niveau donne cette valeur à son dossier.");
         ui.add_space(6.0);
         egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
             for rule in &rules {

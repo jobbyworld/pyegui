@@ -1898,7 +1898,8 @@ pub fn draw_tree(
     if let Some(slot) = &slot {
         let shift = (full_clip.top() - slot.top()).max(0.0);
         ctx.data_mut(|d| d.insert_temp(Id::unique(columns::HEADER_SCROLLED), shift > 0.5));
-        let below = (slot.bottom() + shift).clamp(full_clip.top(), full_clip.bottom());
+        // not `clamp`: a clip rect of a view squeezed to nothing has its top under its bottom, and clamp panics
+        let below = (slot.bottom() + shift).max(full_clip.top()).min(full_clip.bottom().max(full_clip.top()));
         ui.shrink_clip_rect(Rect::from_min_max(pos2(full_clip.left(), below), full_clip.max));
     }
     let (tree_response, actions) = tree.show_state(ui, &mut state, |builder| {

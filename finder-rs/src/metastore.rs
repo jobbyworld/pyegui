@@ -176,6 +176,19 @@ pub struct Rule {
 }
 
 impl TagStore {
+    /// The rules, the most precise first: more fixed names in the pattern, then a deeper root, then the older
+    fn by_precision(rules: &[Rule]) -> Vec<&Rule> {
+        let mut order: Vec<&Rule> = rules.iter().collect();
+        order.sort_by_key(|r| (std::cmp::Reverse(Pattern::parse(&r.pattern).map_or(0, |p| p.specificity())), std::cmp::Reverse(r.root.len()), r.id));
+        order
+    }
+
+    /// The enabled rules with a valid pattern, the most precise first: what `rule_value` reads
+    pub fn ordered_rules(&self) -> pyegui_core::meta::RuleSet {
+        let rules = self.meta_rules();
+        Self::by_precision(&rules).into_iter().filter(|r| r.enabled).filter_map(|r| Some((r.root.clone(), Pattern::parse(&r.pattern)?))).collect()
+    }
+
     pub fn meta_rules(&self) -> Vec<Rule> {
         let Ok(mut statement) = self.db.prepare("SELECT id, root, pattern, enabled FROM meta_rules ORDER BY id") else { return vec![] };
         statement
@@ -216,8 +229,11 @@ impl TagStore {
         let (mut written, mut unknown) = (0, Vec::new());
         let _ = self.db.execute_batch("BEGIN");
         for rule in &rules {
+            let _ = self.db.execute("DELETE FROM meta_values WHERE source = ?", params![format!("auto:{}", rule.id)]);
+        }
+        // the most precise rule writes first (OR IGNORE below leaves the folder to it)
+        for rule in Self::by_precision(&rules) {
             let source = format!("auto:{}", rule.id);
-            let _ = self.db.execute("DELETE FROM meta_values WHERE source = ?", params![source]);
             let Some(pattern) = Pattern::parse(&rule.pattern).filter(|_| rule.enabled) else { continue };
             for name in pattern.names() {
                 if !defs.iter().any(|d| d.name.to_lowercase() == name.to_lowercase()) && !unknown.iter().any(|u: &String| u.to_lowercase() == name.to_lowercase()) {
@@ -230,15 +246,16 @@ impl TagStore {
                 Err(_) => continue,
             };
             for folder in folders {
-                let Some((name, text)) = pattern.assign(&rule.root, &folder, sep) else { continue };
-                let Some(def) = defs.iter_mut().find(|d| d.name.to_lowercase() == name.to_lowercase()) else { continue };
-                let before = def.config.clone();
-                let Some(value) = parse_input(def, &text, today) else { continue };
-                if def.config != before {
-                    let _ = self.db.execute("UPDATE meta_defs SET config = ? WHERE id = ?", params![def.config.to_json(), def.id]);
+                for (name, text) in pattern.assign(&rule.root, &folder, sep) {
+                    let Some(def) = defs.iter_mut().find(|d| d.name.to_lowercase() == name.to_lowercase()) else { continue };
+                    let before = def.config.clone();
+                    let Some(value) = parse_input(def, &text, today) else { continue };
+                    if def.config != before {
+                        let _ = self.db.execute("UPDATE meta_defs SET config = ? WHERE id = ?", params![def.config.to_json(), def.id]);
+                    }
+                    // OR IGNORE: a value that is already there (typed, or from another rule) stays
+                    written += self.db.execute("INSERT OR IGNORE INTO meta_values (path, def_id, value, source) VALUES (?, ?, ?, ?)", params![folder, def.id, value, source]).unwrap_or(0);
                 }
-                // OR IGNORE: a value that is already there (typed, or from another rule) stays
-                written += self.db.execute("INSERT OR IGNORE INTO meta_values (path, def_id, value, source) VALUES (?, ?, ?, ?)", params![folder, def.id, value, source]).unwrap_or(0);
             }
         }
         let _ = self.db.execute_batch("COMMIT");
@@ -377,5 +394,28 @@ mod tests {
         s.add_meta_rule(Path::new("/data"), "{Client}/{x}").unwrap();
         s.create_meta("client", MetaType::Text).unwrap();
         assert_eq!(s.apply_meta_rules(), (0, vec!["x".to_owned()]));
+    }
+
+    #[test]
+    fn two_rules_with_a_fixed_folder_set_a_value_on_it_and_name_the_repos() {
+        let mut s = store();
+        s.create_meta("Repo", MetaType::Text).unwrap();
+        let privacy = s.create_meta("privacy", MetaType::Choice).unwrap();
+        let mut d = s.meta_def(privacy).unwrap();
+        d.config.mode = pyegui_core::meta::ListMode::Open;
+        let (perso, pro) = (d.config.add_option("perso").unwrap(), d.config.add_option("pro").unwrap());
+        s.update_meta(&d);
+        for (path, dir) in [("/V", true), ("/V/Github", true), ("/V/Github/a", true), ("/V/Github/a/x", false), ("/V/Github-pro", true), ("/V/Github-pro/b", true)] {
+            s.db.execute("INSERT INTO files (path, is_dir) VALUES (?, ?)", params![path, dir as i64]).unwrap();
+        }
+        s.add_meta_rule(Path::new("/V"), "github[privacy=perso]/{repo}").unwrap();
+        s.add_meta_rule(Path::new("/V"), "github-pro[privacy=pro]/{repo}").unwrap();
+        let (_, unknown) = s.apply_meta_rules();
+        assert!(unknown.is_empty());
+        let get = |p: &str, def| s.meta_value(Path::new(p), def);
+        assert_eq!(get("/V/Github", privacy), Some(perso.to_string()));
+        assert_eq!(get("/V/Github-pro", privacy), Some(pro.to_string()));
+        assert_eq!(get("/V/Github/a", 1).as_deref(), Some("a"));
+        assert_eq!(get("/V/Github-pro/b", 1).as_deref(), Some("b"));
     }
 }

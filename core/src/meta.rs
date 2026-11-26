@@ -100,6 +100,8 @@ pub struct ChoiceOption {
 #[derive(Clone, PartialEq, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// the group (category) of the property in the property set
+    pub group: String,
     // choice
     pub mode: ListMode,
     pub multiple: bool,
@@ -300,13 +302,20 @@ fn parent_of(path: &str, sep: char) -> Option<&str> {
 /// separator of the paths. The path itself wins, then its nearest folder; a folder that has neither gets the summary
 /// of what is below it (`is_dir`).
 pub fn resolve(values: &BTreeMap<String, String>, path: &str, sep: char, is_dir: impl FnOnce() -> bool) -> Resolved {
-    if let Some(v) = values.get(path) {
-        return Resolved::Own(v.clone());
+    resolve_with(values, path, sep, is_dir, &|_, _| None)
+}
+
+/// `resolve` where a folder that has no stored value may still get one from the rules of the indexation
+/// (`rule_value`), so that a folder the index does not know yet is read like the others. `virt(path, is_self)`
+/// is asked for the path itself (`is_self`) and for each folder above it, after the stored values of that level.
+pub fn resolve_with(values: &BTreeMap<String, String>, path: &str, sep: char, is_dir: impl FnOnce() -> bool, virt: &dyn Fn(&str, bool) -> Option<String>) -> Resolved {
+    if let Some(v) = values.get(path).cloned().or_else(|| virt(path, true)) {
+        return Resolved::Own(v);
     }
     let mut at = path;
     while let Some(parent) = parent_of(at, sep) {
-        if let Some(v) = values.get(parent) {
-            return Resolved::Inherited { value: v.clone(), from: parent.to_owned() };
+        if let Some(v) = values.get(parent).cloned().or_else(|| virt(parent, false)) {
+            return Resolved::Inherited { value: v, from: parent.to_owned() };
         }
         at = parent;
     }
@@ -482,28 +491,80 @@ pub fn file_var(path: &std::path::Path, name: &str) -> Option<String> {
 // rules of the indexation
 
 /// A folder structure that names properties: `{project}/{entreprise}/{chapter}`. The first folder under the root
-/// is the project, the one under it the entreprise, and so on. A part that is not `{name}` (`*`, `_`, or any
-/// text) is a level that gives nothing.
+/// is the project, the one under it the entreprise, and so on. `*` or `_` is a level that gives nothing and
+/// accepts any folder; any other text (`00 - DOE Livrés`) is a level that gives nothing and only accepts a
+/// folder of that name (case ignored): the pattern does not apply under a folder that has another name.
+/// A level may also set values: `[Statut=Terminé]` after it gives that value to the folder of that level
+/// (`00 - DOE Livrés [Statut=Terminé]`), several are separated by `;`. `{projet!00 - DOE Livrés|Archives}` is a
+/// name that refuses the folders called so (and what is below them).
 #[derive(Clone, PartialEq, Debug)]
 pub struct Pattern {
-    levels: Vec<Option<String>>,
+    levels: Vec<Level>,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+struct Level {
+    kind: Kind,
+    /// (property, text) set on the folder of this level
+    sets: Vec<(String, String)>,
+    /// folder names (lowercase) that a `{name!...}` level refuses
+    except: Vec<String>,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+enum Kind {
+    Any,
+    Fixed(String),
+    Name(String),
 }
 
 impl Pattern {
-    /// None when the text holds no `{name}` at all
+    /// None when the text names no property at all (no `{name}` and no `[name=value]`)
     pub fn parse(text: &str) -> Option<Self> {
-        let levels: Vec<Option<String>> = text
+        let levels: Vec<Level> = text
             .split(['/', '\\'])
             .map(str::trim)
             .filter(|part| !part.is_empty())
-            .map(|part| part.strip_prefix('{').and_then(|p| p.strip_suffix('}')).map(|n| n.trim().to_owned()).filter(|n| !n.is_empty()))
+            .map(|part| {
+                let (head, sets) = match part.strip_suffix(']').and_then(|p| p.rsplit_once('[')) {
+                    Some((head, inside)) => {
+                        let sets = inside
+                            .split(';')
+                            .filter_map(|one| one.split_once('='))
+                            .map(|(n, v)| (n.trim().to_owned(), v.trim().to_owned()))
+                            .filter(|(n, v)| !n.is_empty() && !v.is_empty())
+                            .collect();
+                        (head.trim(), sets)
+                    }
+                    None => (part, Vec::new()),
+                };
+                let inside = head.strip_prefix('{').and_then(|p| p.strip_suffix('}')).map(|n| n.trim());
+                let (inside, except) = match inside.and_then(|n| n.split_once('!')) {
+                    Some((name, list)) => (Some(name.trim()), list.split('|').map(|x| x.trim().to_lowercase()).filter(|x| !x.is_empty()).collect()),
+                    None => (inside, Vec::new()),
+                };
+                let kind = match inside {
+                    Some(name) if !name.is_empty() => Kind::Name(name.to_owned()),
+                    Some(_) => Kind::Any,
+                    None if head.is_empty() || head == "*" || head == "_" => Kind::Any,
+                    None => Kind::Fixed(head.to_owned()),
+                };
+                Level { kind, sets, except }
+            })
             .collect();
-        levels.iter().any(Option::is_some).then_some(Pattern { levels })
+        levels.iter().any(|l| matches!(l.kind, Kind::Name(_)) || !l.sets.is_empty()).then_some(Pattern { levels })
     }
 
-    /// The names the pattern fills, in order of level
+    /// The names of the properties the pattern fills or sets, in order of level
     pub fn names(&self) -> Vec<&str> {
-        self.levels.iter().flatten().map(String::as_str).collect()
+        let mut out = Vec::new();
+        for l in &self.levels {
+            if let Kind::Name(n) = &l.kind {
+                out.push(n.as_str());
+            }
+            out.extend(l.sets.iter().map(|(n, _)| n.as_str()));
+        }
+        out
     }
 
     /// How many levels under the root the pattern reads
@@ -511,14 +572,57 @@ impl Pattern {
         self.levels.len()
     }
 
-    /// What a folder gives: the name filled and the name of the folder, if it is under `root` at a level the
-    /// pattern names. `root` and `folder` are stored paths, `sep` is their separator.
-    pub fn assign<'a>(&'a self, root: &str, folder: &str, sep: char) -> Option<(&'a str, String)> {
-        let rest = folder.strip_prefix(root.trim_end_matches(sep))?.strip_prefix(sep)?;
-        let parts: Vec<&str> = rest.split(sep).filter(|p| !p.is_empty()).collect();
-        let name = self.levels.get(parts.len().checked_sub(1)?)?.as_deref()?;
-        Some((name, parts.last()?.to_string()))
+    /// How many levels name a folder: of two rules that give the same folder a value, the more precise wins
+    pub fn specificity(&self) -> usize {
+        self.levels.iter().filter(|l| matches!(l.kind, Kind::Fixed(_))).count()
     }
+
+    /// What a folder gives: the (property, text) pairs, if it is under `root` and the folders above it have the
+    /// names the pattern asks: the name of the level, filled with the name of the folder, and the values the
+    /// level sets. Empty when the folder gives nothing. `root` and `folder` are stored paths, `sep` is their
+    /// separator.
+    pub fn assign(&self, root: &str, folder: &str, sep: char) -> Vec<(String, String)> {
+        let Some(rest) = folder.strip_prefix(root.trim_end_matches(sep)).and_then(|r| r.strip_prefix(sep)) else { return vec![] };
+        let parts: Vec<&str> = rest.split(sep).filter(|p| !p.is_empty()).collect();
+        let Some(at) = parts.len().checked_sub(1) else { return vec![] };
+        let Some(level) = self.levels.get(at) else { return vec![] };
+        for (l, part) in self.levels.iter().zip(&parts) {
+            if let Kind::Fixed(text) = &l.kind {
+                if text.to_lowercase() != part.to_lowercase() {
+                    return vec![];
+                }
+            }
+            if l.except.contains(&part.to_lowercase()) {
+                return vec![];
+            }
+        }
+        let mut out = Vec::new();
+        if let Kind::Name(name) = &level.kind {
+            out.push((name.clone(), parts[at].to_string()));
+        }
+        out.extend(level.sets.iter().cloned());
+        out
+    }
+}
+
+/// A rule of the indexation: its root (a stored path) and its pattern
+pub type RuleSet = Vec<(String, Pattern)>;
+
+/// What the rules give a folder for a property, without the index: the value of the first rule (they come most
+/// precise first) whose pattern names the property at the level of the folder. None for a list that does not
+/// have the label yet (indexing adds it).
+pub fn rule_value(rules: &RuleSet, def: &MetaDef, folder: &str, sep: char, today: chrono::NaiveDate) -> Option<String> {
+    for (root, pattern) in rules {
+        for (name, text) in pattern.assign(root, folder, sep) {
+            if name.to_lowercase() != def.name.to_lowercase() {
+                continue;
+            }
+            let mut copy = def.clone();
+            let value = parse_input(&mut copy, &text, today)?;
+            return (copy.config == def.config).then_some(value);
+        }
+    }
+    None
 }
 
 /// The stored value of a text for a property (a folder name read by a rule, say). For an open list a new label
@@ -754,16 +858,55 @@ mod tests {
         let p = Pattern::parse("{project}/{entreprise}/*/{chapter}").unwrap();
         assert_eq!(p.names(), vec!["project", "entreprise", "chapter"]);
         assert_eq!(p.depth(), 4);
-        assert_eq!(p.assign("/data", "/data/Alpha", '/'), Some(("project", "Alpha".into())));
-        assert_eq!(p.assign("/data/", "/data/Alpha/ACME", '/'), Some(("entreprise", "ACME".into())), "a slash at the end of the root is fine");
-        assert_eq!(p.assign("/data", "/data/Alpha/ACME/misc", '/'), None, "a level that is not named");
-        assert_eq!(p.assign("/data", "/data/Alpha/ACME/misc/Ch1", '/'), Some(("chapter", "Ch1".into())));
-        assert_eq!(p.assign("/data", "/data/Alpha/ACME/misc/Ch1/deeper", '/'), None, "below the pattern");
-        assert_eq!(p.assign("/data", "/data", '/'), None, "the root gives nothing");
-        assert_eq!(p.assign("/data", "/database/x", '/'), None, "/database is not under /data");
+        assert_eq!(p.assign("/data", "/data/Alpha", '/'), vec![("project".into(), "Alpha".into())]);
+        assert_eq!(p.assign("/data/", "/data/Alpha/ACME", '/'), vec![("entreprise".into(), "ACME".into())], "a slash at the end of the root is fine");
+        assert_eq!(p.assign("/data", "/data/Alpha/ACME/misc", '/'), Vec::<(String, String)>::new(), "a level that is not named");
+        assert_eq!(p.assign("/data", "/data/Alpha/ACME/misc/Ch1", '/'), vec![("chapter".into(), "Ch1".into())]);
+        assert_eq!(p.assign("/data", "/data/Alpha/ACME/misc/Ch1/deeper", '/'), Vec::<(String, String)>::new(), "below the pattern");
+        assert_eq!(p.assign("/data", "/data", '/'), Vec::<(String, String)>::new(), "the root gives nothing");
+        assert_eq!(p.assign("/data", "/database/x", '/'), Vec::<(String, String)>::new(), "/database is not under /data");
         assert_eq!(Pattern::parse("a/b"), None);
         assert_eq!(Pattern::parse("{}"), None);
+        // a text is a filter: the folder at that level must have this name
+        let q = Pattern::parse("{client}/00 - DOE Livrés/{projet}").unwrap();
+        assert_eq!(q.specificity(), 1);
+        assert_eq!(q.assign("/d", "/d/Acme", '/'), vec![("client".into(), "Acme".into())]);
+        assert_eq!(q.assign("/d", "/d/Acme/00 - DOE Livrés", '/'), Vec::<(String, String)>::new(), "the folder of the text gives nothing");
+        assert_eq!(q.assign("/d", "/d/Acme/00 - doe livrés/Tour A", '/'), vec![("projet".into(), "Tour A".into())]);
+        assert_eq!(q.assign("/d", "/d/Acme/Autre/Tour A", '/'), Vec::<(String, String)>::new(), "another name at that level");
         assert!(Pattern::parse("{a}\\{b}").is_some(), "both separators");
+    }
+
+    #[test]
+    fn a_level_can_set_a_value() {
+        let q = Pattern::parse("{client}/00 - DOE Livrés [Statut=Terminé]/{projet}").unwrap();
+        assert_eq!(q.names(), vec!["client", "Statut", "projet"]);
+        assert_eq!(q.specificity(), 1);
+        assert_eq!(q.assign("/d", "/d/Acme/00 - doe livrés", '/'), vec![("Statut".into(), "Terminé".into())]);
+        assert_eq!(q.assign("/d", "/d/Acme/00 - doe livrés/Tour A", '/'), vec![("projet".into(), "Tour A".into())]);
+        assert_eq!(q.assign("/d", "/d/Acme/Autre", '/'), Vec::<(String, String)>::new());
+        assert!(Pattern::parse("Livrés [Statut=Terminé]").is_some(), "a rule may only set values");
+        assert!(Pattern::parse("a [Statut=]").is_none());
+        let not = Pattern::parse("{client}/{projet!00 - DOE Livrés|Archives} [Statut=En cours]/{Étape}").unwrap();
+        assert_eq!(not.names(), vec!["client", "projet", "Statut", "Étape"]);
+        assert_eq!(not.assign("/d", "/d/Acme/Tour", '/'), vec![("projet".into(), "Tour".into()), ("Statut".into(), "En cours".into())]);
+        assert!(not.assign("/d", "/d/Acme/00 - doe livrés", '/').is_empty(), "refused name");
+        assert!(not.assign("/d", "/d/Acme/archives/01 - x", '/').is_empty(), "and what is below it");
+        assert_eq!(not.assign("/d", "/d/Acme/Tour/01 - x", '/'), vec![("Étape".into(), "01 - x".into())]);
+        let two = Pattern::parse("{a}[X=1; Y=2]").unwrap();
+        assert_eq!(two.assign("/d", "/d/q", '/'), vec![("a".into(), "q".into()), ("X".into(), "1".into()), ("Y".into(), "2".into())]);
+    }
+
+    #[test]
+    fn rules_give_a_value_to_a_folder_the_index_does_not_know() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let def = MetaDef { id: 1, name: "projet".into(), ty: MetaType::Text, description: String::new(), config: Config::default() };
+        let rules: RuleSet = vec![("/d".into(), Pattern::parse("{client}/00 - DOE Livrés/{projet}").unwrap())];
+        let values = BTreeMap::new();
+        let virt = |p: &str, is_self: bool| if is_self && p.ends_with(".pdf") { None } else { rule_value(&rules, &def, p, '/', today) };
+        let found = resolve_with(&values, "/d/Acme/00 - DOE Livrés/Tour A/x.pdf", '/', || false, &virt);
+        assert_eq!(found, Resolved::Inherited { value: "Tour A".into(), from: "/d/Acme/00 - DOE Livrés/Tour A".into() });
+        assert_eq!(resolve_with(&values, "/d/Acme/00 - DOE Livrés", '/', || false, &virt), Resolved::None, "the folder of the text gives nothing");
     }
 
     #[test]
