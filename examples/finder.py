@@ -348,6 +348,76 @@ def tag_key(path):
     return os.path.normcase(os.path.abspath(str(path)))
 
 
+# Criteria on the meta properties in the search of the index. A criterion is (def id, type, operator, text); the
+# value tested is the own one of the item or the one of its nearest folder that has one (as the pane shows it).
+META_OPS = {
+    "text": ("contains", "equals", "has", "missing"), "longtext": ("contains", "equals", "has", "missing"),
+    "number": ("equals", "atleast", "atmost", "has", "missing"), "date": ("equals", "atleast", "atmost", "has", "missing"),
+    "bool": ("yes", "no", "has", "missing"), "choice": ("equals", "has", "missing"),
+}
+META_OP_LABELS = {"contains": "contient", "equals": "=", "has": "a une valeur", "missing": "est vide", "atleast": "≥",
+                  "atmost": "≤", "yes": "oui", "no": "non"}
+META_OP_DATE = {"equals": "le", "atleast": "à partir du", "atmost": "jusqu'au"}
+META_OP_CHOICE = {"equals": "est"}
+
+
+def meta_op_label(kind, op):
+    return (META_OP_DATE if kind == "date" else META_OP_CHOICE if kind == "choice" else {}).get(op) or META_OP_LABELS[op]
+
+
+META_NEAREST = (
+    "(SELECT m.value FROM meta_values m WHERE m.def_id = ? AND (m.path = f.path OR "
+    "substr(f.path, 1, length(m.path) + 1) = m.path || ?) ORDER BY length(m.path) DESC LIMIT 1)"
+)
+
+
+def meta_conditions(criteria, today=None):
+    """the (conditions, arguments) of the criteria for the rows `f` of `files`. A criterion that needs a typed
+    value and has none, or a number or a day that cannot be read, is left out. Needs the function fold."""
+    where, args = [], []
+    for def_id, kind, op, text in criteria:
+        text = (text or "").strip()
+        value, params = META_NEAREST, [def_id, os.sep]
+        if op in ("contains", "equals", "atleast", "atmost") and not text:
+            continue
+        if op == "has":
+            cond = f"{value} IS NOT NULL"
+        elif op == "missing":
+            cond = f"{value} IS NULL"
+        elif op in ("yes", "no"):
+            cond = f"{value} = '{'1' if op == 'yes' else '0'}'"
+        elif op == "contains":
+            cond = f"fold({value}) LIKE ? ESCAPE '\\'"
+            params.append("%" + fold_text(text).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
+        else:
+            compare = {"atleast": ">=", "atmost": "<=", "equals": "="}[op]
+            if kind in ("number", "date"):
+                try:
+                    if kind == "date":
+                        day = parse_date(text, today) if today else parse_date(text)
+                        number = day_seconds(day) if day else None
+                    else:
+                        number = float(text.replace(",", "."))
+                except ValueError:
+                    number = None
+                if number is None:
+                    continue
+                cond = f"CAST({value} AS REAL) {compare} ?"
+                params.append(number)
+            elif kind == "choice":
+                if not text.lstrip("-").isdigit():
+                    continue
+                # one id (3) or a list ([3,5])
+                cond = f"(',' || replace(replace(replace({value}, '[', ''), ']', ''), ' ', '') || ',') LIKE ?"
+                params.append(f"%,{int(text)},%")
+            else:
+                cond = f"{value} = ?"
+                params.append(text)
+        where.append(cond)
+        args += params
+    return where, args
+
+
 class TagStore:
     def __init__(self, path=None):
         self.path = ":memory:" if path == ":memory:" else Path(path or default_path())
@@ -914,7 +984,7 @@ class TagStore:
         ).fetchall()
 
     def find(self, name="", ext="", under=None, folders=True, limit=500, pdf=None, kind=0,
-             size_min=None, size_max=None, days=None, sort=0, desc=False):
+             size_min=None, size_max=None, days=None, sort=0, desc=False, meta=None):
         """the indexed items matching all the given criteria, as
         [(path, is_dir, size, modified, name, pages, encrypted, title, author, error, needs_password)]
         (the PDF columns are None for what is not a PDF read by index_pdfs).
@@ -929,8 +999,9 @@ class TagStore:
         or False), no_copy / no_print / no_modify (True: forbidden), text (title, author, subject or
         keywords), title, author, keywords (keywords or subject), producer (producer or creator),
         version (starts with), created_days (created within this many days).
-        See find_sql for the query."""
-        sql, args = self.find_sql(name, ext, under, folders, limit, pdf, kind, size_min, size_max, days, sort, desc)
+        meta: criteria on the meta properties, a list of (def id, type, operator, text), all must hold: see
+        meta_conditions. See find_sql for the query."""
+        sql, args = self.find_sql(name, ext, under, folders, limit, pdf, kind, size_min, size_max, days, sort, desc, meta)
         # own connection outside memory: safe to call from a thread while the window draws
         db = self.db if self.path == ":memory:" else sqlite3.connect(str(self.path), timeout=30)
         try:
@@ -941,7 +1012,7 @@ class TagStore:
                 db.close()
 
     def find_sql(self, name="", ext="", under=None, folders=True, limit=500, pdf=None, kind=0,
-                 size_min=None, size_max=None, days=None, sort=0, desc=False):
+                 size_min=None, size_max=None, days=None, sort=0, desc=False, meta=None):
         """the (sql, arguments) of find()"""
 
         def contains(text):  # a LIKE pattern, ESCAPE backslash, of a text folded like the column
@@ -1005,6 +1076,9 @@ class TagStore:
         if pdf.get("created_days"):
             where.append("p.created >= ?")
             args.append(time.time() - pdf["created_days"] * 86400)
+        meta_where, meta_args = meta_conditions(meta or [])
+        where += meta_where
+        args += meta_args
         direction = "DESC" if desc else "ASC"
         order = {
             0: f"f.name COLLATE NOCASE {direction}",
@@ -1998,6 +2072,7 @@ find_created_days = Str("")
 FIND_EXTRA = ("find_kind", "find_size_min", "find_size_max", "find_days", "find_sort", "find_desc", "find_needs_pw",
               "find_error", "find_no_copy", "find_no_print", "find_no_modify", "find_title", "find_author",
               "find_keywords", "find_producer", "find_version", "find_created_days")
+find_meta = []  # the criteria on the properties: {"def", "type", "op": Int (place in META_OPS), "text": Str, "option": Int}
 find_auto = Bool(True)  # search by itself once the typing paused, otherwise with the button
 find_state = {  # applied: the criteria of the rows shown; typed: those of the fields last frame
     "applied": None, "typed": None, "changed_at": 0.0, "rows": [], "more": False,
@@ -3418,6 +3493,11 @@ def find_params():
         "name": find_name.value, "ext": find_ext.value, "under": root, "folders": find_folders.value, "pdf": pdf,
         "kind": find_kind.value, "size_min": megabytes(find_size_min), "size_max": megabytes(find_size_max),
         "days": number(find_days.value), "sort": find_sort.value, "desc": find_desc.value,
+        "meta": [
+            (c["def"], c["type"], META_OPS[c["type"]][c["op"].value % len(META_OPS[c["type"]])],
+             str(c["option"].value) if c["type"] == "choice" else c["text"].value)
+            for c in find_meta
+        ],
     }
 
 
@@ -3579,6 +3659,45 @@ def show_found(path, open_it):
         open_item(item)
 
 
+def find_meta_ui():
+    """the criteria on the meta properties: one row per criterion (property, operator, value), all must hold"""
+    defs = [d for d in tags.meta_defs() if d["type"] in META_OPS]
+    by_id = {d["id"]: d for d in defs}
+    find_meta[:] = [c for c in find_meta if c["def"] in by_id]  # a property deleted since leaves its criterion
+    if not defs:
+        weak("Aucune propriété définie (Gérer les propriétés).")
+        return
+    weak("La valeur est celle de l'élément ou, à défaut, celle de son dossier le plus proche.")
+    remove = []
+    for n, c in enumerate(find_meta):
+        d = by_id[c["def"]]
+        ops = META_OPS[c["type"]]
+
+        def row(c=c, d=d, ops=ops, n=n):
+            strong(d["name"])
+            combo_box(c["op"], list(range(len(ops))), [meta_op_label(c["type"], op) for op in ops], f"op{n}")
+            if ops[c["op"].value % len(ops)] in ("contains", "equals", "atleast", "atmost"):
+                if c["type"] == "choice":
+                    options = d["config"]["options"]
+                    combo_box(c["option"], [o["id"] for o in options], [o["label"] for o in options], f"option{n}")
+                else:
+                    text_edit_singleline(c["text"], hint_text="15/03/2025, 3 derniers mois" if c["type"] == "date" else "")
+            if image_button_clicked(svg("close"), size=12, tint=icon_tint(), tooltip="Retirer ce critère"):
+                remove.append(n)
+
+        horizontal(row)
+    for n in reversed(remove):
+        del find_meta[n]
+
+    def add():
+        for d in defs:
+            if button_clicked(d["name"]):
+                find_meta.append({"def": d["id"], "type": d["type"], "op": Int(0), "text": Str(""),
+                                 "option": Int((d["config"]["options"] or [{"id": 0}])[0]["id"])})
+
+    menu_button("+ Ajouter un critère", add)
+
+
 def find_panel():
     """the dock pane of the advanced search in the SQLite index: by name, kind, size, date and, for
     the PDF already read, pages, protections and metadata; automatically (after a pause in the typing)
@@ -3628,6 +3747,7 @@ def find_panel():
         text_edit_singleline(find_version, hint_text="Version (1.7)")
 
     collapsing("Critères PDF avancés", pdf_filters)
+    collapsing("Propriétés" + (f"  ● {len(find_meta)}" if find_meta else ""), find_meta_ui)
     add_space(2)
     checkbox(find_auto, "Recherche automatique")
     stale = find_update()

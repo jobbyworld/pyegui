@@ -15,10 +15,75 @@ use crate::app::FinderApp;
 use crate::model;
 use crate::search::{fold, Kind};
 use crate::tagstore::{default_path, key};
+use pyegui_core::meta::MetaType;
 
 /// The most rows shown; the query asks for one more to know that there are others
 const LIMIT: usize = 1000;
 const IMAGE_EXTENSIONS: [&str; 8] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "svg"];
+
+/// What a criterion on a meta property asks of the value
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum MetaOp {
+    /// the property has a value (own or inherited)
+    Has,
+    /// the property has no value
+    Missing,
+    /// a text contains the typed text (case and accents ignored)
+    Contains,
+    /// the typed number, the typed day or the option (its id) is the value
+    Equals,
+    /// a number or a date from the typed one (included)
+    AtLeast,
+    /// a number or a date up to the typed one (included)
+    AtMost,
+    Yes,
+    No,
+}
+
+impl MetaOp {
+    pub fn label(self, ty: MetaType) -> &'static str {
+        match (self, ty) {
+            (MetaOp::Has, _) => "a une valeur",
+            (MetaOp::Missing, _) => "est vide",
+            (MetaOp::Contains, _) => "contient",
+            (MetaOp::Equals, MetaType::Choice) => "est",
+            (MetaOp::Equals, _) => "=",
+            (MetaOp::AtLeast, MetaType::Date) => "à partir du",
+            (MetaOp::AtLeast, _) => "≥",
+            (MetaOp::AtMost, MetaType::Date) => "jusqu'au",
+            (MetaOp::AtMost, _) => "≤",
+            (MetaOp::Yes, _) => "oui",
+            (MetaOp::No, _) => "non",
+        }
+    }
+
+    /// The operators that mean something for a type
+    pub fn for_type(ty: MetaType) -> &'static [MetaOp] {
+        use MetaOp::*;
+        match ty {
+            MetaType::Text | MetaType::LongText => &[Contains, Equals, Has, Missing],
+            MetaType::Number | MetaType::Date => &[Equals, AtLeast, AtMost, Has, Missing],
+            MetaType::Bool => &[Yes, No, Has, Missing],
+            MetaType::Choice => &[Equals, Has, Missing],
+            MetaType::Formula => &[],
+        }
+    }
+
+    fn needs_value(self) -> bool {
+        matches!(self, MetaOp::Contains | MetaOp::Equals | MetaOp::AtLeast | MetaOp::AtMost)
+    }
+}
+
+/// A criterion on a meta property: the value is the own one of the item or the one of its nearest folder that
+/// has one (what the "Propriétés" pane shows)
+#[derive(Clone)]
+pub struct MetaCriterion {
+    pub def: i64,
+    pub ty: MetaType,
+    pub op: MetaOp,
+    /// typed text, or the id of the option of a choice
+    pub text: String,
+}
 
 /// A yes / no / either criterion
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -88,6 +153,8 @@ pub struct IndexFilters {
     pub created_days: u32,
     pub sort: Sort,
     pub descending: bool,
+    /// the criteria on the meta properties (all of them must hold)
+    pub meta: Vec<MetaCriterion>,
 }
 
 impl Default for IndexFilters {
@@ -115,6 +182,7 @@ impl Default for IndexFilters {
             created_days: 0,
             sort: Sort::Name,
             descending: false,
+            meta: Vec::new(),
         }
     }
 }
@@ -268,6 +336,7 @@ pub fn build_query(f: &IndexFilters, scope: Option<&Path>, now: f64) -> (String,
         conditions.push("p.created >= ?".into());
         values.push(Value::Real(now - f64::from(f.created_days) * 86_400.0));
     }
+    meta_conditions(f, now, &mut conditions, &mut values);
     let direction = if f.descending { "DESC" } else { "ASC" };
     let order = match f.sort {
         Sort::Name => format!("fold(f.name) {direction}"),
@@ -286,6 +355,65 @@ pub fn build_query(f: &IndexFilters, scope: Option<&Path>, now: f64) -> (String,
         LIMIT + 1
     );
     (sql, values)
+}
+
+/// The value of a property for the row `f`: its own, or the one of the nearest folder above that has one
+const META_VALUE: &str = "(SELECT m.value FROM meta_values m WHERE m.def_id = ? AND (m.path = f.path OR substr(f.path, 1, length(m.path) + 1) = m.path || ?) ORDER BY length(m.path) DESC LIMIT 1)";
+
+/// The conditions of the criteria on the meta properties. A criterion whose typed value is not a number or a day
+/// is left out.
+fn meta_conditions(f: &IndexFilters, now: f64, conditions: &mut Vec<String>, values: &mut Vec<Value>) {
+    let today = chrono::DateTime::from_timestamp(now as i64, 0).map_or_else(|| chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(), |d| d.date_naive());
+    for c in &f.meta {
+        let text = c.text.trim();
+        if c.op.needs_value() && text.is_empty() {
+            continue;
+        }
+        let separator = std::path::MAIN_SEPARATOR.to_string();
+        let mut params: Vec<Value> = vec![Value::Integer(c.def), Value::Text(separator)];
+        let value = META_VALUE;
+        let condition = match c.op {
+            MetaOp::Has => format!("{value} IS NOT NULL"),
+            MetaOp::Missing => format!("{value} IS NULL"),
+            MetaOp::Yes => format!("{value} = '1'"),
+            MetaOp::No => format!("{value} = '0'"),
+            MetaOp::Contains => {
+                params.push(Value::Text(format!("%{}%", escape(&fold(text)))));
+                format!("fold({value}) LIKE ? ESCAPE '\\'")
+            }
+            MetaOp::Equals | MetaOp::AtLeast | MetaOp::AtMost => {
+                let compare = match c.op {
+                    MetaOp::AtLeast => ">=",
+                    MetaOp::AtMost => "<=",
+                    _ => "=",
+                };
+                match c.ty {
+                    MetaType::Number | MetaType::Date => {
+                        let n = if c.ty == MetaType::Date {
+                            pyegui_core::date_input::parse_date(text, today).map(|d| d.and_time(chrono::NaiveTime::MIN).and_utc().timestamp() as f64)
+                        } else {
+                            text.replace(',', ".").parse::<f64>().ok().filter(|n| n.is_finite())
+                        };
+                        let Some(n) = n else { continue };
+                        params.push(Value::Real(n));
+                        format!("CAST({value} AS REAL) {compare} ?")
+                    }
+                    MetaType::Choice => {
+                        let Ok(id) = text.parse::<i64>() else { continue };
+                        params.push(Value::Text(format!("%,{id},%")));
+                        // one id (`3`) or a list (`[3,5]`)
+                        format!("(',' || replace(replace(replace({value}, '[', ''), ']', ''), ' ', '') || ',') LIKE ?")
+                    }
+                    _ => {
+                        params.push(Value::Text(text.to_owned()));
+                        format!("{value} = ?")
+                    }
+                }
+            }
+        };
+        conditions.push(condition);
+        values.extend(params);
+    }
 }
 
 /// The function `fold(text)` of the queries: lower case without accents, like the "Recherche" pane
@@ -494,6 +622,66 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
             }
         });
     }
+    // the meta properties: one row per criterion, all of them must hold
+    {
+        let defs = app.tags.as_ref().map(|s| s.meta_defs()).unwrap_or_default();
+        let f = &mut app.index_search.filters;
+        let title = if f.meta.is_empty() { "Propriétés".to_string() } else { format!("Propriétés  ● {}", f.meta.len()) };
+        egui::CollapsingHeader::new(RichText::new(title).strong()).id_salt("index-meta").default_open(false).show(ui, |ui| {
+            let searchable: Vec<_> = defs.iter().filter(|d| d.ty != MetaType::Formula).collect();
+            if searchable.is_empty() {
+                ui.weak("Aucune propriété définie (voir le gestionnaire des propriétés).");
+                return;
+            }
+            ui.weak("La valeur est celle de l'élément ou, à défaut, celle de son dossier le plus proche.");
+            let mut remove = None;
+            for (i, c) in f.meta.iter_mut().enumerate() {
+                let Some(def) = defs.iter().find(|d| d.id == c.def) else {
+                    remove = Some(i);
+                    continue;
+                };
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(&def.name).strong());
+                    egui::ComboBox::from_id_salt(("index-meta-op", i)).selected_text(c.op.label(c.ty)).show_ui(ui, |ui| {
+                        for op in MetaOp::for_type(c.ty) {
+                            ui.selectable_value(&mut c.op, *op, op.label(c.ty));
+                        }
+                    });
+                    if c.op.needs_value() {
+                        if c.ty == MetaType::Choice {
+                            let shown = c.text.parse::<i64>().ok().and_then(|id| def.config.label_of(id)).unwrap_or("…").to_owned();
+                            egui::ComboBox::from_id_salt(("index-meta-option", i)).selected_text(shown).show_ui(ui, |ui| {
+                                for o in &def.config.options {
+                                    ui.selectable_value(&mut c.text, o.id.to_string(), &o.label);
+                                }
+                            });
+                        } else {
+                            let hint = if c.ty == MetaType::Date { "15/03/2025, 3 derniers mois…" } else { "" };
+                            let edit = ui.add(egui::TextEdit::singleline(&mut c.text).hint_text(hint).desired_width(140.0));
+                            if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                go = true;
+                            }
+                        }
+                    }
+                    if ui.small_button("✕").on_hover_text("Retirer ce critère").clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                f.meta.remove(i);
+            }
+            ui.menu_button("+ Ajouter un critère", |ui| {
+                for d in &searchable {
+                    if ui.button(&d.name).clicked() {
+                        let op = MetaOp::for_type(d.ty)[0];
+                        f.meta.push(MetaCriterion { def: d.id, ty: d.ty, op, text: String::new() });
+                        ui.close();
+                    }
+                }
+            });
+        });
+    }
     if go {
         app.index_search.search(&folder);
     }
@@ -667,5 +855,31 @@ mod tests {
         let (rows, more, _) = run(&db, &IndexFilters::default(), None, NOW).unwrap();
         assert_eq!(rows.len(), LIMIT);
         assert!(more);
+    }
+
+    #[test]
+    fn a_meta_property_is_read_on_the_item_or_its_nearest_folder() {
+        let db = index();
+        db.execute_batch(
+            "INSERT INTO meta_defs (id, name, type, config) VALUES (1, 'Client', 'text', '{}'), (2, 'Pages', 'number', '{}'), (3, 'Statut', 'choice', '{\"multiple\":true}'), (4, 'Revu', 'bool', '{}');
+             INSERT INTO meta_values (path, def_id, value) VALUES ('/a', 1, 'Écoles du Sud'), ('/a/notes.txt', 1, 'Autre'), ('/ab/Rapport.pdf', 2, '12'),
+                ('/ab/Rapport.pdf', 3, '[2,5]'), ('/ab/Secret.pdf', 3, '5'), ('/a', 4, '1'), ('/a/notes.txt', 4, '0');",
+        )
+        .unwrap();
+        let c = |def, ty, op, text: &str| MetaCriterion { def, ty, op, text: text.into() };
+        let with = |m: Vec<MetaCriterion>| IndexFilters { meta: m, kind: Kind::Files, ..Default::default() };
+        // inherited from /a, but the own value of notes.txt wins
+        assert_eq!(names(&db, &with(vec![c(1, MetaType::Text, MetaOp::Contains, "ecole")])), ["50%_off.pdf", "École.pdf"]);
+        assert_eq!(names(&db, &with(vec![c(1, MetaType::Text, MetaOp::Equals, "Autre")])), ["notes.txt"]);
+        assert_eq!(names(&db, &with(vec![c(2, MetaType::Number, MetaOp::AtLeast, "10")])), ["Rapport.pdf"]);
+        assert_eq!(names(&db, &with(vec![c(2, MetaType::Number, MetaOp::AtMost, "10")])), Vec::<String>::new());
+        assert_eq!(names(&db, &with(vec![c(3, MetaType::Choice, MetaOp::Equals, "5")])), ["Rapport.pdf", "Secret.pdf"]);
+        assert_eq!(names(&db, &with(vec![c(3, MetaType::Choice, MetaOp::Equals, "2")])), ["Rapport.pdf"]);
+        assert_eq!(names(&db, &with(vec![c(4, MetaType::Bool, MetaOp::Yes, "")])), ["50%_off.pdf", "École.pdf"]);
+        assert_eq!(names(&db, &with(vec![c(4, MetaType::Bool, MetaOp::No, "")])), ["notes.txt"]);
+        assert_eq!(names(&db, &with(vec![c(1, MetaType::Text, MetaOp::Missing, "")])), ["Rapport.pdf", "Secret.pdf"]);
+        // two criteria must both hold; an empty value leaves the criterion out
+        assert_eq!(names(&db, &with(vec![c(3, MetaType::Choice, MetaOp::Equals, "5"), c(2, MetaType::Number, MetaOp::Has, "")])), ["Rapport.pdf"]);
+        assert_eq!(names(&db, &with(vec![c(1, MetaType::Text, MetaOp::Contains, "  ")])).len(), 5);
     }
 }

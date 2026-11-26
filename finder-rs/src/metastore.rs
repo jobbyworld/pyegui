@@ -395,4 +395,27 @@ mod tests {
         s.create_meta("client", MetaType::Text).unwrap();
         assert_eq!(s.apply_meta_rules(), (0, vec!["x".to_owned()]));
     }
+
+    #[test]
+    fn two_rules_with_a_fixed_folder_set_a_value_on_it_and_name_the_repos() {
+        let mut s = store();
+        s.create_meta("Repo", MetaType::Text).unwrap();
+        let privacy = s.create_meta("privacy", MetaType::Choice).unwrap();
+        let mut d = s.meta_def(privacy).unwrap();
+        d.config.mode = pyegui_core::meta::ListMode::Open;
+        let (perso, pro) = (d.config.add_option("perso").unwrap(), d.config.add_option("pro").unwrap());
+        s.update_meta(&d);
+        for (path, dir) in [("/V", true), ("/V/Github", true), ("/V/Github/a", true), ("/V/Github/a/x", false), ("/V/Github-pro", true), ("/V/Github-pro/b", true)] {
+            s.db.execute("INSERT INTO files (path, is_dir) VALUES (?, ?)", params![path, dir as i64]).unwrap();
+        }
+        s.add_meta_rule(Path::new("/V"), "github[privacy=perso]/{repo}").unwrap();
+        s.add_meta_rule(Path::new("/V"), "github-pro[privacy=pro]/{repo}").unwrap();
+        let (_, unknown) = s.apply_meta_rules();
+        assert!(unknown.is_empty());
+        let get = |p: &str, def| s.meta_value(Path::new(p), def);
+        assert_eq!(get("/V/Github", privacy), Some(perso.to_string()));
+        assert_eq!(get("/V/Github-pro", privacy), Some(pro.to_string()));
+        assert_eq!(get("/V/Github/a", 1).as_deref(), Some("a"));
+        assert_eq!(get("/V/Github-pro/b", 1).as_deref(), Some("b"));
+    }
 }
