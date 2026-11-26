@@ -86,6 +86,17 @@ impl Tags {
         self.tags.push(tag);
         true
     }
+
+    /// Puts the tag on, or takes it off when it is there (the pick mode of the dropdown)
+    pub fn toggle(&mut self, tag: &str) -> bool {
+        let tag = normalize(tag);
+        if self.tags.contains(&tag) {
+            self.tags.retain(|t| *t != tag);
+            true
+        } else {
+            self.insert(&tag)
+        }
+    }
 }
 
 /// The full path of a tag, each level in its color, separated by weak slashes
@@ -312,6 +323,9 @@ pub struct TagsOptions {
     pub dropdown: bool,
     /// the preferred (maximum) height of the list of suggestions, which scrolls beyond it
     pub list_height: f32,
+    /// the dropdown lists all the suggestions with a check box, the ones on are checked; a click toggles one
+    /// and the list stays open, to put several
+    pub pick: bool,
     pub fit: bool,
     pub compact: bool,
     pub dot_size: f32,
@@ -333,6 +347,7 @@ impl TagsOptions {
             on_hover: false,
             dropdown: false,
             list_height: 220.0,
+            pick: false,
             fit: false,
             compact: false,
             dot_size: 10.0,
@@ -355,6 +370,7 @@ pub fn tags_edit(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
     let on_hover = o.on_hover;
     let dropdown = o.dropdown;
     let list_height = o.list_height;
+    let pick = o.pick;
     let field_id = id.with("field");
     let editing = editable
         && (!on_hover
@@ -550,7 +566,7 @@ pub fn tags_edit(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
             suggestions
                 .iter()
                 .map(|s| normalize(s))
-                .filter(|s| !state.tags.contains(s) && s.to_lowercase().contains(&typed))
+                .filter(|s| (pick || !state.tags.contains(s)) && s.to_lowercase().contains(&typed))
                 .take(if dropdown { 200 } else { 8 })
                 .collect()
         };
@@ -558,7 +574,7 @@ pub fn tags_edit(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
         if enter {
             if let Some(chosen) = highlight.and_then(|h| matching.get(h)) {
                 // the row chosen with the arrows
-                changed |= state.insert(chosen);
+                changed |= if pick { state.toggle(chosen) } else { state.insert(chosen) };
                 input.clear();
                 highlight = None;
                 ui.ctx().data_mut(|d| d.insert_temp(refocus_id, true));
@@ -608,7 +624,24 @@ pub fn tags_edit(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
                         for (index, suggestion) in matching.iter().enumerate() {
                             // the full path in the colors of its levels, over a row that lights up
                             let background = ui.painter().add(egui::Shape::Noop);
-                            let row = ui.horizontal(|ui| path_ui(ui, &state, suggestion)).response;
+                            let row = ui
+                                .horizontal(|ui| {
+                                    if pick {
+                                        let on = state.tags.contains(suggestion);
+                                        let (boxed, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                                        let ink = ui.visuals().text_color();
+                                        if on {
+                                            ui.painter().rect_filled(boxed, 3.0, ui.visuals().hyperlink_color);
+                                            let (m, white) = (boxed.center(), Stroke::new(1.6, Color32::WHITE));
+                                            ui.painter().line_segment([m + vec2(-3.5, 0.5), m + vec2(-1.0, 3.0)], white);
+                                            ui.painter().line_segment([m + vec2(-1.0, 3.0), m + vec2(3.8, -3.0)], white);
+                                        } else {
+                                            ui.painter().rect_stroke(boxed, 3.0, Stroke::new(1.3, ink.gamma_multiply(0.7)), StrokeKind::Inside);
+                                        }
+                                    }
+                                    path_ui(ui, &state, suggestion)
+                                })
+                                .response;
                             let hit = ui.interact(row.rect, popup_id.with(suggestion), Sense::click());
                             let current = highlight == Some(index);
                             if current && moved {
@@ -644,7 +677,7 @@ pub fn tags_edit(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
                     });
                 });
             if let Some(suggestion) = picked {
-                changed |= state.insert(&suggestion);
+                changed |= if pick { state.toggle(&suggestion) } else { state.insert(&suggestion) };
                 input.clear();
                 ui.ctx().data_mut(|d| d.insert_temp(refocus_id, true));
                 highlight = None;

@@ -305,6 +305,7 @@ fn choice_cell(ui: &mut egui::Ui, app: &FinderApp, def: &MetaDef, path: &std::pa
     options.on_hover = true;
     options.dropdown = true;
     options.list_height = 420.0;
+    options.pick = def.config.multiple;
     options.suggestions = def.config.options.iter().map(|o| clean(&o.label)).collect();
     if !matches!(resolved, Resolved::Own(_)) {
         options.muted = labels.iter().cloned().collect();

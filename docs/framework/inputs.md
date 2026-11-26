@@ -601,6 +601,7 @@ removes the last tag.
 - `field_width` (float): the width of the field, 120 by default
 - `on_hover` (bool): the chips are read only until the mouse is over the widget, e.g. the cell of a row: then the crosses show and an empty tag, a field in a pill like the chips with a chevron, to type or choose a tag. The pill stays while it has the focus. What is typed is kept by the widget (give each row its own id). The tags in muted have no cross. False by default
 - `dropdown` (bool): the field shows the list of all the suggestions as soon as it has the focus, filtered by what is typed, instead of only while typing. The keys Down and Up move a highlighted row (the list scrolls with it), Enter adds it, Escape clears what is typed. False by default
+- `pick` (bool): the dropdown lists all the suggestions with a check box (checked for the tags that are on) and a click puts a tag on or takes it off while the list stays open, to choose several. False by default
 - `list_height` (float): the preferred height of the list of suggestions, which scrolls beyond it. Default is 220
 - `compact` (bool): only a dot per tag in its color, the full path on hover, e.g. in a row of a list; read only
 - `dot_size` (float): the diameter of the dots of compact, 10 by default

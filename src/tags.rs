@@ -186,6 +186,9 @@ impl Tags {
 ///         move a highlighted row (the list scrolls with it), Enter adds it, Escape clears what is
 ///         typed. False by default
 ///
+///     pick (bool): the dropdown lists all the suggestions with a check box (checked for the tags that are on)
+///         and a click puts a tag on or takes it off while the list stays open, to choose several. False by default
+///
 ///     list_height (float): the preferred height of the list of suggestions, which scrolls beyond it.
 ///         Default is 220
 ///
@@ -240,6 +243,7 @@ unsafe fn tags_edit(tags: &Bound<'_, Tags>, kwargs: Option<&Bound<'_, PyDict>>) 
     o.muted = kwarg::<Vec<String>>(kwargs, "muted")?.unwrap_or_default().into_iter().collect();
     o.on_hover = kwarg::<bool>(kwargs, "on_hover")?.unwrap_or(false);
     o.dropdown = kwarg::<bool>(kwargs, "dropdown")?.unwrap_or(false);
+    o.pick = kwarg::<bool>(kwargs, "pick")?.unwrap_or(false);
     o.list_height = kwarg::<f32>(kwargs, "list_height")?.unwrap_or(220.0);
     o.fit = kwarg::<bool>(kwargs, "fit")?.unwrap_or(false);
     o.compact = kwarg::<bool>(kwargs, "compact")?.unwrap_or(false);

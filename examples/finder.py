@@ -6900,6 +6900,7 @@ def meta_choice_cell(d, path, resolved):
         on_hover=True,
         dropdown=True,
         list_height=420,
+        pick=config["multiple"],
         suggestions=list(label_of.values()),
         muted=[] if resolved and resolved[0] == "own" else labels,
         id=f"meta cell {d['id']} {path}",
