@@ -16,7 +16,9 @@ Space or Cmd+P to open the action palette (search and run an action for the curr
     python finder.py [folder]
 """
 
+import bisect
 import fnmatch
+import json
 import os
 import queue
 import shlex
@@ -27,7 +29,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
@@ -72,6 +74,8 @@ from pyegui import (
     drop_operation,
     dropped_files,
     hovered_files,
+    human_day,
+    parse_date,
     Backdrop,
     Bool,
     Dock,
@@ -131,6 +135,7 @@ from pyegui import (
     left_panel,
     markdown,
     markdown_to_pdf,
+    menu_button,
     menu_image_button,
     modal,
     path_breadcrumb,
@@ -139,6 +144,7 @@ from pyegui import (
     pdf_view,
     pointer_pos,
     pointer_pressed,
+    radio_value,
     run_native,
     window_controls,
     window_drag_area,
@@ -1105,12 +1111,684 @@ class TagStore:
         old, new = tag_key(old), tag_key(new)
         escaped = old.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         inside = escaped.rstrip(os.sep) + ("\\\\" if os.sep == "\\" else os.sep) + "%"
-        for table in ("items", "files", "notes", "pdf_info"):
+        for table in ("items", "files", "notes", "pdf_info", "meta_values"):
             self.db.execute(
                 f"UPDATE {table} SET path = ? || substr(path, ?) WHERE path = ? OR path LIKE ? ESCAPE '\\'",
                 (new, len(old) + 1, old, inside),
             )
         self.changed()
+
+    # the meta properties: definitions (meta_defs) and the values put on files and folders (meta_values).
+    # What a value means is in the functions after this class, the same as pyegui_core::meta of finder-rs.
+
+    def meta_defs(self):
+        """the properties in their order, as dicts: id, name, type, description and config (see meta_config)"""
+        rows = self.db.execute("SELECT id, name, type, description, config FROM meta_defs ORDER BY position, id").fetchall()
+        return [
+            {"id": i, "name": name, "type": kind, "description": description, "config": meta_config(config)}
+            for i, name, kind, description, config in rows
+            if kind in META_LABELS
+        ]
+
+    def meta_def(self, def_id):
+        return next((d for d in self.meta_defs() if d["id"] == def_id), None)
+
+    def create_meta(self, name, kind):
+        """a new property, last in the list; its id, or None if the name is empty or taken (case ignored)"""
+        name = name.strip()
+        if not name or any(d["name"].lower() == name.lower() for d in self.meta_defs()) or kind not in META_LABELS:
+            return None
+        position = self.db.execute("SELECT COALESCE(MAX(position) + 1, 0) FROM meta_defs").fetchone()[0]
+        cursor = self.db.execute(
+            "INSERT INTO meta_defs (name, type, config, position) VALUES (?, ?, ?, ?)",
+            (name, kind, meta_config_json(meta_config("{}")), position),
+        )
+        self.changed()
+        return cursor.lastrowid
+
+    def update_meta(self, d):
+        """writes the name, the description and the config of a property (its type stays); False if the name
+        is empty or another property has it"""
+        name = d["name"].strip()
+        if not name or any(o["id"] != d["id"] and o["name"].lower() == name.lower() for o in self.meta_defs()):
+            return False
+        self.db.execute(
+            "UPDATE meta_defs SET name = ?, description = ?, config = ? WHERE id = ?",
+            (name, d["description"], meta_config_json(d["config"]), d["id"]),
+        )
+        self.changed()
+        return True
+
+    def delete_meta(self, def_id):
+        """a property and, with it, all its values"""
+        self.db.execute("DELETE FROM meta_defs WHERE id = ?", (def_id,))
+        self.changed()
+
+    def move_meta(self, def_id, delta):
+        ids = [d["id"] for d in self.meta_defs()]
+        if def_id not in ids:
+            return
+        at = ids.index(def_id)
+        ids.insert(max(0, min(len(ids) - 1, at + delta)), ids.pop(at))
+        for position, i in enumerate(ids):
+            self.db.execute("UPDATE meta_defs SET position = ? WHERE id = ?", (position, i))
+        self.changed()
+
+    def meta_values_of(self, path):
+        """all the own values of an item, by property id"""
+        rows = self.db.execute("SELECT def_id, value FROM meta_values WHERE path = ?", (tag_key(path),))
+        return dict(rows.fetchall())
+
+    def meta_value(self, path, def_id):
+        """the stored value of a property on an item (its own, not an inherited one), or None"""
+        return self.meta_values_of(path).get(def_id)
+
+    def meta_all(self, def_id):
+        """every own value of a property by stored path: what inheritance and summaries are computed from"""
+        return dict(self.db.execute("SELECT path, value FROM meta_values WHERE def_id = ?", (def_id,)).fetchall())
+
+    def set_meta_value(self, path, def_id, value):
+        """puts a value on an item; None or a blank text removes it"""
+        if value is None or not str(value).strip():
+            self.db.execute("DELETE FROM meta_values WHERE path = ? AND def_id = ?", (tag_key(path), def_id))
+        else:
+            self.db.execute(
+                "INSERT INTO meta_values (path, def_id, value, source) VALUES (?, ?, ?, 'user') "
+                "ON CONFLICT(path, def_id) DO UPDATE SET value = excluded.value, source = 'user'",
+                (tag_key(path), def_id, str(value)),
+            )
+        self.changed()
+
+    def meta_usage(self, def_id):
+        """how many items hold a value of a property"""
+        return self.db.execute("SELECT COUNT(*) FROM meta_values WHERE def_id = ?", (def_id,)).fetchone()[0]
+
+    def add_choice_option(self, def_id, label):
+        """adds an option to a choice (an open list grows as people type): its id, or the one that exists"""
+        d = self.meta_def(def_id)
+        if not d or d["type"] != "choice":
+            return None
+        option = cfg_add(d["config"], label)
+        return option if option is not None and self.update_meta(d) else None
+
+    def choice_usage(self, def_id, option):
+        """how many items hold an option: how many would lose it"""
+        return sum(1 for _, value in self.meta_all(def_id).items() if option in decode_ids(value))
+
+    def remove_choice_option(self, def_id, option):
+        """removes an option from the list and from the values that hold it (a value left empty goes away)"""
+        self._replace_choice_option(def_id, option, None)
+
+    def merge_choice_option(self, def_id, source, target):
+        """the items that held `source` hold `target` (once) and `source` leaves the list"""
+        if source != target:
+            self._replace_choice_option(def_id, source, target)
+
+    def _replace_choice_option(self, def_id, source, target):
+        d = self.meta_def(def_id)
+        if not d or d["type"] != "choice":
+            return
+        multiple = d["config"]["multiple"]
+        for path, value in self.meta_all(def_id).items():
+            ids = decode_ids(value)
+            if source not in ids:
+                continue
+            at = ids.index(source)
+            if target is not None and target not in ids:
+                ids[at] = target
+            else:
+                del ids[at]
+            text = encode_ids(ids, multiple)
+            if text:
+                self.db.execute("UPDATE meta_values SET value = ? WHERE path = ? AND def_id = ?", (text, path, def_id))
+            else:
+                self.db.execute("DELETE FROM meta_values WHERE path = ? AND def_id = ?", (path, def_id))
+        cfg_remove(d["config"], source)
+        self.update_meta(d)
+
+    # the rules of the indexation: under `root` the folders are read with `pattern` ({project}/{entreprise})
+    # and what they are called goes in the properties of those names
+
+    def meta_rules(self):
+        rows = self.db.execute("SELECT id, root, pattern, enabled FROM meta_rules ORDER BY id").fetchall()
+        return [{"id": i, "root": root, "pattern": pattern, "enabled": bool(enabled)} for i, root, pattern, enabled in rows]
+
+    def add_meta_rule(self, root, pattern):
+        """a rule; None if the pattern names nothing"""
+        if parse_pattern(pattern) is None:
+            return None
+        cursor = self.db.execute(
+            "INSERT INTO meta_rules (root, pattern, enabled) VALUES (?, ?, 1)", (tag_key(root), pattern.strip())
+        )
+        self.changed()
+        return cursor.lastrowid
+
+    def update_meta_rule(self, rule):
+        self.db.execute(
+            "UPDATE meta_rules SET root = ?, pattern = ?, enabled = ? WHERE id = ?",
+            (rule["root"], rule["pattern"].strip(), int(rule["enabled"]), rule["id"]),
+        )
+        self.changed()
+
+    def delete_meta_rule(self, rule_id):
+        """a rule and the values it wrote"""
+        self.db.execute("DELETE FROM meta_values WHERE source = ?", (f"auto:{rule_id}",))
+        self.db.execute("DELETE FROM meta_rules WHERE id = ?", (rule_id,))
+        self.changed()
+
+    def apply_meta_rules(self):
+        """reads the folders known to the index with every rule and writes the values they give, on the folders
+        themselves (the items below inherit them). A value typed by the person is never replaced: the values a
+        rule wrote (source auto:<id>) are removed first and put again. Returns the number of values written
+        and the names of the properties that a pattern uses and that do not exist."""
+        defs = self.meta_defs()
+        today = datetime.now().date()
+        written, unknown = 0, []
+        rules = self.meta_rules()
+        for rule in rules:
+            self.db.execute("DELETE FROM meta_values WHERE source = ?", (f"auto:{rule['id']}",))
+
+        def precision(rule):  # the most precise rule writes first (OR IGNORE leaves the folder to it)
+            levels = parse_pattern(rule["pattern"])
+            return (-(pattern_specificity(levels) if levels else 0), -len(rule["root"]), rule["id"])
+
+        for rule in sorted(rules, key=precision):
+            source = f"auto:{rule['id']}"
+            levels = parse_pattern(rule["pattern"]) if rule["enabled"] else None
+            if levels is None:
+                continue
+            for name in pattern_names(levels):
+                if not any(d["name"].lower() == name.lower() for d in defs) and name.lower() not in (u.lower() for u in unknown):
+                    unknown.append(name)
+            prefix = rule["root"].rstrip(os.sep) + os.sep
+            rows = self.db.execute(
+                "SELECT path FROM files WHERE is_dir = 1 AND substr(path, 1, ?) = ?", (len(prefix), prefix)
+            ).fetchall()
+            for (folder,) in rows:
+                for name, text in pattern_assign(levels, rule["root"], folder):
+                    d = next((d for d in defs if d["name"].lower() == name.lower()), None)
+                    if d is None:
+                        continue
+                    before = meta_config_json(d["config"])
+                    value = parse_input(d, text, today)
+                    if meta_config_json(d["config"]) != before:
+                        self.db.execute("UPDATE meta_defs SET config = ? WHERE id = ?", (meta_config_json(d["config"]), d["id"]))
+                    if value is None:
+                        continue
+                    # OR IGNORE: a value that is already there (typed, or from another rule) stays
+                    written += self.db.execute(
+                        "INSERT OR IGNORE INTO meta_values (path, def_id, value, source) VALUES (?, ?, ?, ?)",
+                        (folder, d["id"], value, source),
+                    ).rowcount
+        self.changed()
+        return written, unknown
+
+
+# ==================================================================================================
+# meta properties: what a value means
+# ==================================================================================================
+
+# The same rules as pyegui_core::meta of finder-rs. The values are kept as text in meta_values.value:
+#
+#   text, longtext  as typed              number  a decimal number ("12", "3.5")      bool  "1" or "0"
+#   date            seconds since 1970    formula nothing: computed from config.formula when shown
+#   choice          the id of an option ("3"), or with `multiple` a JSON list of ids ("[3,5]")
+#
+# A choice keeps the id of an option, never its label, so renaming or merging options leaves the values alone.
+
+META_TYPES = [
+    ("text", "Texte"),
+    ("longtext", "Texte long"),
+    ("number", "Nombre"),
+    ("bool", "Oui / non"),
+    ("date", "Date"),
+    ("choice", "Liste de choix"),
+    ("formula", "Formule"),
+]
+META_LABELS = dict(META_TYPES)
+META_COLUMN_TYPE = {"text": "text", "longtext": "text", "formula": "text", "number": "number", "date": "date", "bool": "choice", "choice": "choice"}
+
+
+def meta_config(text):
+    """the configuration of a property (meta_defs.config, JSON) with its defaults: mode ("closed" or "open"),
+    multiple, options [{id, label, color}], next_id, unit, decimals and formula"""
+    try:
+        raw = json.loads(text)
+    except (TypeError, ValueError):
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    options = [
+        {"id": int(o["id"]), "label": str(o.get("label", "")), "color": str(o.get("color") or "")}
+        for o in raw.get("options") or []
+        if isinstance(o, dict) and isinstance(o.get("id"), int)
+    ]
+    decimals = raw.get("decimals")
+    return {
+        "mode": "open" if raw.get("mode") == "open" else "closed",
+        "multiple": bool(raw.get("multiple")),
+        "options": options,
+        "next_id": raw["next_id"] if isinstance(raw.get("next_id"), int) else 0,
+        "unit": str(raw.get("unit") or ""),
+        "decimals": decimals if isinstance(decimals, int) and not isinstance(decimals, bool) else None,
+        "formula": str(raw.get("formula") or ""),
+    }
+
+
+def meta_config_json(config):
+    return json.dumps(config, separators=(",", ":"), ensure_ascii=False)
+
+
+def cfg_find(config, label):
+    wanted = label.strip().lower()
+    return next((o["id"] for o in config["options"] if o["label"].lower() == wanted), None)
+
+
+def cfg_label(config, option):
+    return next((o["label"] for o in config["options"] if o["id"] == option), None)
+
+
+def cfg_add(config, label):
+    """adds an option (the id of the one already there if its label exists, case ignored); None for an empty label"""
+    label = label.strip()
+    if not label:
+        return None
+    found = cfg_find(config, label)
+    if found is not None:
+        return found
+    new = max(config["next_id"], max((o["id"] for o in config["options"]), default=0) + 1)  # ids are never reused
+    config["next_id"] = new + 1
+    config["options"].append({"id": new, "label": label, "color": ""})
+    return new
+
+
+def cfg_rename(config, option, label):
+    """renames an option; False if the label is empty or another option has it"""
+    label = label.strip()
+    other = cfg_find(config, label)
+    if not label or (other is not None and other != option):
+        return False
+    for o in config["options"]:
+        if o["id"] == option:
+            o["label"] = label
+            return True
+    return False
+
+
+def cfg_remove(config, option):
+    config["options"] = [o for o in config["options"] if o["id"] != option]
+
+
+def cfg_move(config, option, delta):
+    """moves an option by `delta` places (the order of the list is the order of the sort)"""
+    ids = [o["id"] for o in config["options"]]
+    if option in ids:
+        at = ids.index(option)
+        config["options"].insert(max(0, min(len(ids) - 1, at + delta)), config["options"].pop(at))
+
+
+def decode_ids(text):
+    """the ids a stored choice holds: one id ("3") or a list ("[3,5]")"""
+    text = str(text).strip()
+    try:
+        if text.startswith("["):
+            ids = json.loads(text)
+            return [i for i in ids if isinstance(i, int)] if isinstance(ids, list) else []
+        return [int(text)]
+    except ValueError:
+        return []
+
+
+def encode_ids(ids, multiple):
+    """the stored form of the ids of a choice; none gives an empty text (no value)"""
+    if not ids:
+        return ""
+    return json.dumps(list(ids), separators=(",", ":")) if multiple else str(ids[0])
+
+
+def number_text(n):
+    return str(int(n)) if float(n).is_integer() else repr(float(n))
+
+
+def day_text(seconds):
+    """a stored date as the columns write it"""
+    try:
+        return datetime.fromtimestamp(float(seconds), timezone.utc).strftime("%d/%m/%Y")
+    except (ValueError, OverflowError, OSError):
+        return ""
+
+
+def day_seconds(day):
+    """the seconds since 1970 of a day: midnight UTC, a date has no time zone"""
+    return int(datetime(day.year, day.month, day.day, tzinfo=timezone.utc).timestamp())
+
+
+def meta_display(d, text):
+    """a value as the person reads it (a date is written by day_text)"""
+    kind, config = d["type"], d["config"]
+    if kind == "number":
+        try:
+            n = float(text)
+        except ValueError:
+            return text
+        digits = config["decimals"] if config["decimals"] is not None else (0 if n.is_integer() else 2)
+        body = f"{n:.{digits}f}"
+        return f"{body} {config['unit']}" if config["unit"] else body
+    if kind == "bool":
+        return "Oui" if text.strip() == "1" else "Non"
+    if kind == "choice":
+        return ", ".join(cfg_label(config, i) or "?" for i in decode_ids(text))
+    return text
+
+
+def meta_one(d, text):
+    return day_text(text) if d["type"] == "date" else meta_display(d, text)
+
+
+def meta_column_value(d, text):
+    """the value of a row in a column, to sort and filter: a number or a date by its seconds, the rest as text"""
+    if text is None:
+        return None
+    if d["type"] in ("number", "date"):
+        try:
+            return float(text)
+        except ValueError:
+            return None
+    return meta_display(d, text)
+
+
+# inheritance and summary
+
+
+def meta_parent(path):
+    """the folder that holds a path, None at the root"""
+    trimmed = path.rstrip(os.sep)
+    at = trimmed.rfind(os.sep)
+    return path[:at] if at > 0 else None
+
+
+def meta_resolve(values, keys, path, is_dir, virt=None):
+    """what an item has for a property once the folders around it are taken into account. `values` holds the own
+    values by stored path, `keys` the same paths sorted. Returns ("own", value), ("inherited", value, folder),
+    ("summary", {value: count}, items) or None: the path itself wins, then its nearest folder; a folder that has
+    neither gets the summary of what is below it. `virt(path, is_self)` gives a folder with no stored value the
+    one of the rules of the indexation (see rule_value), so a folder the index does not know is read like the others."""
+    value = values.get(path)
+    if value is None and virt:
+        value = virt(path, True)
+    if value is not None:
+        return ("own", value)
+    at = path
+    while True:
+        parent = meta_parent(at)
+        if parent is None:
+            break
+        value = values.get(parent)
+        if value is None and virt:
+            value = virt(parent, False)
+        if value is not None:
+            return ("inherited", value, parent)
+        at = parent
+    if not is_dir():
+        return None
+    start = path.rstrip(os.sep) + os.sep
+    end = path.rstrip(os.sep) + chr(ord(os.sep) + 1)  # what comes after every path that starts with `folder/`
+    counts, items = {}, 0
+    for i in range(bisect.bisect_left(keys, start), bisect.bisect_left(keys, end)):
+        value = values[keys[i]]
+        counts[value] = counts.get(value, 0) + 1
+        items += 1
+    return ("summary", counts, items) if items else None
+
+
+def meta_more(items):
+    shown = ", ".join(items[:3])
+    return f"{shown} (+{len(items) - 3})" if len(items) > 3 else shown
+
+
+def meta_summary_text(d, counts, items):
+    kind = d["type"]
+    numbers = []
+    for value in counts:
+        try:
+            numbers.append(float(value))
+        except ValueError:
+            pass
+    if kind in ("number", "date"):
+        if not numbers:
+            return ""
+        low, high = min(numbers), max(numbers)
+        write = (lambda n: meta_display(d, number_text(n))) if kind == "number" else day_text
+        return write(low) if low == high else f"{write(low)} – {write(high)}"
+    if kind == "bool":
+        return f"{sum(n for v, n in counts.items() if v.strip() == '1')}/{items} oui"
+    if kind == "choice":
+        used = {i for value in counts for i in decode_ids(value)}  # in the order of the list
+        return meta_more([o["label"] for o in d["config"]["options"] if o["id"] in used])
+    return meta_more([v.splitlines()[0] if v.splitlines() else "" for v in counts])
+
+
+def meta_resolved_text(d, resolved):
+    """the text of a resolved value (empty for none)"""
+    if resolved is None:
+        return ""
+    if resolved[0] == "summary":
+        return meta_summary_text(d, resolved[1], resolved[2])
+    return meta_one(d, resolved[1])
+
+
+def meta_resolved_value(d, resolved):
+    """the value of a resolved property in a column: a summary of numbers or dates sorts by its lowest"""
+    if resolved is None:
+        return None
+    if resolved[0] != "summary":
+        return meta_column_value(d, resolved[1])
+    if d["type"] in ("number", "date"):
+        numbers = []
+        for value in resolved[1]:
+            try:
+                numbers.append(float(value))
+            except ValueError:
+                pass
+        return min(numbers) if numbers else None
+    return meta_summary_text(d, resolved[1], resolved[2])
+
+
+# formulas: the text of a template where {name} is replaced by the value of name, like an f-string
+
+
+def file_var(path, name):
+    """the variables every item has: filename (name), stem, ext, parent (folder), path, size and modified; None for
+    another name"""
+    path = Path(path)
+    name = name.lower()
+    if name in ("filename", "name", "file"):
+        return path.name
+    if name == "stem":
+        return path.stem
+    if name == "ext":
+        return path.suffix.lstrip(".")
+    if name in ("parent", "folder"):
+        return path.parent.name
+    if name == "path":
+        return str(path)
+    try:
+        if name == "size":
+            return str(path.stat().st_size) if path.is_file() else ""
+        if name == "modified":
+            return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).strftime("%d/%m/%Y")
+    except OSError:
+        return ""
+    return None
+
+
+def formula_spec(value, spec):
+    if spec == "":
+        return value
+    if spec == "upper":
+        return value.upper()
+    if spec == "lower":
+        return value.lower()
+    if spec == "trim":
+        return value.strip()
+    if spec == "title":
+        return " ".join(w[:1].upper() + w[1:].lower() for w in value.split(" "))
+    try:
+        n = float(value.strip().replace(",", "."))
+    except ValueError:
+        return value
+    if spec.startswith(".") and spec.endswith("f") and spec[1:-1].isdigit():
+        return f"{n:.{int(spec[1:-1])}f}"
+    if spec.endswith("d") and spec[:-1].isdigit():
+        width = int(spec[:-1])
+        return format(int(n), f"0{width}d") if spec.startswith("0") else format(int(n), f">{width}d")
+    return value
+
+
+def eval_formula(template, var):
+    """`{name}` is replaced by var(name) (None gives nothing); `{name:spec}` formats it: upper, lower, title, trim,
+    .2f (decimals), 03d (zeros in front). `{{` and `}}` are a brace."""
+    out, i = [], 0
+    while i < len(template):
+        c = template[i]
+        if c == "{" and template[i + 1 : i + 2] == "{":
+            out.append("{")
+            i += 2
+        elif c == "}" and template[i + 1 : i + 2] == "}":
+            out.append("}")
+            i += 2
+        elif c == "{":
+            end = template.find("}", i + 1)
+            if end < 0:
+                out.append(template[i:])  # an unclosed brace stays as it is
+                break
+            name, _, spec = template[i + 1 : end].partition(":")
+            out.append(formula_spec(var(name.strip()) or "", spec.strip()))
+            i = end + 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+# rules of the indexation: a folder structure that names properties, {project}/{entreprise}/{chapter}.
+# The first folder under the root is the project, the one under it the entreprise, and so on. A part that is
+# not {name} (*, _, or any text) is a level that gives nothing.
+
+
+def parse_pattern(text):
+    """the levels of a pattern: (kind, text, sets) where kind is "name" for {n}, "any" for * or _, "fixed" for a
+    folder name the level must have (case ignored), and sets the [name=value] pairs the level gives to its folder.
+    None when the text names no property at all"""
+    levels = []
+    for part in (p.strip() for p in text.replace("\\", "/").split("/")):
+        if not part:
+            continue
+        sets = []
+        if part.endswith("]") and "[" in part:
+            head, _, inside = part[:-1].rpartition("[")
+            part = head.strip()
+            for one in inside.split(";"):
+                name, eq, value = one.partition("=")
+                if eq and name.strip() and value.strip():
+                    sets.append((name.strip(), value.strip()))
+        inside, except_ = (part[1:-1].strip() if part.startswith("{") and part.endswith("}") else None), ()
+        if inside and "!" in inside:
+            inside, _, refused = inside.partition("!")
+            inside = inside.strip()
+            except_ = tuple(x.strip().lower() for x in refused.split("|") if x.strip())
+        if inside:
+            levels.append(("name", inside, sets, except_))
+        elif part in ("", "*", "_") or inside is not None:
+            levels.append(("any", None, sets, except_))
+        else:
+            levels.append(("fixed", part, sets, except_))
+    return levels if any(k == "name" or sets for k, _, sets, _e in levels) else None
+
+
+def pattern_names(levels):
+    """the properties a pattern fills or sets, in order of level"""
+    out = []
+    for kind, text, sets, _except in levels:
+        if kind == "name":
+            out.append(text)
+        out.extend(n for n, _ in sets)
+    return out
+
+
+def pattern_specificity(levels):
+    """how many levels name a folder: of two rules that give the same folder a value, the more precise wins"""
+    return sum(1 for k, _, _, _e in levels if k == "fixed")
+
+
+def pattern_assign(levels, root, folder):
+    """what a folder gives: a list of (property, text), if it is under `root` and the folders above it have the
+    names the pattern asks: the name of the level filled with the name of the folder, and the values the level sets.
+    `root` and `folder` are stored paths."""
+    base = root.rstrip(os.sep)
+    if not folder.startswith(base + os.sep):
+        return []
+    parts = [p for p in folder[len(base) + 1 :].split(os.sep) if p]
+    if not parts or len(parts) > len(levels):
+        return []
+    for (kind, text, _, refused), part in zip(levels, parts):
+        if (kind == "fixed" and text.lower() != part.lower()) or part.lower() in refused:
+            return []
+    kind, text, sets, _refused = levels[len(parts) - 1]
+    return ([(text, parts[-1])] if kind == "name" else []) + list(sets)
+
+
+def rules_by_precision(rules):
+    """the enabled rules that have a valid pattern as (root, levels), the most precise first: more fixed names in
+    the pattern, then a deeper root, then the older"""
+    found = [(r, parse_pattern(r["pattern"])) for r in rules if r["enabled"]]
+    found = [(r, lv) for r, lv in found if lv]
+    found.sort(key=lambda x: (-pattern_specificity(x[1]), -len(x[0]["root"]), x[0]["id"]))
+    return [(r["root"], lv) for r, lv in found]
+
+
+def rule_value(rules, d, folder):
+    """what the rules give a folder for a property without the index: the value of the first rule whose pattern
+    names the property at the level of the folder. None for a list that does not have the label yet (indexing adds it)."""
+    for root, levels in rules:
+        for name, text in pattern_assign(levels, root, folder):
+            if name.lower() != d["name"].lower():
+                continue
+            copy = {**d, "config": meta_config(meta_config_json(d["config"]))}
+            before = meta_config_json(copy["config"])
+            value = parse_input(copy, text)
+            return value if value is not None and meta_config_json(copy["config"]) == before else None
+    return None
+
+
+def parse_input(d, text, today=None):
+    """the stored value of a text for a property (a folder name read by a rule, say). For an open list a new label
+    joins the list, so d["config"] may change: the caller saves it. None when the text is not a value of the type
+    (a closed list that does not have it, a number that is not one...)."""
+    t = text.strip()
+    if not t:
+        return None
+    kind, config = d["type"], d["config"]
+    if kind in ("text", "longtext"):
+        return text
+    if kind == "number":
+        try:
+            n = float(t.replace(",", "."))
+        except ValueError:
+            return None
+        return number_text(n) if n == n and abs(n) != float("inf") else None
+    if kind == "date":
+        day = parse_date(t)
+        return str(day_seconds(day)) if day else None
+    if kind == "bool":
+        low = t.lower()
+        return "1" if low in ("1", "oui", "yes", "true", "vrai") else "0" if low in ("0", "non", "no", "false", "faux") else None
+    if kind == "choice":
+        option = cfg_find(config, t)
+        if option is None and config["mode"] == "open":
+            option = cfg_add(config, t)
+        return None if option is None else encode_ids([option], config["multiple"])
+    return None
 
 
 # ==================================================================================================
@@ -1170,7 +1848,7 @@ CUSTOM_TITLEBAR = sys.platform == "win32"  # no title bar of the system: the win
 # same one to the shortcut, so a pinned Finder opens its window under its own icon
 APP_USER_MODEL_ID = "pyegui.Finder"
 # the window icon; the green one for the bundle "Finder Py.app" (made by scripts/make_app_macos.py), to tell it from the Rust Finder
-APP_ICON = Path(__file__).resolve().parent / "app_icon" / ("finder_green_256.png" if os.environ.get("PYEGUI_APP_NAME") == "Finder Py" else "finder_256.png")
+APP_ICON = Path(__file__).resolve().parent / "app_icon" / "finder_green_256.png"  # always the green one: the blue one is the Rust Finder
 HOME = Path.home()
 ICONS_DIR = (
     Path(__file__).resolve().parent / "icons"
@@ -1794,6 +2472,8 @@ def popup_open():
         or renaming.value
         or tag_picker_open.value
         or tag_manager_open.value
+        or meta_open["manager"]
+        or meta_open["rules"]
     )
 
 
@@ -2031,6 +2711,7 @@ def snapshot():
         "show_hidden": show_hidden.value,
         "blue_folders": blue_folders.value,
         "index_ignore": {"hidden": index_ignore_hidden.value, "names": list(index_ignore_names)},
+        "meta_columns": list(meta_columns),
         "background": {
             "on": bg_on.value,
             "image": bg_image.value,
@@ -2082,6 +2763,8 @@ def restore(saved):
         index_ignore_hidden.value = bool(ignore.get("hidden", True))
         if isinstance(ignore.get("names"), list):
             index_ignore_names[:] = [n for n in ignore["names"] if isinstance(n, str)]
+    if isinstance(saved.get("meta_columns"), list):
+        meta_columns[:] = [i for i in saved["meta_columns"] if isinstance(i, int)]
     set_hidden(bool(saved.get("show_hidden", show_hidden.value)))
     set_blue(bool(saved.get("blue_folders", blue_folders.value)))
     background = saved.get("background")
@@ -4204,6 +4887,10 @@ def pdf_first_page(path):
     return pdf_preview["doc"]
 
 
+TREE_COLUMNS = ("Name", "Tags", "Last Opened")  # the names a property column must not take
+LIST_COLUMNS = ("Name", "Date Modified", "Size", "Kind", "Notes", "Pages", "Prot.", "Tags", "Last Opened")
+
+
 def content():
     if reading.value:
         reader()
@@ -4229,7 +4916,8 @@ def content():
                 extra_columns=[
                     ("Tags", TAGS_COLUMN, tags_cell, {"type": "text", "value": tags_value}),
                     ("Last Opened", OPENED_COLUMN, opened_cell, {"type": "date", "value": opened_value}),
-                ],
+                ]
+                + meta_extra_columns(TREE_COLUMNS),
                 context_menu=view_menu,
             ),
             persist_id="files-tree",  # the same position with the dock or without
@@ -4246,7 +4934,8 @@ def content():
                 ("Prot.", 45, protected_cell, {"type": "choice", "value": protected_value}),
                 ("Tags", TAGS_COLUMN, tags_cell, {"type": "text", "value": tags_value}),
                 ("Last Opened", OPENED_COLUMN, opened_cell, {"type": "date", "value": opened_value}),
-            ],
+            ]
+            + meta_extra_columns(LIST_COLUMNS),
             context_menu=view_menu,
         )
     else:
@@ -4828,6 +5517,8 @@ def run_index_job(folder, name, walk):
             indexing["result"] = (
                 tags.index_folder(folder, progress, cancelled, on_folder=on_folder, ignore=ignore) if walk else (0, 0)
             )
+            if walk and indexing["result"] is not None:
+                indexing["apply_rules"] = True  # the window applies the rules of the properties
             if indexing["result"] is not None:  # then what the PDF say of themselves: only the new or changed ones are read
                 indexing["pdfs"] = tags.index_pdfs(folder, pdf_progress, cancelled, on_file)  # a cancelled walk stops the whole job
         except Exception as error:  # a base that is locked, a disk that is full...
@@ -5367,6 +6058,22 @@ ACTIONS = [
         None,
         lambda: True,
         lambda: setattr(index_ignore_open, "value", True),
+    ),
+    (
+        "Outils",
+        "Propriétés…",
+        "tag",
+        None,
+        lambda: True,
+        lambda: meta_open.update(manager=True),
+    ),
+    (
+        "Outils",
+        "Règles d'indexation…",
+        "gear",
+        None,
+        lambda: True,
+        lambda: open_meta_rules(),
     ),
     (
         "Outils",
@@ -5975,11 +6682,641 @@ def zone_pane(zone, ui, margin=0):
     )
 
 
+# ==================================================================================================
+# meta properties on screen
+# ==================================================================================================
+
+# The pane "Propriétés" (see and edit the values of the selected item), the window that manages the
+# definitions, the window of the rules of the indexation, and the columns of the views. What a value
+# means is in the functions after TagStore, the data is in TagStore (meta_defs, meta_values, meta_rules).
+
+meta_columns = []  # ids of the properties shown as columns of the views
+meta_open = {"manager": False, "rules": False}  # the windows
+meta_cache = {"version": -1, "defs": [], "values": {}, "resolved": {}, "computed": {}, "rules": []}
+meta_holders = {}  # what is being typed in the pane, by kind and property id
+meta_pane = {"path": None}
+
+
+def meta_refresh():
+    """the properties, the own values of those that are shown and what each row resolves to: read once per
+    version of the base, then looked up while the rows are drawn"""
+    if meta_cache["version"] != tags.version:
+        meta_cache.update(version=tags.version, defs=tags.meta_defs(), values={}, resolved={}, computed={}, rules=rules_by_precision(tags.meta_rules()))
+    return meta_cache
+
+
+def meta_resolved(d, path):
+    """what a property is for a path: its own value, the one of a folder around it, or the summary of a folder"""
+    cache = meta_refresh()
+    key = (d["id"], str(path))
+    if key not in cache["resolved"]:
+        if d["id"] not in cache["values"]:
+            values = tags.meta_all(d["id"])
+            cache["values"][d["id"]] = (values, sorted(values))
+        values, keys = cache["values"][d["id"]]
+        rules = cache["rules"]
+
+        def virt(folder, is_self):  # a file gets nothing from the name of a level: only folders do
+            return None if is_self and not Path(path).is_dir() else rule_value(rules, d, folder)
+
+        cache["resolved"][key] = meta_resolve(values, keys, tag_key(path), lambda: Path(path).is_dir(), virt)
+    return cache["resolved"][key]
+
+
+def meta_formula(d, path, depth=0):
+    """the text of a formula property for a path: the template with the variables of the item and the values of
+    the other properties (a formula may use another one, down to a few levels)"""
+    if depth > 4:
+        return ""
+    cache = meta_refresh()
+    key = (d["id"], str(path))
+    if depth == 0 and key in cache["computed"]:
+        return cache["computed"][key]
+
+    def var(name):
+        found = file_var(path, name)
+        if found is not None:
+            return found
+        other = next((o for o in cache["defs"] if o["id"] != d["id"] and o["name"].lower() == name.lower()), None)
+        if other is None:
+            return None
+        if other["type"] == "formula":
+            return meta_formula(other, path, depth + 1)
+        return meta_resolved_text(other, meta_resolved(other, path))
+
+    text = eval_formula(d["config"]["formula"], var)
+    if depth == 0:
+        cache["computed"][key] = text
+    return text
+
+
+def meta_cell(d, path):
+    """the cell of a row: the own value as it is, an inherited one or a summary in weak text"""
+    resolved = meta_resolved(d, path)
+    text = meta_resolved_text(d, resolved)
+    if not text:
+        return
+    if resolved[0] == "own":
+        label(text)
+    elif resolved[0] == "inherited":
+        weak(text)
+    else:
+        weak(f"≈ {text}")
+
+
+def meta_extra_columns(reserved):
+    """the columns of the properties shown, to add to extra_columns of a view"""
+    columns = []
+    for d in meta_refresh()["defs"]:
+        if d["id"] not in meta_columns:
+            continue
+        title = f"{d['name']} (propriété)" if d["name"] in reserved else d["name"]
+        if d["type"] == "formula":
+            columns.append((title, 160, lambda p, d=d: label(meta_formula(d, p)), {"type": "text", "value": lambda p, d=d: meta_formula(d, p) or None}))
+        else:
+            columns.append(
+                (
+                    title,
+                    130,
+                    lambda p, d=d: meta_cell(d, p),
+                    {"type": META_COLUMN_TYPE[d["type"]], "value": lambda p, d=d: meta_resolved_value(d, meta_resolved(d, p))},
+                )
+            )
+    return columns
+
+
+def meta_target():
+    """the item the pane is about: the one selected, or the file shown, or the folder shown"""
+    if len(picked) == 1:
+        return Path(next(iter(picked))), True
+    return (Path(reading.value) if reading.value else current()), False
+
+
+def meta_editable(d, stored):
+    """the text a value is edited as"""
+    if stored is None:
+        return ""
+    return day_text(stored) if d["type"] == "date" else stored
+
+
+def meta_typed(d, text, stored):
+    """the stored value of what was typed: None when it is empty, `stored` when it is not (yet) a value of the type"""
+    if not text.strip():
+        return None
+    if d["type"] == "number":
+        try:
+            n = float(text.strip().replace(",", "."))
+        except ValueError:
+            return stored
+        return number_text(n) if n == n and abs(n) != float("inf") else stored
+    if d["type"] == "date":
+        day = parse_date(text.strip())
+        return str(day_seconds(day)) if day else stored
+    return text
+
+
+def meta_choice_editor(d, path, stored):
+    config = d["config"]
+    ids = decode_ids(stored) if stored else []
+    order = [o["id"] for o in config["options"]]
+
+    def chips():
+        for option in config["options"]:
+
+            def one(option=option):
+                if option["color"]:
+                    dot(hex_color(option["color"]) + (255,))
+                if selectable_label_clicked(option["id"] in ids, option["label"]):
+                    if config["multiple"]:
+                        chosen_ids = [i for i in ids if i != option["id"]] if option["id"] in ids else ids + [option["id"]]
+                        chosen_ids.sort(key=lambda i: order.index(i) if i in order else len(order))  # the order of the list
+                        tags.set_meta_value(path, d["id"], encode_ids(chosen_ids, True) or None)
+                    else:
+                        tags.set_meta_value(path, d["id"], str(option["id"]))
+
+            horizontal(one)
+
+    if config["options"]:
+        horizontal_wrapped(chips)
+    else:
+        weak("Aucune option")
+    if config["mode"] == "open":
+        box = meta_holders.setdefault(("n", d["id"]), Str(""))
+
+        def add():
+            text_edit_singleline(box, hint_text="Ajouter une option")
+            if (small_button_clicked("+") or key_pressed("Enter", when_typing=True)) and box.value.strip():
+                option = tags.add_choice_option(d["id"], box.value)
+                box.value = ""
+                if option is not None:
+                    picked_ids = ids if config["multiple"] else []
+                    if option not in picked_ids:
+                        picked_ids = picked_ids + [option]
+                    tags.set_meta_value(path, d["id"], encode_ids(picked_ids, config["multiple"]))
+
+        horizontal(add)
+
+
+def meta_value_editor(d, path, stored):
+    """the editor of one property for an item: what the person changes goes to the base at once"""
+    kind = d["type"]
+    if kind == "bool":
+        box = meta_holders.setdefault(("b", d["id"]), Bool(False))
+        box.value = stored == "1"
+        checkbox(box, "Oui" if box.value else "Non")
+        if box.value != (stored == "1"):
+            tags.set_meta_value(path, d["id"], "1" if box.value else "0")
+    elif kind == "choice":
+        meta_choice_editor(d, path, stored)
+    else:
+        buffer = meta_holders.get(("t", d["id"]))
+        if buffer is None:
+            buffer = meta_holders[("t", d["id"])] = Str(meta_editable(d, stored))
+        hint = {"date": "jj/mm/aaaa, demain, 12 mars…", "number": "nombre"}.get(kind, "")
+        if kind == "longtext":
+            text_edit_multiline(buffer, hint_text=hint)
+        else:
+            text_edit_singleline(buffer, hint_text=hint)
+        typed = meta_typed(d, buffer.value, stored)
+        if typed != stored:
+            tags.set_meta_value(path, d["id"], typed)
+        if kind == "date" and stored:
+            try:
+                weak(human_day(datetime.fromtimestamp(float(stored), timezone.utc).date()))
+            except (ValueError, OverflowError, OSError):
+                pass
+        if kind == "number" and d["config"]["unit"] and stored:
+            weak(meta_display(d, stored))
+
+
+def meta_row(d, path, stored):
+    def head():
+        strong(d["name"])
+        weak(META_LABELS[d["type"]])
+        if stored is not None and image_button_clicked(svg("close"), size=12, tint=icon_tint(), tooltip="Effacer la valeur"):
+            tags.set_meta_value(path, d["id"], None)
+            for kind in ("t", "b"):
+                meta_holders.pop((kind, d["id"]), None)
+
+    add_space(4)
+    horizontal(head)
+    if d["description"]:
+        weak(d["description"])
+    if d["type"] == "formula":
+        text = meta_formula(d, path)
+        label(text if text else "—")
+        return
+    resolved = meta_resolved(d, path)
+    if resolved and resolved[0] == "inherited":
+        weak(f"↳ {meta_resolved_text(d, resolved)} · hérité de {Path(resolved[2]).name or resolved[2]}")
+    elif resolved and resolved[0] == "summary":
+        weak(f"≈ {meta_resolved_text(d, resolved)} · résumé de {resolved[2]} élément(s)")
+    meta_value_editor(d, path, stored)
+
+
+def meta_columns_ui(defs):
+    for d in defs:
+        box = meta_holders.setdefault(("c", d["id"]), Bool(False))
+        box.value = d["id"] in meta_columns
+        checkbox(box, d["name"])
+        if box.value != (d["id"] in meta_columns):
+            if box.value:
+                meta_columns.append(d["id"])
+            else:
+                meta_columns.remove(d["id"])
+
+
+def meta_panel():
+    """the dock pane of the properties: for the selected item (or the folder shown), one editor per property"""
+    path, is_selected = meta_target()
+    defs = meta_refresh()["defs"]
+
+    def head():
+        strong(path.name or str(path))
+        if not is_selected:
+            weak("(dossier affiché)")
+
+    horizontal(head)
+
+    def buttons():
+        if button_clicked("Gérer les propriétés…"):
+            meta_open["manager"] = True
+        if button_clicked("Règles d'indexation…"):
+            open_meta_rules()
+
+    horizontal(buttons)
+    separator()
+    if len(picked) > 1:
+        weak("Plusieurs éléments sélectionnés : choisis-en un seul pour éditer ses propriétés.")
+        return
+    if not defs:
+        weak("Aucune propriété : crée-en une avec « Gérer les propriétés… ».")
+        return
+    if meta_pane["path"] != str(path):
+        meta_pane["path"] = str(path)
+        meta_holders.clear()
+    collapsing("Colonnes des vues", lambda: meta_columns_ui(defs))
+    values = tags.meta_values_of(path)
+    for d in defs:
+        meta_row(d, path, values.get(d["id"]))
+
+
+# the window that manages the definitions
+
+mm = {"selected": 0, "loaded": 0, "options": {}, "confirm_option": 0, "confirm_property": False}
+mm_name, mm_desc, mm_unit, mm_formula = Str(""), Str(""), Str(""), Str("")
+mm_new_name, mm_new_option = Str(""), Str("")
+mm_new_type = Int(0)
+mm_mode = Int(0)  # 0: closed list, 1: open list
+mm_multiple = Bool(False)
+OPTION_GRAY = "#969696"
+
+
+def meta_manager_load(d):
+    """the fields take the values of the property chosen"""
+    mm.update(loaded=d["id"], confirm_option=0, confirm_property=False, options={})
+    mm_name.value, mm_desc.value = d["name"], d["description"]
+    mm_unit.value, mm_formula.value = d["config"]["unit"], d["config"]["formula"]
+    mm_mode.value = 1 if d["config"]["mode"] == "open" else 0
+    mm_multiple.value = d["config"]["multiple"]
+    mm_new_option.value = ""
+
+
+def option_holders(option):
+    """the text and the color pickers of an option, made when it first shows"""
+    if option["id"] not in mm["options"]:
+        color = RGB(*(c / 255 for c in hex_color(option["color"] or OPTION_GRAY)))
+        mm["options"][option["id"]] = (Str(option["label"]), color, option["color"] or OPTION_GRAY)
+    return mm["options"][option["id"]]
+
+
+def meta_manager_options(d, draft):
+    """the options of a list: color, name, number of items that hold it, order, delete, merge"""
+    strong("Options")
+    usage = {}
+    for value in tags.meta_all(d["id"]).values():
+        for i in decode_ids(value):
+            usage[i] = usage.get(i, 0) + 1
+    action = {"remove": 0, "merge": None}
+    labels = [(o["id"], o["label"]) for o in draft["config"]["options"]]
+
+    def rows():
+        for option in list(draft["config"]["options"]):
+            text, color, loaded_hex = option_holders(option)
+
+            def row(option=option, text=text, color=color, loaded_hex=loaded_hex):
+                used = usage.get(option["id"], 0)
+                color_edit_button_rgb(color)
+                if to_hex(color) != loaded_hex:
+                    option["color"] = to_hex(color)
+                text_edit_singleline(text)
+                if text.value.strip() and text.value.strip() != option["label"]:
+                    cfg_rename(draft["config"], option["id"], text.value)  # refused when empty or taken
+                weak(str(used))
+                if small_button_clicked("▲"):
+                    cfg_move(draft["config"], option["id"], -1)
+                if small_button_clicked("▼"):
+                    cfg_move(draft["config"], option["id"], 1)
+                if mm["confirm_option"] == option["id"]:
+                    label(f"Retirer de {used} élément(s) ?" if used else "Supprimer ?")
+                    if button_clicked("Oui"):
+                        action["remove"] = option["id"]
+                    if button_clicked("Non"):
+                        mm["confirm_option"] = 0
+                else:
+                    if image_button_clicked(svg("close"), size=12, tint=icon_tint(), tooltip="Supprimer l'option"):
+                        if used:
+                            mm["confirm_option"] = option["id"]
+                        else:
+                            action["remove"] = option["id"]
+                    if len(labels) > 1:
+
+                        def targets():
+                            for other, name in labels:
+                                if other != option["id"] and button_clicked(name):
+                                    action["merge"] = (option["id"], other)
+
+                        menu_button("Fusionner dans…", targets)
+
+            horizontal(row)
+        if not draft["config"]["options"]:
+            weak("Aucune option")
+
+    def bounded():
+        set_max_height(170)
+        scroll_area_vertical(rows)
+
+    vertical(bounded)
+
+    def add():
+        text_edit_singleline(mm_new_option, hint_text="Ajouter une option")
+        if (button_clicked("Ajouter") or key_pressed("Enter", when_typing=True)) and mm_new_option.value.strip():
+            if cfg_add(draft["config"], mm_new_option.value) is not None:
+                mm_new_option.value = ""
+
+    horizontal(add)
+    # what changes the values goes to the base at once, then the fields are read again
+    if action["remove"]:
+        tags.update_meta(draft)
+        tags.remove_choice_option(d["id"], action["remove"])
+        mm["loaded"] = 0
+    elif action["merge"]:
+        tags.update_meta(draft)
+        tags.merge_choice_option(d["id"], *action["merge"])
+        mm["loaded"] = 0
+
+
+def meta_manager_fields(d, draft):
+    def form():
+        label("Nom")
+        text_edit_singleline(mm_name)
+        end_row()
+        label("Type")
+        label(META_LABELS[d["type"]])
+        end_row()
+        label("Description")
+        text_edit_multiline(mm_desc)
+        end_row()
+        if d["type"] == "number":
+            label("Unité")
+            text_edit_singleline(mm_unit)
+            end_row()
+        if d["type"] == "formula":
+            label("Formule")
+
+            def formula():
+                set_width(300)
+                text_edit_multiline(mm_formula, hint_text="{filename} {Statut}")
+                weak("{nom} : filename, stem, ext, parent, path, size, modified, ou une autre propriété. {nom:upper}, :lower, :title, :.2f, :03d.")
+
+            vertical(formula)
+            end_row()
+        if d["type"] == "choice":
+            label("Liste")
+
+            def modes():
+                set_width(300)
+                radio_value(mm_mode, 0, "Fermée : seules les options ci-dessous")
+                radio_value(mm_mode, 1, "Ouverte : une nouvelle valeur s'ajoute à la liste")
+                checkbox(mm_multiple, "Plusieurs valeurs à la fois")
+
+            vertical(modes)
+            end_row()
+
+    grid("meta-fields", form)
+    draft["name"], draft["description"] = mm_name.value.strip(), mm_desc.value
+    config = draft["config"]
+    config["unit"], config["formula"] = mm_unit.value, mm_formula.value
+    config["mode"], config["multiple"] = ("open" if mm_mode.value else "closed"), mm_multiple.value
+
+
+def meta_manager_right(d):
+    set_width(430)
+    if d is None:
+        weak("Choisis une propriété ou crées-en une.")
+        return
+    draft = json.loads(json.dumps(d))
+    meta_manager_fields(d, draft)
+    if d["type"] == "choice":
+        add_space(6)
+        meta_manager_options(d, draft)
+    if mm["loaded"] != d["id"]:
+        return  # an option was removed or merged: the fields are read again
+    taken = any(o["id"] != d["id"] and o["name"].lower() == draft["name"].lower() for o in tags.meta_defs())
+    if not draft["name"] or taken:
+        colored_label((220, 90, 90), "Le nom est vide ou déjà pris : l'ancien est gardé.")
+    elif draft != d:
+        tags.update_meta(draft)
+    add_space(8)
+
+    def delete():
+        if mm["confirm_property"]:
+            label(f"Supprimer « {d['name']} » et ses {tags.meta_usage(d['id'])} valeur(s) ?")
+            if button_clicked("Supprimer"):
+                tags.delete_meta(d["id"])
+                mm.update(selected=0, loaded=0, confirm_property=False)
+            if button_clicked("Annuler"):
+                mm["confirm_property"] = False
+        elif button_clicked("Supprimer la propriété"):
+            mm["confirm_property"] = True
+
+    horizontal(delete)
+
+
+def meta_manager_left(defs):
+    set_width(190)
+
+    def rows():
+        for x in defs:
+            if selectable_label_clicked(mm["selected"] == x["id"], f"{x['name']}  ·  {META_LABELS[x['type']]}"):
+                mm["selected"] = x["id"]
+        if not defs:
+            weak("Aucune propriété")
+
+    def bounded():
+        set_max_height(300)
+        scroll_area_vertical(rows)
+
+    vertical(bounded)
+    if mm["selected"]:
+
+        def arrows():
+            if small_button_clicked("▲"):
+                tags.move_meta(mm["selected"], -1)
+            if small_button_clicked("▼"):
+                tags.move_meta(mm["selected"], 1)
+
+        horizontal(arrows)
+    separator()
+    text_edit_singleline(mm_new_name, hint_text="Nouvelle propriété")
+    combo_box(mm_new_type, list(range(len(META_TYPES))), [name for _, name in META_TYPES], "Type")
+    clicked = []
+    add_enabled(bool(mm_new_name.value.strip()), lambda: clicked.append(button_clicked("Créer")))
+    if clicked and clicked[0]:
+        made = tags.create_meta(mm_new_name.value, META_TYPES[mm_new_type.value][0])
+        if made:
+            mm["selected"] = made
+            mm_new_name.value = ""
+
+
+def meta_manager_ui():
+    set_width(660)
+    heading("Propriétés")
+    weak("Un nom, un type et une description. Les valeurs se mettent sur les fichiers et dossiers depuis le panneau Propriétés.")
+    add_space(6)
+    defs = tags.meta_defs()
+    ids = [x["id"] for x in defs]
+    if mm["selected"] not in ids:
+        mm["selected"] = ids[0] if ids else 0
+    d = next((x for x in defs if x["id"] == mm["selected"]), None)
+    if d is None:
+        mm["loaded"] = 0
+    elif mm["loaded"] != d["id"]:
+        meta_manager_load(d)
+
+    def body():
+        vertical(lambda: meta_manager_left(defs))
+        add_space(12)
+        vertical(lambda: meta_manager_right(d))
+
+    horizontal(body)
+    add_space(8)
+    if button_clicked("Fermer"):
+        meta_open["manager"] = False
+
+
+def meta_manager():
+    if modal("meta-manager", meta_manager_ui, rounding=12, inner_margin=14, fill=dialog_fill()):
+        meta_open["manager"] = False
+
+
+# the window of the rules of the indexation: a folder, and the pattern its sub-folders are read with
+
+mr_root, mr_pattern = Str(""), Str("")
+mr_rows = {}
+
+
+def open_meta_rules():
+    mr_root.value = str(current())
+    meta_open["rules"] = True
+
+
+def meta_rules_ui():
+    set_width(640)
+    heading("Règles d'indexation")
+    weak(
+        "Sous un dossier, chaque niveau de sous-dossiers remplit une propriété : {project}/{entreprise}/{chapter}. "
+        "Les valeurs se mettent sur les dossiers (leur contenu en hérite) à la fin d'une indexation ou avec « Appliquer ». "
+        "Une valeur tapée à la main n'est jamais remplacée. * ignore un niveau ; un nom de dossier fixe (00 - DOE Livrés) ne s'applique qu'à ce dossier ; [Statut=Terminé] après un niveau donne cette valeur à son dossier."
+    )
+    add_space(6)
+    rules = tags.meta_rules()
+    names = [d["name"].lower() for d in tags.meta_defs()]
+
+    def rows():
+        for rule in rules:
+            fields = mr_rows.setdefault(rule["id"], {"enabled": Bool(rule["enabled"]), "root": Str(rule["root"]), "pattern": Str(rule["pattern"])})
+
+            def row(rule=rule, fields=fields):
+                checkbox(fields["enabled"], "")
+                text_edit_singleline(fields["root"])
+                text_edit_singleline(fields["pattern"])
+                if image_button_clicked(svg("close"), size=12, tint=icon_tint(), tooltip="Supprimer la règle et ses valeurs"):
+                    tags.delete_meta_rule(rule["id"])
+                    mr_rows.pop(rule["id"], None)
+
+            horizontal(row)
+            levels = parse_pattern(fields["pattern"].value)
+            if levels is None:
+                colored_label((220, 90, 90), "Aucun {nom} dans le motif")
+            else:
+                missing = [n for n in pattern_names(levels) if n.lower() not in names]
+                if missing:
+                    colored_label((220, 90, 90), f"Propriété inconnue : {', '.join(missing)}")
+            changed = {"id": rule["id"], "enabled": fields["enabled"].value, "root": fields["root"].value, "pattern": fields["pattern"].value}
+            if rule["id"] in mr_rows and changed != rule:
+                tags.update_meta_rule(changed)
+        if not rules:
+            weak("Aucune règle")
+
+    def bounded():
+        set_max_height(260)
+        scroll_area_vertical(rows)
+
+    vertical(bounded)
+    separator()
+    label("Nouvelle règle")
+
+    def fields():
+        text_edit_singleline(mr_root, hint_text="Dossier")
+        text_edit_singleline(mr_pattern, hint_text="{project}/{entreprise}")
+
+    horizontal(fields)
+
+    def buttons():
+        if button_clicked("Dossier affiché"):
+            mr_root.value = str(current())
+        ok = bool(mr_root.value.strip()) and parse_pattern(mr_pattern.value) is not None
+        clicked = []
+        add_enabled(ok, lambda: clicked.append(button_clicked("Ajouter")))
+        if clicked and clicked[0] and tags.add_meta_rule(Path(mr_root.value.strip()), mr_pattern.value):
+            mr_pattern.value = ""
+
+    horizontal(buttons)
+    add_space(6)
+
+    def end():
+        if button_clicked("Appliquer"):  # reads the folders already indexed again
+            apply_meta_rules_notice()
+        if button_clicked("Fermer"):
+            meta_open["rules"] = False
+
+    horizontal(end)
+
+
+def meta_rules_dialog():
+    if modal("meta-rules", meta_rules_ui, rounding=12, inner_margin=14, fill=dialog_fill()):
+        meta_open["rules"] = False
+
+
+def apply_meta_rules_notice():
+    """applies the rules of the properties and says in the indexation history what they wrote"""
+    if not tags.meta_rules():
+        return
+    written, unknown = tags.apply_meta_rules()
+    text = f"{written} valeur(s) écrite(s)"
+    if unknown:
+        text += f" · propriété inconnue : {', '.join(unknown)}"
+    index_history.append(("Règles des propriétés", text))
+    del index_history[:-10]
+
+
 PANES = {
     "Actions": zone_pane("dock", lambda: scroll_area_vertical(actions_panel)),
     "Preview": zone_pane("dock", lambda: scroll_area_vertical(preview)),
     "Notes": zone_pane("dock", notes_panel),
     "Tags": zone_pane("dock", lambda: scroll_area_vertical(tags_panel)),
+    "Propriétés": zone_pane("dock", lambda: scroll_area_vertical(meta_panel)),
     "Recent": zone_pane("dock", lambda: scroll_area_vertical(recent_panel)),
     "Recherche": zone_pane("dock", lambda: scroll_area_vertical(find_panel)),
     "Dossiers surveillés": zone_pane("dock", lambda: scroll_area_vertical(watched_panel)),
@@ -6258,6 +7595,12 @@ def update_func(ctx):
     if os.environ.get("FINDER_TAB2") and not tab_state.get("tested") and len(dock.titles) > 1 and started.value:
         tab_state["tested"] = True
         new_tab(Path(os.environ["FINDER_TAB2"]))  # for the checks with two tabs of folder
+    if os.environ.get("FINDER_CHECK") and not tab_state.get("checked"):  # for the checks: FINDER_CHECK=pane|manager|rules
+        tab_state["checked"] = True
+        what = os.environ["FINDER_CHECK"]
+        if what == "pane":
+            show_pane("Propriétés")
+        meta_open.update(manager=what == "manager", rules=what == "rules")
     collect_activity()
     apply_background()
     window_frame(ctx)
@@ -6280,6 +7623,12 @@ def window_frame(ctx):
         integration_dialog()
     if index_ignore_open.value:
         index_ignore_dialog()
+    if meta_open["manager"]:
+        meta_manager()
+    if meta_open["rules"]:
+        meta_rules_dialog()
+    if indexing.pop("apply_rules", False):  # the folders are known now: the rules read their names
+        apply_meta_rules_notice()
     if palette_open.value:
         action_palette()
     if tag_picker_open.value:

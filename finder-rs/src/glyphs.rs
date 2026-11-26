@@ -161,6 +161,48 @@ pub fn action_button(ui: &egui::Ui, icon: &str, label: &str) -> egui::Button<'st
     egui::Button::image_and_text(image(by_name(icon), 16.0, ui.visuals().text_color()), label.to_string())
 }
 
+/// A popup. In the light theme its window is darker than the glass of the bars, so that it stands out
+pub fn modal(ctx: &egui::Context, id: &'static str) -> egui::Modal {
+    let style = ctx.global_style();
+    let mut frame = egui::Frame::popup(&style);
+    if !style.visuals.dark_mode {
+        frame = frame.fill(Color32::from_rgb(222, 224, 233)).stroke(egui::Stroke::new(1.0, Color32::from_rgb(140, 143, 160)));
+    }
+    egui::Modal::new(egui::Id::unique(id)).frame(frame)
+}
+
+/// In the light theme the fields and buttons of a popup get opaque fills and marked outlines
+fn modal_visuals(ui: &mut egui::Ui) {
+    if ui.visuals().dark_mode {
+        return;
+    }
+    let v = ui.visuals_mut();
+    let field = Color32::WHITE;
+    v.extreme_bg_color = field;
+    v.text_edit_bg_color = Some(field);
+    v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, Color32::from_rgb(150, 153, 170));
+    for (w, fill, stroke) in [
+        (&mut v.widgets.inactive, Color32::from_rgb(246, 247, 251), Color32::from_rgb(110, 113, 130)),
+        (&mut v.widgets.hovered, Color32::from_rgb(255, 255, 255), Color32::from_rgb(70, 73, 95)),
+    ] {
+        w.bg_fill = fill;
+        w.weak_bg_fill = fill;
+        w.bg_stroke = egui::Stroke::new(1.0, stroke);
+    }
+}
+
+/// The title of a popup, with a cross (the SVG `close`) at the top left to close it: true when the cross is clicked
+pub fn modal_title(ui: &mut egui::Ui, title: &str) -> bool {
+    modal_visuals(ui);
+    ui.horizontal(|ui| {
+        let tint = ui.visuals().strong_text_color();
+        let cross = ui.add(egui::Button::image(image(CLOSE, 14.0, tint)).frame(false).min_size(egui::vec2(24.0, 24.0)));
+        ui.heading(title);
+        cross.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Fermer (Échap)").clicked()
+    })
+    .inner
+}
+
 /// A small icon button without frame (tooltip on hover)
 pub fn small(ui: &mut egui::Ui, glyph: Glyph, tooltip: &str) -> Response {
     let tint = ui.visuals().text_color();

@@ -1232,9 +1232,11 @@ impl FinderApp {
         let mut close = false;
         let mut remove: Option<usize> = None;
         let mut add = false;
-        egui::Modal::new(egui::Id::unique("index-ignore")).show(ctx, |ui| {
+        crate::glyphs::modal(ctx, "index-ignore").show(ctx, |ui| {
             ui.set_width(420.0);
-            ui.heading("Dossiers ignorés par l'indexation");
+            if glyphs::modal_title(ui, "Dossiers ignorés par l'indexation") {
+                close = true;
+            }
             ui.weak("Un nom (sans la casse, avec * au début ou à la fin : *.app, cache*) ou un chemin complet (tout ce qu'il contient).");
             ui.add_space(6.0);
             ui.checkbox(&mut self.index_ignore.hidden, "Ignorer les éléments cachés (dont le nom commence par un point)");
@@ -1290,9 +1292,11 @@ impl FinderApp {
         if let Some((path, mut name)) = self.rename.take() {
             let mut keep = true;
             let mut apply = false;
-            egui::Modal::new(egui::Id::unique("rename")).show(ctx, |ui| {
+            crate::glyphs::modal(ctx, "rename").show(ctx, |ui| {
                 ui.set_width(320.0);
-                ui.heading("Renommer");
+                if glyphs::modal_title(ui, "Renommer") {
+                    keep = false;
+                }
                 let edit = ui.add(egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY));
                 if !edit.has_focus() && !edit.lost_focus() {
                     edit.request_focus();
@@ -1324,9 +1328,11 @@ impl FinderApp {
         if let Some((id, name)) = self.confirm_tag_delete.take() {
             let mut keep = true;
             let mut yes = false;
-            egui::Modal::new(egui::Id::unique("delete-tag")).show(ctx, |ui| {
+            crate::glyphs::modal(ctx, "delete-tag").show(ctx, |ui| {
                 ui.set_width(360.0);
-                ui.heading("Supprimer l'étiquette ?");
+                if glyphs::modal_title(ui, "Supprimer l'étiquette ?") {
+                    keep = false;
+                }
                 ui.label(format!("« {name} » est retirée de tous les éléments. Les fichiers et les sous-étiquettes sont conservés."));
                 ui.horizontal(|ui| {
                     if ui.button("Annuler").clicked() {
@@ -1349,9 +1355,11 @@ impl FinderApp {
         if let Some(paths) = self.confirm_delete.take() {
             let mut keep = true;
             let mut yes = false;
-            egui::Modal::new(egui::Id::unique("delete")).show(ctx, |ui| {
+            crate::glyphs::modal(ctx, "delete").show(ctx, |ui| {
                 ui.set_width(340.0);
-                ui.heading("Supprimer définitivement ?");
+                if glyphs::modal_title(ui, "Supprimer définitivement ?") {
+                    keep = false;
+                }
                 ui.label(format!("{} élément(s) seront supprimés, sans corbeille.", paths.len()));
                 ui.horizontal(|ui| {
                     if ui.button("Annuler").clicked() {

@@ -9,7 +9,7 @@ use eframe::egui::{self, Color32, RichText};
 use pyegui_core::columns::Value;
 use pyegui_core::date_input::parse_date;
 use pyegui_core::human_date::human_full_date;
-use pyegui_core::meta::{eval_formula, file_var, decode_ids, display, encode_ids, resolve, resolved_column_value, resolved_text, ListMode, MetaDef, MetaType, Resolved};
+use pyegui_core::meta::{resolve_with, rule_value, RuleSet, eval_formula, file_var, decode_ids, display, encode_ids, resolved_column_value, resolved_text, ListMode, MetaDef, MetaType, Resolved};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -48,6 +48,8 @@ pub struct Manager {
 pub struct MetaCache {
     version: u64,
     defs: Rc<Vec<MetaDef>>,
+    /// the enabled rules, the most precise first
+    rules: Rc<RuleSet>,
     values: HashMap<i64, Rc<BTreeMap<String, String>>>,
     resolved: HashMap<(i64, PathBuf), Rc<Resolved>>,
     computed: HashMap<(i64, PathBuf), Rc<String>>,
@@ -63,7 +65,12 @@ impl FinderApp {
         let mut cache = self.meta_cache.borrow_mut();
         let version = self.tags.as_ref().map_or(0, |s| s.version) + 1;
         if cache.version != version {
-            *cache = MetaCache { version, defs: Rc::new(self.tags.as_ref().map(|s| s.meta_defs()).unwrap_or_default()), ..Default::default() };
+            *cache = MetaCache {
+                version,
+                defs: Rc::new(self.tags.as_ref().map(|s| s.meta_defs()).unwrap_or_default()),
+                rules: Rc::new(self.tags.as_ref().map(|s| s.ordered_rules()).unwrap_or_default()),
+                ..Default::default()
+            };
         }
         cache
     }
@@ -82,7 +89,9 @@ impl FinderApp {
         let Some(store) = &self.tags else { return Rc::new(Resolved::None) };
         let values = cache.values.entry(def.id).or_insert_with(|| Rc::new(store.meta_all(def.id))).clone();
         let key = crate::tagstore::key(path);
-        let resolved = Rc::new(resolve(&values, &key, std::path::MAIN_SEPARATOR, || path.is_dir()));
+        let (rules, today) = (cache.rules.clone(), chrono::Local::now().date_naive());
+        let virt = |folder: &str, is_self: bool| if is_self && !path.is_dir() { None } else { rule_value(&rules, def, folder, std::path::MAIN_SEPARATOR, today) };
+        let resolved = Rc::new(resolve_with(&values, &key, std::path::MAIN_SEPARATOR, || path.is_dir(), &virt));
         cache.resolved.insert((def.id, path.to_path_buf()), resolved.clone());
         resolved
     }
@@ -439,12 +448,14 @@ pub fn modal(app: &mut FinderApp, ctx: &egui::Context) {
     }
     let mut close = false;
     let mut save = false;
-    egui::Modal::new(egui::Id::unique("meta-manager")).show(ctx, |ui| {
+    crate::glyphs::modal(ctx, "meta-manager").show(ctx, |ui| {
         // a fixed size: nothing inside may ask for more, or the window grows at every frame
         ui.set_width(660.0);
         ui.set_max_width(660.0);
         ui.set_max_height(560.0);
-        ui.heading("Propriétés");
+        if crate::glyphs::modal_title(ui, "Propriétés") {
+            close = true;
+        }
         ui.weak("Un nom, un type et une description. Les valeurs se mettent sur les fichiers et dossiers depuis le panneau Propriétés.");
         ui.add_space(6.0);
         ui.horizontal_top(|ui| {
@@ -679,13 +690,15 @@ pub fn rules_modal(app: &mut FinderApp, ctx: &egui::Context) {
     let (mut close, mut apply, mut add) = (false, false, false);
     let mut delete: Option<i64> = None;
     let mut change: Option<crate::metastore::Rule> = None;
-    egui::Modal::new(egui::Id::unique("meta-rules")).show(ctx, |ui| {
+    crate::glyphs::modal(ctx, "meta-rules").show(ctx, |ui| {
         // a fixed size: nothing inside may ask for more, or the window grows at every frame
         ui.set_width(640.0);
         ui.set_max_width(640.0);
         ui.set_max_height(520.0);
-        ui.heading("Règles d'indexation");
-        ui.weak("Sous un dossier, chaque niveau de sous-dossiers remplit une propriété : {project}/{entreprise}/{chapter}. Les valeurs se mettent sur les dossiers (leur contenu en hérite) à la fin d'une indexation ou avec « Appliquer ». Une valeur tapée à la main n'est jamais remplacée. * ignore un niveau.");
+        if crate::glyphs::modal_title(ui, "Règles d'indexation") {
+            close = true;
+        }
+        ui.weak("Sous un dossier, chaque niveau de sous-dossiers remplit une propriété : {project}/{entreprise}/{chapter}. Les valeurs se mettent sur les dossiers (leur contenu en hérite) à la fin d'une indexation ou avec « Appliquer ». Une valeur tapée à la main n'est jamais remplacée. * ignore un niveau ; un nom de dossier fixe (00 - DOE Livrés) ne s'applique qu'à ce dossier ; [Statut=Terminé] après un niveau donne cette valeur à son dossier.");
         ui.add_space(6.0);
         egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
             for rule in &rules {

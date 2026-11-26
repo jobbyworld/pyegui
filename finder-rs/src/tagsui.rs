@@ -245,9 +245,11 @@ fn manager_modal(app: &mut FinderApp, ctx: &egui::Context) {
     let Some(store) = app.tags.as_mut() else { return };
     let mut close = false;
     let mut deleted: Option<i64> = None;
-    egui::Modal::new(egui::Id::unique("tag-manager")).show(ctx, |ui| {
+    crate::glyphs::modal(ctx, "tag-manager").show(ctx, |ui| {
         ui.set_width(380.0);
-        ui.heading("Étiquettes");
+        if crate::glyphs::modal_title(ui, "Étiquettes") {
+            close = true;
+        }
         ui.weak("Une étiquette s'applique à un élément et à son contenu, et ajoute ses étiquettes parentes.");
         ui.add_space(4.0);
         let all = store.all();
