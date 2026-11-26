@@ -64,7 +64,7 @@ fn read_hooks<'py>(kwargs: Option<&Bound<'py, PyDict>>) -> PyResult<Hooks<'py>> 
                     "an extra column is (title, width, cell) or (title, width, cell, options)",
                 ));
             }
-            let (mut ty, mut value) = (pyegui_core::columns::DataType::Text, None);
+            let (mut ty, mut value, mut icon) = (pyegui_core::columns::DataType::Text, None, None);
             if column.len() == 4 {
                 let options = column.get_item(3)?;
                 let options = options.cast::<PyDict>()?;
@@ -72,11 +72,16 @@ fn read_hooks<'py>(kwargs: Option<&Bound<'py, PyDict>>) -> PyResult<Hooks<'py>> 
                     ty = parse_type(&t)?;
                 }
                 value = kwarg::<Bound<'py, PyAny>>(Some(options), "value")?;
+                if let Some(file) = kwarg::<String>(Some(options), "icon")? {
+                    let bytes = std::fs::read(&file).map_err(|e| PyValueError::new_err(format!("icon {file}: {e}")))?;
+                    icon = Some(pyegui_core::columns::ColumnIcon { name: file, bytes: bytes.into() });
+                }
             }
             let cell: Bound<'py, PyAny> = column.get_item(2)?;
             extras.push(Extra {
                 title: column.get_item(0)?.extract()?,
                 width: column.get_item(1)?.extract()?,
+                icon,
                 cell: Box::new(move |ui, path| {
                     if let Err(err) = unsafe { run_nested_call(ui, &cell, (to_str(path),)) } {
                         err.display(cell.py());
@@ -299,6 +304,12 @@ macro_rules! folder_view_methods {
             #[setter]
             fn set_column_widths(&mut self, widths: HashMap<String, f32>) {
                 self.view.columns.set_widths(widths);
+            }
+
+            /// The key of the column whose icon was clicked since the last call (the title of a column of your own,
+            /// see the "icon" of extra_columns), or None. The call forgets it
+            fn icon_clicked(&mut self) -> Option<String> {
+                self.view.columns.icon_clicked.take()
             }
 
             /// The columns pinned at the left (by column key): they stay in place while the others scroll
@@ -552,8 +563,9 @@ fn parse_columns(kwargs: Option<&Bound<'_, PyDict>>, extras: usize) -> PyResult<
 ///         widgets. They sort and filter when a fourth item, a dict, gives the type of their data
 ///         and a function that returns the value of a row: {"type": "text" | "number" | "date" |
 ///         "choice", "value": function(path) -> value}. A date is seconds since 1970 or a
-///         datetime. The values are kept for a second (see refresh_columns). The function runs
-///         while the view is drawn: it must not read or change the view itself
+///         datetime. The dict can also hold "icon": the path of an SVG file drawn at the left of the
+///         title, in the color of the title. The values are kept for a second (see refresh_columns).
+///         The function runs while the view is drawn: it must not read or change the view itself
 ///
 ///     resizable (bool): the border of a column can be dragged. Default is True
 ///
@@ -865,6 +877,12 @@ impl FileTreeView {
         self.v().columns.set_widths(widths);
     }
 
+    /// The key of the column whose icon was clicked since the last call (the title of a column of your own, see
+    /// the "icon" of extra_columns), or None. The call forgets it
+    fn icon_clicked(&mut self) -> Option<String> {
+        self.v().columns.icon_clicked.take()
+    }
+
     /// The columns pinned at the left (by column key): they stay in place while the others scroll
     /// horizontally. The user pins a column with a right click on its title
     #[getter]
@@ -990,7 +1008,8 @@ impl FileTreeView {
 ///         (shown above the tree), a width, and a function called with the path of each row to draw
 ///         its cell, e.g. ("Tags", 160, lambda path: tags_edit(...)). A fourth item, a dict, makes
 ///         the column sort and filter: {"type": "text" | "number" | "date" | "choice", "value":
-///         function(path) -> value}. A date is seconds since 1970 or a datetime
+///         function(path) -> value, "icon": path of an SVG file}. A date is seconds since 1970 or a
+///         datetime. The icon is drawn at the left of the title, in its color
 ///
 ///     header (bool): draws the header of the columns above the tree, pinned at the top while the
 ///         tree scrolls. Default is True when there are columns

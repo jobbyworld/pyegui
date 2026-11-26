@@ -406,9 +406,9 @@ fn editor(ui: &mut Ui, state: &mut PropertySetState, p: &Property, o: &PropertyS
             if response.has_focus() {
                 ui.painter().rect_stroke(response.rect.expand(2.0), 3.0, Stroke::new(1.0, ui.visuals().selection.stroke.color), egui::StrokeKind::Inside);
             }
-            // a text is kept as it is typed: a click on another item changes the key of the set in the same frame
+            // a text or a number is kept as it is typed (a text that is not a number yet is refused by the caller): a click on another item changes the key of the set in the same frame
             // as the focus is lost, and what was typed would be dropped with the buffers
-            let live = response.changed() && matches!(p.kind, Kind::Text | Kind::LongText);
+            let live = response.changed() && matches!(p.kind, Kind::Text | Kind::LongText | Kind::Number);
             if (live || response.lost_focus()) && *buffer != p.value {
                 changes.push(Change::Set { id: p.id.clone(), value: buffer.clone() });
             }

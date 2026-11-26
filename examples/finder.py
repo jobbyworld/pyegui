@@ -205,8 +205,7 @@ from pyegui import (
 #     tags.tagged_with(work)                  # ["/docs/2026"]
 #
 # Any file or folder can also be referenced in the base (table files), to remember when it was last
-# opened: reference() adds it, opened() stamps it, last_opened() and recently_opened() read it. An item can also have a note,
-# a free text: set_note(), note() and noted().
+# opened: reference() adds it, opened() stamps it, last_opened() and recently_opened() read it.
 #
 # A whole folder can be indexed: index_folder() records it and everything it contains (name, parent,
 # kind, size, date) in the same table, search() finds the indexed items by name.
@@ -262,11 +261,6 @@ CREATE TABLE IF NOT EXISTS favorites (
     label TEXT NOT NULL,
     icon TEXT NOT NULL DEFAULT 'folder',
     position INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS notes (
-    path TEXT PRIMARY KEY,
-    text TEXT NOT NULL,
-    updated REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meta_defs (
     id INTEGER PRIMARY KEY,
@@ -678,29 +672,6 @@ class TagStore:
             "ORDER BY last_opened DESC LIMIT ?",
             (limit,),
         ).fetchall()
-
-    # the notes
-
-    def note(self, path):
-        """the note of an item, or "" if it has none"""
-        row = self.db.execute("SELECT text FROM notes WHERE path = ?", (tag_key(path),)).fetchone()
-        return row[0] if row else ""
-
-    def set_note(self, path, text):
-        """writes the note of an item; an empty text removes it"""
-        if text.strip():
-            self.db.execute(
-                """INSERT INTO notes (path, text, updated) VALUES (?, ?, ?)
-                   ON CONFLICT(path) DO UPDATE SET text = excluded.text, updated = excluded.updated""",
-                (tag_key(path), text, time.time()),
-            )
-        else:
-            self.db.execute("DELETE FROM notes WHERE path = ?", (tag_key(path),))
-        self.changed()
-
-    def noted(self):
-        """the stored paths (see key) that have a note, to show an icon without a query per row"""
-        return {row[0] for row in self.db.execute("SELECT path FROM notes")}
 
     # the index: a whole folder and everything it contains, with name, size and date
 
@@ -1175,11 +1146,10 @@ class TagStore:
         return self.db.execute("SELECT COUNT(*) FROM files WHERE name IS NOT NULL").fetchone()[0]
 
     def forget(self, path):
-        """takes an item out of the base, with what it remembers (its tags and note too)"""
+        """takes an item out of the base, with what it remembers (its tags too)"""
         self.db.execute("DELETE FROM files WHERE path = ?", (tag_key(path),))
         self.db.execute("DELETE FROM pdf_info WHERE path = ?", (tag_key(path),))
         self.db.execute("DELETE FROM items WHERE path = ?", (tag_key(path),))
-        self.db.execute("DELETE FROM notes WHERE path = ?", (tag_key(path),))
         self.changed()
 
     def moved(self, old, new):
@@ -1187,7 +1157,7 @@ class TagStore:
         old, new = tag_key(old), tag_key(new)
         escaped = old.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         inside = escaped.rstrip(os.sep) + ("\\\\" if os.sep == "\\" else os.sep) + "%"
-        for table in ("items", "files", "notes", "pdf_info", "meta_values"):
+        for table in ("items", "files", "pdf_info", "meta_values"):
             self.db.execute(
                 f"UPDATE {table} SET path = ? || substr(path, ?) WHERE path = ? OR path LIKE ? ESCAPE '\\'",
                 (new, len(old) + 1, old, inside),
@@ -2038,7 +2008,6 @@ tag_cache = {
     "effective": {},
     "all": [],
     "by_id": {},
-    "noted": set(),
 }
 tags_query = Str("")  # the search or creation field of the Tags pane
 tag_query = Str("")  # what is typed in the window to tag the selection
@@ -2099,8 +2068,6 @@ debug_state = {"choice": -1, "headers": [], "rows": [], "types": [], "view": Non
 DEBUG_DATE_COLUMNS = {"last_opened", "modified", "last_seen", "last_full_scan", "created", "read_at", "updated", "mtime"}
 DEBUG_CHOICE_MAX = 12  # a column with at most this many different values is filtered by choice
 indexing = {"running": False, "count": 0, "folder": "", "result": None}  # the folder index job
-note_text = Str("")  # the text of the Notes pane, for the item it holds
-note_of = {"path": ""}  # the item the Notes pane holds
 
 def command_line_target():
     """the path given on the command line (`finder.py <path>`, also what the Explorer menu passes): the folder to
@@ -2158,7 +2125,7 @@ ZONES = ["sidebar", "content", "dock"]  # F6 goes through them, left to right
 focus_zone = Str(
     "content"
 )  # the part of the window the keyboard acts on, see keyboard()
-show_dock = Bool(True)  # the dock around the files: Actions, Preview, Notes and Tags
+show_dock = Bool(True)  # the dock around the files: Actions, Preview and Tags
 renaming = Str("")  # path being renamed, or ""
 integration_note = Str("")  # the result of installing or removing the Explorer menu entries, shown in a dialog
 new_name = Str("")
@@ -2972,7 +2939,6 @@ def tag_data():
             own={},
             effective={},
             all=tags.all(),
-            noted=tags.noted(),
         )
         tag_cache["by_id"] = {t["id"]: t for t in tag_cache["all"]}
     return tag_cache
@@ -3003,25 +2969,6 @@ def tag_badges(path):
         hex_color(tag["color"]) + (255 if how == "own" else 110,)
         for tag, how in tags_of(path)
     ]
-
-
-def notes_panel():
-    """the note of the selected item: written as it is typed"""
-    path = selected.value
-    if not path or not exists_fast(path):
-        weak("Sélectionne un fichier ou un dossier pour écrire une note")
-        note_of["path"] = ""
-        return
-    if note_of["path"] != path:  # another item: the field takes its note
-        note_of["path"] = path
-        note_text.value = tags.note(path)
-    strong(Path(path).name)
-    weak(str(Path(path).parent))
-    add_space(4)
-    set_min_height(max(available_height() - 20, 80))
-    text_edit_multiline(note_text, hint_text="Note")
-    if note_text.value != tags.note(path):
-        tags.set_note(path, note_text.value)
 
 
 def hex_color(color):
@@ -3114,6 +3061,7 @@ def create_tag_path(parts):
 
 library = Tags()  # every tag of the store, in its color
 library_state = {"version": -1, "ids": {}, "counts": {}}  # path -> id, path -> items tagged
+tags_pane_tree = TagTreeView()  # the tree of the tags pane: its own folded levels
 tag_tree = TagTreeView()  # the tags of the sidebar: the levels folded and the one selected
 item_tags = Tags()  # the own tags of the item of the preview
 item_tags_of = {"path": None, "version": -1}
@@ -3150,7 +3098,7 @@ def tags_tree():
     # the right click keeps the colors; the trash (a second click deletes the tag, and what it was put on)
     # and the mouse move the tags, in the order of the base
     clicked = tag_tree_view(
-        tag_tree, library, counts=library_state["counts"], removable=False, deletable=True, movable=True, keep_order=True
+        tag_tree, library, counts=library_state["counts"], removable=False, deletable=True, movable=True, keep_order=True, icon=True
     )
     ids = library_state["ids"]
     for path in tag_tree.take_deleted():
@@ -3215,6 +3163,7 @@ def tags_cell(path):
     if tags_edit(
         cell,
         small=True,
+        icon=True,
         fit=True,
         field_width=64,
         hint_text="+ tag",
@@ -3414,33 +3363,39 @@ def tags_panel():
             create()
 
     owned = [tags.own(p) for p in paths]
-    accent = ACCENTS[accent_name.value]
-    tint = icon_tint()
-    for tag in shown:
-        on = sum(tag["id"] in o for o in owned)
-        state = "off" if not paths or on == 0 else "on" if on == len(paths) else "mixed"
-        inherited = len(paths) == 1 and any(
-            t["id"] == tag["id"] and how != "own" for t, how in tags_of(paths[0])
+    def state_of(tag_id):
+        on = sum(tag_id in o for o in owned)
+        return "off" if not paths or on == 0 else "on" if on == len(paths) else "mixed"
+
+    if not searching:
+        # the same tree as the sidebar (drag and drop to order, trash with a second click), with a check box
+        sync_library()
+        ids = library_state["ids"]
+        checks = {path: state_of(i) for path, i in ids.items()}
+        clicked = tag_tree_view(
+            tags_pane_tree, library, counts=library_state["counts"], removable=False, deletable=True,
+            movable=True, keep_order=True, icon=True, checks=checks,
         )
-
-        def row(tag=tag, state=state, inherited=inherited):
-            add_space(0 if searching else 14 * tag["depth"])
-            clicked = image_button_clicked(
-                svg(f"checkbox-{state}"),
-                size=16,
-                tint=tint if state == "off" else accent,
-                frame=False,
-            )
-            if paths and clicked:
+        for path in tags_pane_tree.take_deleted():
+            if path in ids:
+                tags.delete(ids[path])
+        moved = tags_pane_tree.take_moved()
+        if moved and moved[0] in ids:
+            path, parent, before = moved
+            tags.move_at(ids[path], ids.get(parent) if parent else None, ids.get(before) if before else None)
+        if clicked and clicked in ids and paths:
+            toggle_tags(paths, ids[clicked])
+        store_colors(library)
+    else:
+        accent = ACCENTS[accent_name.value]
+        tint = icon_tint()
+        for tag in shown:
+            state = state_of(tag["id"])
+            if image_button_clicked(svg(f"checkbox-{state}"), size=16, tint=tint if state == "off" else accent, frame=False) and paths:
                 toggle_tags(paths, tag["id"])
-            dot(hex_color(tag["color"]) + (255,))
-            name = " / ".join(tag_path(tag["id"])) if searching else tag["name"]
-            if selectable_label_clicked(False, name) and paths:
+            image(svg("tag"), size=14, tint=hex_color(tag["color"]) + (255,))
+            if selectable_label_clicked(False, " / ".join(tag_path(tag["id"]))) and paths:
                 toggle_tags(paths, tag["id"])
-            if inherited:
-                weak("hérité")
-
-        horizontal(row)
     if not shown and not creating:
         weak(
             "Aucun tag : tape un nom pour en créer un"
@@ -4661,18 +4616,8 @@ def opened_value(path):
     return opened_data()["dates"].get(tag_key(Path(path)))
 
 
-def noted_value(path):
-    return "Yes" if tag_key(Path(path)) in tag_data()["noted"] else "No"
-
-
 def protected_value(path):
     return "Yes" if pdf_cell_info(path)[1] else "No"
-
-
-def note_cell(path):
-    """the Notes column of the list: an icon when the item has a note"""
-    if tag_key(Path(path)) in tag_data()["noted"]:
-        image(svg("note"), size=14, tint=icon_tint())
 
 
 def file_view():
@@ -4704,6 +4649,9 @@ def before_view(v):
 
 def after_view(v):
     """what the user did in the view: the selection, the items opened"""
+    icon = v.icon_clicked()  # the icon of a column shows the pane about it: the tags, or the properties
+    if icon:
+        show_pane("Tags" if icon == "Tags" else "Propriétés")
     paths, tree_menu["paths"] = tree_menu["paths"], None
     if paths and not set(paths) <= set(v.selected):
         v.selected = (
@@ -5011,7 +4959,7 @@ def pdf_first_page(path):
 
 
 TREE_COLUMNS = ("Name", "Tags", "Last Opened")  # the names a property column must not take
-LIST_COLUMNS = ("Name", "Date Modified", "Size", "Kind", "Notes", "Pages", "Prot.", "Tags", "Last Opened")
+LIST_COLUMNS = ("Name", "Date Modified", "Size", "Kind", "Pages", "Prot.", "Tags", "Last Opened")
 
 
 def content():
@@ -5037,7 +4985,7 @@ def content():
             lambda: file_tree_view(
                 tree,
                 extra_columns=[
-                    ("Tags", TAGS_COLUMN, tags_cell, {"type": "text", "value": tags_value}),
+                    ("Tags", TAGS_COLUMN, tags_cell, {"type": "text", "value": tags_value, "icon": str(ICONS_DIR / "tag.svg")}),
                     ("Last Opened", OPENED_COLUMN, opened_cell, {"type": "date", "value": opened_value}),
                 ]
                 + meta_extra_columns(TREE_COLUMNS),
@@ -5049,13 +4997,12 @@ def content():
         file_list_view(
             files_list,
             headers=["Name", "Date Modified", "Size", "Kind"],
-            # columns drawn by the Finder: the notes, and the tags as in the tree (editable on the
+            # columns drawn by the Finder: the tags as in the tree (editable on the
             # selected row)
             extra_columns=[
-                ("Notes", 50, note_cell, {"type": "choice", "value": noted_value}),
                 ("Pages", 55, pages_cell, {"type": "number", "value": lambda p: pdf_cell_info(p)[0]}),
                 ("Prot.", 45, protected_cell, {"type": "choice", "value": protected_value}),
-                ("Tags", TAGS_COLUMN, tags_cell, {"type": "text", "value": tags_value}),
+                ("Tags", TAGS_COLUMN, tags_cell, {"type": "text", "value": tags_value, "icon": str(ICONS_DIR / "tag.svg")}),
                 ("Last Opened", OPENED_COLUMN, opened_cell, {"type": "date", "value": opened_value}),
             ]
             + meta_extra_columns(LIST_COLUMNS),
@@ -6343,7 +6290,6 @@ ACTIONS = [
         for title in (
             "Actions",
             "Preview",
-            "Notes",
             "Tags",
             "Recherche",
             *WATCH_PANES,
@@ -6886,6 +6832,104 @@ def meta_cell(d, path):
         weak(f"≈ {text}")
 
 
+meta_cell_text = {}  # what is typed in the cell of a property column, by property and path
+meta_cell_editing = set()  # the cells whose field has the focus: their text is not read again from the base
+
+
+def meta_edit_cell(d, path):
+    """the cell of a row with the editor of the type: a list as chips in the colors of its options, a checkbox, a field
+    for a text, a number or a date. A formula and a long text are only shown."""
+    kind = d["type"]
+    if kind in ("longtext", "formula"):
+        return meta_cell(d, path)
+    resolved = meta_resolved(d, path)
+    own = resolved[1] if resolved and resolved[0] == "own" else None
+    if kind == "choice":
+        return meta_choice_cell(d, path, resolved)
+    if kind == "bool":
+        shown = resolved is not None and resolved[0] != "summary" and resolved[1].strip() == "1"
+        box = Bool(shown)
+        checkbox(box, "")
+        if box.value != shown:
+            tags.set_meta_value(path, d["id"], "1" if box.value else "0")
+        return
+    stored = meta_editable(d, own) if own is not None else ""
+    key = (d["id"], str(path))
+    holder = meta_cell_text.get(key)
+    if holder is None:
+        holder = meta_cell_text[key] = Str(stored)
+    if key not in meta_cell_editing:
+        holder.value = stored
+    hint = ""
+    if resolved and resolved[0] != "own":
+        hint = meta_resolved_text(d, resolved)
+        hint = f"≈ {hint}" if resolved[0] == "summary" else hint
+    answer = text_edit_singleline(holder, hint_text=hint, frame=False, desired_width=float("inf"))
+    if answer.lost_focus:
+        meta_cell_editing.discard(key)
+        if holder.value != stored:
+            typed = meta_typed(d, holder.value, own)
+            if typed != own:
+                tags.set_meta_value(path, d["id"], typed)
+    elif answer.has_focus:
+        meta_cell_editing.add(key)
+
+
+def meta_choice_cell(d, path, resolved):
+    """a list property as chips, like the tags: the color of the option, a cross to remove, a field to add (an open
+    list takes a new label, a closed one only the ones it has)"""
+    config = d["config"]
+    options = config["options"]
+    order = {o["id"]: i for i, o in enumerate(options)}
+    label_of = {o["id"]: o["label"].replace("/", "-") for o in options}
+    if resolved is None:
+        base = shown = []
+    elif resolved[0] == "summary":
+        base = []
+        shown = sorted({i for value in resolved[1] for i in decode_ids(value)}, key=lambda i: order.get(i, 0))
+    else:
+        base = shown = decode_ids(resolved[1])
+    labels = [label_of[i] for i in shown if i in label_of]
+    cell = Tags(labels, colors={label_of[o["id"]]: o["color"] or "#64748b" for o in options})
+    if not tags_edit(
+        cell,
+        small=True,
+        fit=True,
+        field_width=64,
+        hint_text="+",
+        on_hover=True,
+        dropdown=True,
+        list_height=420,
+        suggestions=list(label_of.values()),
+        muted=[] if resolved and resolved[0] == "own" else labels,
+        id=f"meta cell {d['id']} {path}",
+    ):
+        return
+    by_label = {label.lower(): i for i, label in label_of.items()}
+    removed = {by_label[label.lower()] for label in labels if label not in cell.tags and label.lower() in by_label}
+    ids = [i for i in base if i not in removed]
+    put, new_labels = [], []
+    for tag in cell.tags:
+        if tag in labels:
+            continue
+        if tag.lower() in by_label:
+            put.append(by_label[tag.lower()])
+        elif config["mode"] == "open":
+            new_labels.append(tag)
+    if not config["multiple"] and (put or new_labels):
+        ids, put = [], put[:1]
+        new_labels = [] if put else new_labels[:1]
+    ids += [i for i in put if i not in ids]
+    for label in new_labels:
+        option = tags.add_choice_option(d["id"], label)
+        if option is not None:
+            ids.append(option)
+    ids.sort(key=lambda i: order.get(i, len(order)))
+    if not config["multiple"]:
+        ids = ids[:1]
+    tags.set_meta_value(path, d["id"], encode_ids(ids, config["multiple"]) or None)
+
+
 def meta_extra_columns(reserved):
     """the columns of the properties shown, to add to extra_columns of a view"""
     columns = []
@@ -6894,14 +6938,14 @@ def meta_extra_columns(reserved):
             continue
         title = f"{d['name']} (propriété)" if d["name"] in reserved else d["name"]
         if d["type"] == "formula":
-            columns.append((title, 160, lambda p, d=d: label(meta_formula(d, p)), {"type": "text", "value": lambda p, d=d: meta_formula(d, p) or None}))
+            columns.append((title, 160, lambda p, d=d: label(meta_formula(d, p)), {"type": "text", "value": lambda p, d=d: meta_formula(d, p) or None, "icon": str(ICONS_DIR / "property.svg")}))
         else:
             columns.append(
                 (
                     title,
                     130,
-                    lambda p, d=d: meta_cell(d, p),
-                    {"type": META_COLUMN_TYPE[d["type"]], "value": lambda p, d=d: meta_resolved_value(d, meta_resolved(d, p))},
+                    lambda p, d=d: meta_edit_cell(d, p),
+                    {"type": META_COLUMN_TYPE[d["type"]], "value": lambda p, d=d: meta_resolved_value(d, meta_resolved(d, p)), "icon": str(ICONS_DIR / "property.svg")},
                 )
             )
     return columns
@@ -7414,7 +7458,6 @@ def apply_meta_rules_notice():
 PANES = {
     "Actions": zone_pane("dock", lambda: scroll_area_vertical(actions_panel)),
     "Preview": zone_pane("dock", lambda: scroll_area_vertical(preview)),
-    "Notes": zone_pane("dock", notes_panel),
     "Tags": zone_pane("dock", lambda: scroll_area_vertical(tags_panel)),
     "Propriétés": zone_pane("dock", meta_panel),
     "Recent": zone_pane("dock", lambda: scroll_area_vertical(recent_panel)),
@@ -7489,7 +7532,7 @@ PER_WINDOW = [
     "tag_filter", "tag_manager_open", "tag_picker_open", "tag_edit", "tag_name", "tag_color", "tag_parent",
     "tags_query", "tag_query", "tag_index", "tag_picker_state",
     "find_name", "find_ext", "find_scope", "find_folders", "find_pages_min", "find_pages_max", "find_protect",
-    "find_pdf_text", "find_auto", "find_state", *FIND_EXTRA, "note_text", "note_of",
+    "find_pdf_text", "find_auto", "find_state", *FIND_EXTRA,
     "history", "position", "selected", "picked", "anchor", "scroll_target", "view", "search", "show_sidebar",
     "bg_open", "path_editing", "path_text", "path_edit", "focus_zone", "show_dock", "renaming",
     "integration_note", "new_name", "palette_open", "palette_query", "palette_index", "palette_pointer", "focus_outline",
@@ -7529,7 +7572,6 @@ def make_window(folder):
             "applied": None, "typed": None, "changed_at": 0.0, "rows": [], "more": False,
             "index": None, "pin": None, "job": 0, "running": False,
         },
-        "note_text": Str(""), "note_of": {"path": ""},
         "history": [folder], "position": Int(0), "selected": Str(""), "picked": set(), "anchor": Str(""),
         "scroll_target": Str(""), "view": Int(view.value), "search": Str(""),
         "show_sidebar": Bool(show_sidebar.value), "bg_open": Bool(False),

@@ -105,16 +105,6 @@ The favorites of the sidebar. A new base starts with the home folder and its usu
 | `icon` | TEXT NOT NULL DEFAULT `'folder'` | name of an icon |
 | `position` | INTEGER NOT NULL DEFAULT 0 | order in the sidebar |
 
-### `notes`
-
-A free text attached to a file or folder.
-
-| Column | Type | Meaning |
-|---|---|---|
-| `path` | TEXT PRIMARY KEY | |
-| `text` | TEXT NOT NULL | |
-| `updated` | REAL NOT NULL | seconds since the epoch |
-
 ### `meta_defs`
 
 The definitions of the meta properties (see `core/src/meta.rs`).
@@ -167,6 +157,9 @@ A rule writes its values on the **folders** (the items below inherit them) into 
 values it wrote before, and never replaces a value that is already there (typed by the person: source `user`). The
 folder name is read as a value of the type of the property (a number, a date, an option: a closed list ignores a name
 it does not have, an open one adds it).
+
+> The old table `notes` (a free text per file) is no longer declared or read: the meta properties replace it. A base
+> that has it keeps it, untouched.
 
 ## Queries to start from
 

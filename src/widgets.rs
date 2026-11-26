@@ -615,7 +615,7 @@ unsafe fn badge(text: &str, color: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
 }
 
 /// What the user did with a widget during the frame, returned by label_response,
-/// selectable_label_response and interactive
+/// selectable_label_response, interactive and text_edit_singleline
 #[pyclass(frozen, get_all)]
 pub(crate) struct Response {
     /// clicked with the primary button
@@ -632,6 +632,12 @@ pub(crate) struct Response {
     drag_started: bool,
     /// the drag ended during this frame
     drag_stopped: bool,
+    /// a text field lost the keyboard focus during this frame (Enter, Tab or a click elsewhere): what was typed is final
+    lost_focus: bool,
+    /// the widget has the keyboard focus
+    has_focus: bool,
+    /// the value of the widget was changed during this frame
+    changed: bool,
     /// where the widget is on the window, as (left, top, right, bottom) in points
     rect: (f32, f32, f32, f32),
 }
@@ -656,6 +662,9 @@ impl From<egui::Response> for Response {
             dragged: response.dragged(),
             drag_started: response.drag_started(),
             drag_stopped: response.drag_stopped(),
+            lost_focus: response.lost_focus(),
+            has_focus: response.has_focus(),
+            changed: response.changed(),
             rect: (
                 response.rect.min.x,
                 response.rect.min.y,

@@ -278,6 +278,8 @@ pub struct Extra<'a> {
     pub cell: Box<dyn Fn(&mut egui::Ui, &Path) + 'a>,
     /// what the column holds, for its sort and its filter
     pub ty: DataType,
+    /// a small icon at the left of the title
+    pub icon: Option<crate::columns::ColumnIcon>,
     /// the value of a row: without it the column does not sort or filter
     pub value: Option<Box<dyn Fn(&Path) -> Value + 'a>>,
 }
@@ -917,6 +919,10 @@ pub fn list_header(ui: &mut egui::Ui, view: &mut FolderView, shape: &Shape, hook
                 filterable: column.has_value(hooks),
                 movable: true,
                 resizable: true,
+                icon: match column {
+                    Column::Extra(k) => hooks.extras[*k].icon.clone(),
+                    Column::Sort(_) => None,
+                },
             }
         })
         .collect();
@@ -1571,6 +1577,7 @@ pub fn tree_header(
         filterable: true,
         movable: false,
         resizable: true,
+        icon: None,
     }];
     for (column, _) in columns {
         let title = match column {
@@ -1586,6 +1593,10 @@ pub fn tree_header(
             filterable: column.has_value(hooks),
             movable: true,
             resizable: true,
+            icon: match column {
+                Column::Extra(k) => hooks.extras[*k].icon.clone(),
+                Column::Sort(_) => None,
+            },
         });
     }
     let listing = view.borrow().listing.clone();

@@ -538,6 +538,18 @@ pub fn menu(tree: &mut Tree<Pane>, ui: &mut egui::Ui) {
     }
 }
 
+/// Shows a pane: its tab is brought to the front, or the pane is added if it was closed
+pub fn reveal(tree: &mut Tree<Pane>, pane: Pane) {
+    let Some(id) = tree.tiles.find_pane(&pane) else { return add(tree, pane) };
+    for (_, tile) in tree.tiles.iter_mut() {
+        if let Tile::Container(Container::Tabs(tabs)) = tile {
+            if tabs.children.contains(&id) {
+                tabs.set_active(id);
+            }
+        }
+    }
+}
+
 /// A pane brought back goes in the tabs of the panes, or in new tabs at the right of the root
 fn add(tree: &mut Tree<Pane>, pane: Pane) {
     let id = tree.tiles.insert_pane(pane);

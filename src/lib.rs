@@ -1961,6 +1961,10 @@ unsafe fn code_editor(
 
 /// Show singleline text field and update the text
 ///
+/// Returns a Response: `lost_focus` is true during the frame where Enter, Tab or a click elsewhere ends the
+/// typing (what to do with the text, a cell of a table for instance), `has_focus` while it is typed and `changed`
+/// when a key changed the text.
+///
 /// Keyword args:
 ///
 ///     hint_text (str): grey text shown when the field is empty
@@ -1971,14 +1975,20 @@ unsafe fn code_editor(
 ///     select_all (bool): select the whole text this frame, so that typing or pasting replaces it,
 ///         e.g. together with request_focus when a field opens on a value. Default is False
 ///
+///     frame (bool): draw the frame of the field. False gives a bare field, for a cell of a table. Default is True
+///
+///     desired_width (float): width of the field. float("inf") fills the available width
+///
 /// Example::
 ///
 ///     text = Str("editable")
 ///     # inside update func
 ///     text_edit_singleline(text, hint_text="hint me bro")
+///     if text_edit_singleline(text, frame=False).lost_focus:
+///         save(text.value)
 #[pyfunction]
 #[pyo3(signature = (text, **kwargs))]
-unsafe fn text_edit_singleline(text: &mut Str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+unsafe fn text_edit_singleline(text: &mut Str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<widgets::Response> {
     let ui = current_ui(&UI)?;
 
     let mut w = egui::TextEdit::singleline(&mut text.value);
@@ -1995,6 +2005,12 @@ unsafe fn text_edit_singleline(text: &mut Str, kwargs: Option<&Bound<'_, PyDict>
         if let Some(all) = kwarg::<bool>(Some(kwargs), "select_all")? {
             select_all = all;
         }
+        if kwarg::<bool>(Some(kwargs), "frame")? == Some(false) {
+            w = w.frame(egui::Frame::NONE);
+        }
+        if let Some(width) = kwarg::<f32>(Some(kwargs), "desired_width")? {
+            w = w.desired_width(width);
+        }
     }
 
     let mut output = w.show(ui);
@@ -2007,7 +2023,7 @@ unsafe fn text_edit_singleline(text: &mut Str, kwargs: Option<&Bound<'_, PyDict>
         output.state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(0), CCursor::new(length))));
         output.state.store(ui.ctx(), output.response.id);
     }
-    Ok(())
+    Ok(output.response.response.into())
 }
 
 /// Show multiline text field and update the text

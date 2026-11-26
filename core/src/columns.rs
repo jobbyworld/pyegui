@@ -181,6 +181,8 @@ pub struct ColumnsState {
     /// the last text of `filter` given by the Python code. The code often gives it again at every
     /// frame (a search field): only a new text replaces the filter the user set in the header
     given_name_text: Option<String>,
+    /// the column whose icon was clicked since the last `take_icon_click`
+    pub icon_clicked: Option<String>,
 }
 
 impl ColumnsState {
@@ -197,6 +199,7 @@ impl ColumnsState {
             scroll: 0.0,
             menu: None,
             given_name_text: None,
+            icon_clicked: None,
         }
     }
 
@@ -248,6 +251,14 @@ impl ColumnsState {
 }
 
 /// A cell of the header, placed by the view
+/// A small SVG icon at the left of the title of a column (drawn in the color of the title)
+#[derive(Clone, Debug)]
+pub struct ColumnIcon {
+    /// tells it from the other icons (a file name, say)
+    pub name: String,
+    pub bytes: std::sync::Arc<[u8]>,
+}
+
 #[derive(Clone)]
 pub struct Cell {
     pub key: String,
@@ -259,6 +270,7 @@ pub struct Cell {
     /// can be moved by a drag on its title
     pub movable: bool,
     pub resizable: bool,
+    pub icon: Option<ColumnIcon>,
 }
 
 #[derive(Clone, Copy)]
@@ -274,6 +286,9 @@ pub struct HeaderOptions {
     /// the cells of the header are filled with the tint of the bars (the one of the inactive tabs)
     pub tinted: bool,
 }
+
+/// The size of the icon at the left of a title
+pub const ICON_SIZE: f32 = 13.0;
 
 /// The height of the header of the columns: the one of the tab bars of the docks
 pub const HEADER_H: f32 = 40.0;
@@ -377,12 +392,29 @@ pub fn header(
         } else {
             ui.visuals().weak_text_color()
         };
-        let reserved = 26.0 + if filterable { 18.0 } else { 0.0 };
+        let icon_room = if cell.icon.is_some() { ICON_SIZE + 4.0 } else { 0.0 };
+        let reserved = 26.0 + if filterable { 18.0 } else { 0.0 } + icon_room;
         let text = galley(ui, &cell.title, rect.width() - reserved, color);
         // a tinted header is read like a bar of tabs: its titles sit where the titles of the tabs do,
         // under the gap above the tabs
         let middle = if opts.tinted { rect.center().y + TAB_TOP_GAP / 2.0 } else { rect.center().y };
-        let pos = pos2(rect.left() + 8.0, middle - text.size().y / 2.0);
+        if let Some(icon) = &cell.icon {
+            let spot = Rect::from_center_size(pos2(rect.left() + 8.0 + ICON_SIZE / 2.0, middle), vec2(ICON_SIZE, ICON_SIZE));
+            // the extension tells the loaders it is an SVG
+            egui::Image::from_bytes(format!("bytes://column-icon/{}.svg", icon.name), icon.bytes.to_vec())
+                .tint(color)
+                .fit_to_exact_size(vec2(ICON_SIZE, ICON_SIZE))
+                .paint_at(ui, spot);
+            // a click on the icon is told to the application, which shows what the column is about
+            let hit = ui.interact(spot.expand(3.0), id.with(("icon", &cell.key)), Sense::click());
+            if hit.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if hit.clicked() {
+                state.icon_clicked = Some(cell.key.clone());
+            }
+        }
+        let pos = pos2(rect.left() + 8.0 + icon_room, middle - text.size().y / 2.0);
         let text_right = pos.x + text.size().x;
         ui.painter().with_clip_rect(rect).galley(pos, text, color);
         if active_sort {

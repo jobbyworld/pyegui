@@ -49,11 +49,6 @@ CREATE TABLE IF NOT EXISTS favorites (
     icon TEXT NOT NULL DEFAULT 'folder',
     position INTEGER NOT NULL DEFAULT 0
 );
-CREATE TABLE IF NOT EXISTS notes (
-    path TEXT PRIMARY KEY,
-    text TEXT NOT NULL,
-    updated REAL NOT NULL
-);
 CREATE TABLE IF NOT EXISTS meta_defs (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
@@ -762,35 +757,6 @@ impl TagStore {
         let Ok(mut statement) = self.db.prepare("SELECT path, last_opened FROM files WHERE last_opened IS NOT NULL ORDER BY last_opened DESC LIMIT ?") else { return vec![] };
         statement.query_map(params![limit as i64], |r| Ok((r.get(0)?, r.get(1)?))).map(|rows| rows.flatten().collect()).unwrap_or_default()
     }
-
-    // the notes
-
-    #[allow(dead_code)]
-    pub fn note(&self, path: &Path) -> String {
-        self.db.query_row("SELECT text FROM notes WHERE path = ?", params![key(path)], |r| r.get(0)).optional().ok().flatten().unwrap_or_default()
-    }
-
-    /// Writes the note of an item; an empty text removes it
-    #[allow(dead_code)]
-    pub fn set_note(&mut self, path: &Path, text: &str) {
-        if text.trim().is_empty() {
-            let _ = self.db.execute("DELETE FROM notes WHERE path = ?", params![key(path)]);
-        } else {
-            let _ = self.db.execute(
-                "INSERT INTO notes (path, text, updated) VALUES (?, ?, ?) \
-                 ON CONFLICT(path) DO UPDATE SET text = excluded.text, updated = excluded.updated",
-                params![key(path), text, now()],
-            );
-        }
-        self.changed();
-    }
-
-    /// The stored paths that have a note
-    #[allow(dead_code)]
-    pub fn noted(&self) -> HashSet<String> {
-        let Ok(mut statement) = self.db.prepare("SELECT path FROM notes") else { return HashSet::new() };
-        statement.query_map([], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
-    }
 }
 
 #[cfg(test)]
@@ -883,17 +849,12 @@ mod tests {
     }
 
     #[test]
-    fn opened_files_come_back_latest_first_and_notes_can_be_removed() {
+    fn opened_files_come_back_latest_first() {
         let mut s = store();
         s.opened(Path::new("/a"));
         std::thread::sleep(std::time::Duration::from_millis(10));
         s.opened(Path::new("/b"));
         assert_eq!(s.recently_opened(10)[0].0, key(Path::new("/b")));
-        s.set_note(Path::new("/a"), "hello");
-        assert_eq!(s.note(Path::new("/a")), "hello");
-        assert_eq!(s.noted().len(), 1);
-        s.set_note(Path::new("/a"), "  ");
-        assert!(s.noted().is_empty());
     }
 
     fn p(text: &str) -> Vec<String> {

@@ -137,14 +137,17 @@ color_edit_button_rgba(color)
 
 
 What the user did with a widget during the frame, returned by label_response,
-selectable_label_response and interactive
+selectable_label_response, interactive and text_edit_singleline
 
 
+- `Response.changed` (attribute): the value of the widget was changed during this frame
 - `Response.clicked` (attribute): clicked with the primary button
 - `Response.double_clicked` (attribute): double clicked with the primary button
 - `Response.drag_started` (attribute): the drag started during this frame
 - `Response.drag_stopped` (attribute): the drag ended during this frame
 - `Response.dragged` (attribute): the widget is being dragged with the primary button
+- `Response.has_focus` (attribute): the widget has the keyboard focus
 - `Response.hovered` (attribute): the mouse is over the widget
+- `Response.lost_focus` (attribute): a text field lost the keyboard focus during this frame (Enter, Tab or a click elsewhere): what was typed is final
 - `Response.rect` (attribute): where the widget is on the window, as (left, top, right, bottom) in points
 - `Response.secondary_clicked` (attribute): clicked with the secondary button, usually the right one

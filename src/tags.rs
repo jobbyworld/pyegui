@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::ops::{Deref, DerefMut};
 
 use eframe::egui::{self, vec2, Color32, Id, Rect, Sense, Stroke, StrokeKind, TextStyle};
-use pyegui_core::tags::{color_row, last_level, level_paths, normalize, path_ui, to_hex, Tags as CoreTags, TagsOptions};
+use pyegui_core::tags::{color_row, last_level, level_paths, normalize, paint_tag_icon, path_ui, to_hex, Tags as CoreTags, TagsOptions};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -186,10 +186,16 @@ impl Tags {
 ///         move a highlighted row (the list scrolls with it), Enter adds it, Escape clears what is
 ///         typed. False by default
 ///
+///     list_height (float): the preferred height of the list of suggestions, which scrolls beyond it.
+///         Default is 220
+///
 ///     compact (bool): only a dot per tag in its color, the full path on hover, e.g. in a row
 ///         of a list; read only
 ///
 ///     dot_size (float): the diameter of the dots of compact, 10 by default
+///
+///     icon (bool): the tag icon in the color of the tag at the left of a chip, instead of a dot.
+///         False by default
 ///
 ///     muted (list[str]): tags drawn with their colors desaturated, e.g. those an item inherits
 ///
@@ -234,9 +240,11 @@ unsafe fn tags_edit(tags: &Bound<'_, Tags>, kwargs: Option<&Bound<'_, PyDict>>) 
     o.muted = kwarg::<Vec<String>>(kwargs, "muted")?.unwrap_or_default().into_iter().collect();
     o.on_hover = kwarg::<bool>(kwargs, "on_hover")?.unwrap_or(false);
     o.dropdown = kwarg::<bool>(kwargs, "dropdown")?.unwrap_or(false);
+    o.list_height = kwarg::<f32>(kwargs, "list_height")?.unwrap_or(220.0);
     o.fit = kwarg::<bool>(kwargs, "fit")?.unwrap_or(false);
     o.compact = kwarg::<bool>(kwargs, "compact")?.unwrap_or(false);
     o.dot_size = kwarg::<f32>(kwargs, "dot_size")?.unwrap_or(10.0);
+    o.icon = kwarg::<bool>(kwargs, "icon")?.unwrap_or(false);
     let mut state = tags.borrow_mut();
     Ok(pyegui_core::tags::tags_edit(ui, &mut state.0, &o))
 }
@@ -277,6 +285,8 @@ pub(crate) struct TagTreeView {
     deleted: Vec<String>,
     /// the move asked for with the mouse, until take_moved()
     moved: Option<(String, Option<String>, Option<String>)>,
+    /// the state of the check boxes by level ("on", "off" or "mixed"), given at each frame
+    states: HashMap<String, String>,
 }
 
 #[pymethods]
@@ -291,6 +301,7 @@ impl TagTreeView {
             armed: None,
             deleted: vec![],
             moved: None,
+            states: HashMap::new(),
         }
     }
 
@@ -368,6 +379,10 @@ struct Menu {
     deletable: bool,
     /// the rows can be dragged to move a level
     movable: bool,
+    /// the tag icon in the color of the level instead of a dot
+    icon: bool,
+    /// a check box per row (see `checks` of tag_tree_view)
+    check: bool,
 }
 
 /// What can be done to a node of the tree
@@ -442,10 +457,31 @@ fn tree_row(
             let arrow_color = text_color.gamma_multiply(if arrow.as_ref().is_some_and(|a| a.hovered()) { 1.0 } else { 0.6 });
             painter.add(egui::Shape::convex_polygon(points, arrow_color, Stroke::NONE));
         }
-        let dot_center = egui::pos2(rect.left() + indent + 22.0, rect.center().y);
-        painter.circle_filled(dot_center, 4.5, color);
+        let pre = if menu.check { 20.0 } else { 0.0 };
+        if menu.check {
+            let state = view.states.get(path).map(String::as_str).unwrap_or("off");
+            let boxed = Rect::from_center_size(egui::pos2(rect.left() + indent + 22.0, rect.center().y), vec2(14.0, 14.0));
+            if state == "off" {
+                painter.rect_stroke(boxed, 3.0, Stroke::new(1.3, text_color.gamma_multiply(0.7)), egui::StrokeKind::Inside);
+            } else {
+                painter.rect_filled(boxed, 3.0, visuals.hyperlink_color);
+                let (c, white) = (boxed.center(), Stroke::new(1.6, Color32::WHITE));
+                if state == "mixed" {
+                    painter.line_segment([c + vec2(-3.5, 0.0), c + vec2(3.5, 0.0)], white);
+                } else {
+                    painter.line_segment([c + vec2(-3.5, 0.5), c + vec2(-1.0, 3.0)], white);
+                    painter.line_segment([c + vec2(-1.0, 3.0), c + vec2(3.8, -3.0)], white);
+                }
+            }
+        }
+        let dot_center = egui::pos2(rect.left() + indent + 22.0 + pre, rect.center().y);
+        if menu.icon {
+            paint_tag_icon(ui, dot_center, 14.0, color);
+        } else {
+            painter.circle_filled(dot_center, 4.5, color);
+        }
         let galley = painter.layout_no_wrap(last_level(path).to_owned(), font.clone(), text_color);
-        let text_pos = egui::pos2(dot_center.x + 10.0, rect.center().y - galley.size().y / 2.0);
+        let text_pos = egui::pos2(dot_center.x + if menu.icon { 12.0 } else { 10.0 }, rect.center().y - galley.size().y / 2.0);
         let mut right = rect.right() - 8.0;
         if let Some(count) = count.filter(|_| !show_trash) {
             let weak = if selected { text_color.gamma_multiply(0.7) } else { visuals.weak_text_color() };
@@ -655,6 +691,12 @@ fn dragging(ui: &mut egui::Ui, view: &mut TagTreeView, rows: &Rows, area: Rect) 
 ///     keep_order (bool): the levels stay in the order of the tags instead of being sorted by name,
 ///         so that a move before or after another level shows. False by default
 ///
+///     icon (bool): the tag icon in the color of the level instead of a dot. False by default
+///
+///     checks (dict[str, str]): a check box at the left of every row, in the state given by the path of the level:
+///         "on", "off" or "mixed" (a level that is not in the dict is off). The tree then picks tags, e.g. for the
+///         selected items: a click on a row is returned like a selection, the app puts the tag on or takes it off.
+///
 /// Returns:
 ///     str | None: the path of the level clicked during the frame (it is now view.selected)
 ///
@@ -687,6 +729,10 @@ unsafe fn tag_tree_view(
     let deletable = kwarg::<bool>(kwargs, "deletable")?.unwrap_or(false);
     let movable = kwarg::<bool>(kwargs, "movable")?.unwrap_or(false);
     let keep_order = kwarg::<bool>(kwargs, "keep_order")?.unwrap_or(false);
+    let icon = kwarg::<bool>(kwargs, "icon")?.unwrap_or(false);
+    let checks = kwarg::<HashMap<String, String>>(kwargs, "checks")?;
+    let check = checks.is_some();
+    view.borrow_mut().states = checks.unwrap_or_default().into_iter().map(|(path, state)| (normalize(&path), state)).collect();
     let mut actions = vec![];
     let mut rows: Rows = vec![];
     let area;
@@ -696,7 +742,7 @@ unsafe fn tag_tree_view(
         let children = tag_children(&state.tags, keep_order);
         let inner = ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 1.0;
-            let menu = Menu { editable, removable, deletable, movable };
+            let menu = Menu { editable, removable, deletable, movable, icon, check };
             tree_rows(ui, &state, &tree, &children, &counts, "", 0, menu, &mut actions, &mut rows);
         });
         area = inner.response.rect;

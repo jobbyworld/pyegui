@@ -257,6 +257,13 @@ impl Default for Saved {
     }
 }
 
+/// How the tree of the tags works: a click shows the items of the tag (sidebar), or puts the tag on the selection (pane)
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TagTreeMode {
+    Filter,
+    Pick,
+}
+
 pub struct FinderApp {
     core: Arc<Mutex<Core>>,
     pub history: History,
@@ -348,6 +355,10 @@ pub struct FinderApp {
     pub meta: crate::metaui::MetaUi,
     /// the properties, their values and what they resolve to for the rows shown, until the store changes
     pub meta_cache: std::cell::RefCell<crate::metaui::MetaCache>,
+    /// what the cells of the property columns changed, applied once the view is drawn
+    pub meta_edits: std::cell::RefCell<Vec<crate::metaui::MetaEdit>>,
+    /// a pane to show, asked while the dock was being drawn (a click on the icon of a column)
+    pub pending_pane: Option<Pane>,
     /// what the indexation leaves out, and the window that edits it (the text of the entry being typed)
     pub index_ignore: crate::indexignore::IgnoreRules,
     pub index_ignore_edit: Option<String>,
@@ -661,6 +672,8 @@ impl FinderApp {
             tag_manager: None,
             meta: Default::default(),
             meta_cache: Default::default(),
+            meta_edits: Default::default(),
+            pending_pane: None,
             index_ignore: saved.index_ignore.clone(),
             index_ignore_edit: None,
             tag_cache: Default::default(),
@@ -2361,116 +2374,146 @@ impl FinderApp {
             if open && tags.is_empty() {
                 ui.weak("Aucune étiquette");
             }
-            let mut filter = None;
-            let mut fold = None;
-            // the rows drawn (index in `tags`, rectangle): where a tag being moved can be dropped
-            let mut visible: Vec<(usize, egui::Rect)> = Vec::new();
-            let mut delete_tag: Option<i64> = None;
-            // the tree: a tag folded hides what is under it
-            let mut hidden_below: Option<usize> = None;
-            for (index, tag) in tags.iter().enumerate() {
-                if let Some(depth) = hidden_below {
-                    if tag.depth > depth {
-                        continue;
-                    }
-                    hidden_below = None;
-                }
-                let has_children = tags.get(index + 1).is_some_and(|next| next.depth > tag.depth);
-                let folded = self.tag_folded.contains(&tag.id);
-                if folded && has_children {
-                    hidden_below = Some(tag.depth);
-                }
-                let on = self.tag_filter == Some(tag.id);
-                let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click_and_drag());
-                visible.push((index, rect));
-                if response.drag_started() {
-                    self.tag_drag = Some(tag.id);
-                }
-                if self.tag_drag == Some(tag.id) {
-                    ui.painter().rect_filled(rect, 7.0, ui.visuals().panel_fill.gamma_multiply(0.6));
-                }
-                if on {
-                    ui.painter().rect_filled(rect, 7.0, ui.visuals().selection.bg_fill);
-                } else if response.hovered() {
-                    ui.painter().rect_filled(rect, 7.0, ui.visuals().widgets.hovered.weak_bg_fill);
-                }
-                let x = rect.left() + 6.0 + tag.depth as f32 * 14.0;
-                let color = if on { Color32::WHITE } else { ui.visuals().text_color() };
-                if has_children {
-                    // the arrow: its own click folds, the rest of the row shows the tag
-                    let arrow = egui::Rect::from_center_size(egui::pos2(x + 7.0, rect.center().y), egui::vec2(20.0, 24.0));
-                    let arrow_response = ui.interact(arrow, ui.scope_id().with(("tag-fold", tag.id)), egui::Sense::click());
-                    // a large chevron: to the right when folded, down when open
-                    let chevron = if folded { glyphs::CHEVRON_RIGHT } else { glyphs::CHEVRON_DOWN };
-                    glyphs::image(chevron, 16.0, color).paint_at(ui, egui::Rect::from_center_size(arrow.center(), egui::vec2(16.0, 16.0)));
-                    arrow_response.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
-                    if arrow_response.clicked() {
-                        fold = Some(tag.id);
-                    }
-                }
-                ui.painter().circle_filled(egui::pos2(x + 20.0, rect.center().y), 5.0, tagsui::parse_color(&tag.color));
-                ui.painter().text(egui::pos2(x + 34.0, rect.center().y), egui::Align2::LEFT_CENTER, &tag.name, egui::TextStyle::Body.resolve(ui.style()), color);
-                // the trash, at the right: seen when the row is hovered; a first click turns it red, a second one
-                // deletes the tag, and it is gray again as soon as the pointer leaves it
-                let armed = self.tag_armed == Some(tag.id);
-                let mut over_trash = false;
-                let shown_trash = (ui.rect_contains_pointer(rect) && self.tag_drag.is_none()) || armed;
-                if !shown_trash {
-                    let count = self.tag_count(tag.id);
-                    let tint = if on { Color32::from_white_alpha(200) } else { ui.visuals().weak_text_color() };
-                    ui.painter().text(egui::pos2(rect.right() - 10.0, rect.center().y), egui::Align2::RIGHT_CENTER, count.to_string(), egui::TextStyle::Small.resolve(ui.style()), tint);
-                }
-                if shown_trash {
-                    let trash = egui::Rect::from_center_size(egui::pos2(rect.right() - 16.0, rect.center().y), egui::vec2(24.0, 22.0));
-                    let trash_response = ui.interact(trash, ui.scope_id().with(("tag-trash", tag.id)), egui::Sense::click());
-                    over_trash = trash_response.hovered();
-                    let tint = if armed {
-                        Color32::from_rgb(230, 60, 60)
-                    } else if on {
-                        Color32::from_white_alpha(200)
-                    } else {
-                        ui.visuals().weak_text_color()
-                    };
-                    if armed || over_trash {
-                        ui.painter().rect_filled(trash, 6.0, if armed { Color32::from_rgba_unmultiplied(230, 60, 60, 36) } else { Color32::from_rgba_unmultiplied(127, 127, 127, 40) });
-                    }
-                    glyphs::image(glyphs::by_name("trash"), 14.0, tint).paint_at(ui, egui::Rect::from_center_size(trash.center(), egui::vec2(14.0, 14.0)));
-                    trash_response.clone().on_hover_text(if armed { "Cliquer encore pour supprimer" } else { "Supprimer l'étiquette" }).on_hover_cursor(egui::CursorIcon::PointingHand);
-                    if trash_response.clicked() {
-                        if armed {
-                            delete_tag = Some(tag.id);
-                        } else {
-                            self.tag_armed = Some(tag.id);
-                        }
-                    }
-                }
-                if armed && !over_trash {
-                    self.tag_armed = None;
-                }
-                if response.clicked() && fold != Some(tag.id) && !over_trash {
-                    filter = Some(tag.id);
-                }
-            }
-            self.tag_dragging(ui, &tags, &visible);
-            if let Some(id) = delete_tag {
-                if let Some(store) = self.tags.as_mut() {
-                    store.delete(id);
-                }
-                self.tag_armed = None;
-                if self.tag_filter == Some(id) {
-                    self.set_tag_filter(None);
-                }
-            }
-            if let Some(id) = fold {
-                if !self.tag_folded.remove(&id) {
-                    self.tag_folded.insert(id);
-                }
-            }
-            if let Some(id) = filter {
-                let next = if self.tag_filter == Some(id) { None } else { Some(id) };
-                self.set_tag_filter(next);
+            if open {
+                self.tag_tree(ui, TagTreeMode::Filter, &tags);
             }
         });
+    }
+
+    /// The tree of the tags, the same in the sidebar and in the pane of the tags: a tag per row with its icon in its color,
+    /// an arrow to fold what is under it, the trash at the right (a second click deletes), and a drag to move it
+    /// (under another one, or before or after it). In the sidebar (`Filter`) a click shows the items of the tag; in
+    /// the pane (`Pick`) a check box puts the tag on the selected items, or takes it off.
+    pub fn tag_tree(&mut self, ui: &mut egui::Ui, mode: TagTreeMode, tags: &[crate::tagstore::Tag]) {
+        let pick = matches!(mode, TagTreeMode::Pick);
+        let selection = if pick { self.selected_paths() } else { Vec::new() };
+        let own: Vec<std::collections::HashSet<i64>> = self.tags.as_ref().map(|s| selection.iter().map(|p| s.own(p)).collect()).unwrap_or_default();
+        let mut toggle: Option<i64> = None;
+        let mut filter = None;
+        let mut fold = None;
+        // the rows drawn (index in `tags`, rectangle): where a tag being moved can be dropped
+        let mut visible: Vec<(usize, egui::Rect)> = Vec::new();
+        let mut delete_tag: Option<i64> = None;
+        // the tree: a tag folded hides what is under it
+        let mut hidden_below: Option<usize> = None;
+        for (index, tag) in tags.iter().enumerate() {
+            if let Some(depth) = hidden_below {
+                if tag.depth > depth {
+                    continue;
+                }
+                hidden_below = None;
+            }
+            let has_children = tags.get(index + 1).is_some_and(|next| next.depth > tag.depth);
+            let folded = self.tag_folded.contains(&tag.id);
+            if folded && has_children {
+                hidden_below = Some(tag.depth);
+            }
+            let on = !pick && self.tag_filter == Some(tag.id);
+            // in a pick, the tag is on, off or mixed for the selected items
+            let have = own.iter().filter(|set| set.contains(&tag.id)).count();
+            let state = if selection.is_empty() || have == 0 { "off" } else if have == own.len() { "on" } else { "mixed" };
+            let pre = if pick { 20.0 } else { 0.0 };
+            let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click_and_drag());
+            visible.push((index, rect));
+            if response.drag_started() {
+                self.tag_drag = Some(tag.id);
+            }
+            if self.tag_drag == Some(tag.id) {
+                ui.painter().rect_filled(rect, 7.0, ui.visuals().panel_fill.gamma_multiply(0.6));
+            }
+            if on {
+                ui.painter().rect_filled(rect, 7.0, ui.visuals().selection.bg_fill);
+            } else if response.hovered() {
+                ui.painter().rect_filled(rect, 7.0, ui.visuals().widgets.hovered.weak_bg_fill);
+            }
+            let x = rect.left() + 6.0 + tag.depth as f32 * 14.0;
+            let color = if on { Color32::WHITE } else { ui.visuals().text_color() };
+            if has_children {
+                // the arrow: its own click folds, the rest of the row shows the tag
+                let arrow = egui::Rect::from_center_size(egui::pos2(x + 7.0, rect.center().y), egui::vec2(20.0, 24.0));
+                let arrow_response = ui.interact(arrow, ui.scope_id().with(("tag-fold", tag.id)), egui::Sense::click());
+                // a large chevron: to the right when folded, down when open
+                let chevron = if folded { glyphs::CHEVRON_RIGHT } else { glyphs::CHEVRON_DOWN };
+                glyphs::image(chevron, 16.0, color).paint_at(ui, egui::Rect::from_center_size(arrow.center(), egui::vec2(16.0, 16.0)));
+                arrow_response.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+                if arrow_response.clicked() {
+                    fold = Some(tag.id);
+                }
+            }
+            if pick {
+                let tint = if state == "off" { color } else { self.accent_color() };
+                glyphs::image(glyphs::by_name(&format!("checkbox-{state}")), 16.0, tint).paint_at(ui, egui::Rect::from_center_size(egui::pos2(x + 24.0, rect.center().y), egui::vec2(16.0, 16.0)));
+            }
+            pyegui_core::tags::paint_tag_icon(ui, egui::pos2(x + 20.0 + pre, rect.center().y), 14.0, tagsui::parse_color(&tag.color));
+            ui.painter().text(egui::pos2(x + 34.0 + pre, rect.center().y), egui::Align2::LEFT_CENTER, &tag.name, egui::TextStyle::Body.resolve(ui.style()), color);
+            // the trash, at the right: seen when the row is hovered; a first click turns it red, a second one
+            // deletes the tag, and it is gray again as soon as the pointer leaves it
+            let armed = self.tag_armed == Some(tag.id);
+            let mut over_trash = false;
+            let shown_trash = (ui.rect_contains_pointer(rect) && self.tag_drag.is_none()) || armed;
+            if !shown_trash {
+                let count = self.tag_count(tag.id);
+                let tint = if on { Color32::from_white_alpha(200) } else { ui.visuals().weak_text_color() };
+                ui.painter().text(egui::pos2(rect.right() - 10.0, rect.center().y), egui::Align2::RIGHT_CENTER, count.to_string(), egui::TextStyle::Small.resolve(ui.style()), tint);
+            }
+            if shown_trash {
+                let trash = egui::Rect::from_center_size(egui::pos2(rect.right() - 16.0, rect.center().y), egui::vec2(24.0, 22.0));
+                let trash_response = ui.interact(trash, ui.scope_id().with(("tag-trash", tag.id)), egui::Sense::click());
+                over_trash = trash_response.hovered();
+                let tint = if armed {
+                    Color32::from_rgb(230, 60, 60)
+                } else if on {
+                    Color32::from_white_alpha(200)
+                } else {
+                    ui.visuals().weak_text_color()
+                };
+                if armed || over_trash {
+                    ui.painter().rect_filled(trash, 6.0, if armed { Color32::from_rgba_unmultiplied(230, 60, 60, 36) } else { Color32::from_rgba_unmultiplied(127, 127, 127, 40) });
+                }
+                glyphs::image(glyphs::by_name("trash"), 14.0, tint).paint_at(ui, egui::Rect::from_center_size(trash.center(), egui::vec2(14.0, 14.0)));
+                trash_response.clone().on_hover_text(if armed { "Cliquer encore pour supprimer" } else { "Supprimer l'étiquette" }).on_hover_cursor(egui::CursorIcon::PointingHand);
+                if trash_response.clicked() {
+                    if armed {
+                        delete_tag = Some(tag.id);
+                    } else {
+                        self.tag_armed = Some(tag.id);
+                    }
+                }
+            }
+            if armed && !over_trash {
+                self.tag_armed = None;
+            }
+            if response.clicked() && fold != Some(tag.id) && !over_trash {
+                if pick { toggle = Some(tag.id) } else { filter = Some(tag.id) }
+            }
+        }
+        self.tag_dragging(ui, &tags, &visible);
+        if let Some(id) = delete_tag {
+            if let Some(store) = self.tags.as_mut() {
+                store.delete(id);
+            }
+            self.tag_armed = None;
+            if self.tag_filter == Some(id) {
+                self.set_tag_filter(None);
+            }
+        }
+        if let Some(id) = fold {
+            if !self.tag_folded.remove(&id) {
+                self.tag_folded.insert(id);
+            }
+        }
+        if let Some(id) = toggle {
+            let all_have = !selection.is_empty() && own.iter().all(|set| set.contains(&id));
+            if let Some(store) = self.tags.as_mut() {
+                for path in &selection {
+                    if all_have { store.untag(path, id) } else { store.tag(path, id) }
+                }
+            }
+        }
+        if let Some(id) = filter {
+            let next = if self.tag_filter == Some(id) { None } else { Some(id) };
+            self.set_tag_filter(next);
+        }
     }
 
     /// Moving a tag of the sidebar with the mouse: dropped on the middle of another one it goes under it, on the
@@ -3074,6 +3117,10 @@ impl FinderApp {
         central = central.fill(egui::Color32::TRANSPARENT); // the dock lays the glass of the bands itself
         egui::CentralPanel::default().frame(central).show(ui, |ui| {
             if let Some(mut tree) = self.dock.take() {
+                if let Some(pane) = self.pending_pane.take() {
+                    dock::reveal(&mut tree, pane);
+                    self.show_dock = true;
+                }
                 dock::show(self, &mut tree, ui);
                 self.dock = Some(tree);
             }

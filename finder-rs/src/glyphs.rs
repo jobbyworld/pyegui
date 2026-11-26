@@ -34,6 +34,13 @@ pub const ZOOM_IN: Glyph = glyph!("zoom-in");
 pub const ZOOM_OUT: Glyph = glyph!("zoom-out");
 pub const COPY: Glyph = glyph!("copy");
 pub const CHEVRON_DOWN: Glyph = glyph!("chevron-down");
+pub const TAG: Glyph = glyph!("tag");
+pub const PROPERTY: Glyph = glyph!("property");
+
+/// The icon at the left of the title of a column
+pub fn column_icon(glyph: Glyph) -> pyegui_core::columns::ColumnIcon {
+    pyegui_core::columns::ColumnIcon { name: glyph.0.to_owned(), bytes: glyph.1.into() }
+}
 
 /// An icon by the name of its file in `examples/icons`
 pub fn by_name(name: &str) -> Glyph {
@@ -103,6 +110,7 @@ pub fn by_name(name: &str) -> Glyph {
         "sidebar-closed" => glyph!("sidebar-closed"),
         "dock-open" => glyph!("dock-open"),
         "dock-closed" => glyph!("dock-closed"),
+        "property" => glyph!("property"),
         _ => glyph!("dot"),
     }
 }

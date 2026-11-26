@@ -141,6 +141,7 @@ pub fn show(
             filterable: true,
             movable: true,
             resizable: true,
+            icon: None,
         })
         .collect();
     zoned_header(ui, id.with("header"), header_rect, &zones, cells, state, options.header, &mut |key| {

@@ -98,6 +98,7 @@ pub fn cell(ui: &mut egui::Ui, app: &FinderApp, path: &std::path::Path) {
     let before: Vec<String> = tags.tags.clone();
     let mut options = TagsOptions::new(egui::Id::unique(("finder-tags", path)));
     options.small = true;
+    options.icon = true;
     options.fit = true;
     options.field_width = 64.0;
     options.hint_text = "+ tag".into();
@@ -183,7 +184,11 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
     }
     let accent = ui.visuals().selection.bg_fill;
     let text = ui.visuals().text_color();
-    for tag in &shown {
+    // not searching: the tree of the sidebar (fold, move with the mouse, trash) with a check box per tag; searching: a flat list
+    if !searching {
+        app.tag_tree(ui, crate::app::TagTreeMode::Pick, &shown);
+    }
+    for tag in shown.iter().filter(|_| searching) {
         let on = own.iter().filter(|set| set.contains(&tag.id)).count();
         let state = if selection.is_empty() || on == 0 { "off" } else if on == selection.len() { "on" } else { "mixed" };
         ui.horizontal(|ui| {
@@ -193,8 +198,8 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
             if !selection.is_empty() && check.clicked() {
                 toggle = Some(tag.id);
             }
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-            ui.painter().circle_filled(rect.center(), 5.0, parse_color(&tag.color));
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+            pyegui_core::tags::paint_tag_icon(ui, rect.center(), 14.0, parse_color(&tag.color));
             let name = if searching { app.tags.as_ref().map(|s| s.tag_path(tag.id).join(" / ")).unwrap_or_default() } else { tag.name.clone() };
             if ui.selectable_label(false, name).clicked() && !selection.is_empty() {
                 toggle = Some(tag.id);

@@ -145,6 +145,7 @@ pub fn extras<'a>(app: &'a FinderApp, reserved: &[&str]) -> Vec<pyegui_core::fil
             if d.ty == MetaType::Formula {
                 return pyegui_core::files::Extra {
                     title,
+                    icon: Some(crate::glyphs::column_icon(crate::glyphs::PROPERTY)),
                     width: 160.0,
                     cell: Box::new(move |ui, path| {
                         ui.add(egui::Label::new(&*app.meta_formula(&for_cell, path)).truncate().selectable(false));
@@ -158,8 +159,9 @@ pub fn extras<'a>(app: &'a FinderApp, reserved: &[&str]) -> Vec<pyegui_core::fil
             }
             pyegui_core::files::Extra {
                 title,
+                icon: Some(crate::glyphs::column_icon(crate::glyphs::PROPERTY)),
                 width: 130.0,
-                cell: Box::new(move |ui, path| cell(ui, app, &for_cell, path)),
+                cell: Box::new(move |ui, path| edit_cell(ui, app, &for_cell, path)),
                 ty: d.ty.data_type(),
                 value: Some(Box::new(move |path| resolved_column_value(&for_value, &app.meta_resolved(&for_value, path)))),
             }
@@ -184,6 +186,157 @@ fn cell(ui: &mut egui::Ui, app: &FinderApp, def: &MetaDef, path: &std::path::Pat
     if let Some(hint) = hint {
         label.on_hover_text(hint);
     }
+}
+
+/// A change made in a cell of a property column, applied once the view is drawn
+pub enum MetaEdit {
+    Set { path: PathBuf, def: i64, value: Option<String> },
+    /// the ids a list property ends with, and the labels to add to an open list first
+    Choice { path: PathBuf, def: i64, ids: Vec<i64>, new_labels: Vec<String> },
+}
+
+/// Writes what the cells of the property columns changed to the store
+pub fn apply_edits(app: &mut FinderApp) {
+    let edits = std::mem::take(&mut *app.meta_edits.borrow_mut());
+    let Some(store) = app.tags.as_mut() else { return };
+    for edit in edits {
+        match edit {
+            MetaEdit::Set { path, def, value } => store.set_meta_value(&path, def, value.as_deref()),
+            MetaEdit::Choice { path, def, mut ids, new_labels } => {
+                for label in new_labels {
+                    if let Some(id) = store.add_choice_option(def, &label) {
+                        ids.push(id);
+                    }
+                }
+                let multiple = store.meta_def(def).is_some_and(|d| d.config.multiple);
+                if !multiple {
+                    ids.truncate(1);
+                }
+                let text = encode_ids(&ids, multiple);
+                store.set_meta_value(&path, def, (!text.is_empty()).then_some(text).as_deref());
+            }
+        }
+    }
+}
+
+/// The cell of a row with the editor of the type: a list as chips in the colors of its options, a checkbox, a field
+/// for a text, a number or a date. A formula and a long text are only shown.
+fn edit_cell(ui: &mut egui::Ui, app: &FinderApp, def: &MetaDef, path: &std::path::Path) {
+    if app.tags.is_none() {
+        return cell(ui, app, def, path);
+    }
+    let resolved = app.meta_resolved(def, path);
+    match def.ty {
+        MetaType::Choice => choice_cell(ui, app, def, path, &resolved),
+        MetaType::Bool => {
+            let on = matches!(&*resolved, Resolved::Own(v) | Resolved::Inherited { value: v, .. } if v.trim() == "1");
+            let mut now = on;
+            let muted = !matches!(&*resolved, Resolved::Own(_));
+            let response = ui.add(egui::Checkbox::new(&mut now, ""));
+            if muted {
+                response.clone().on_hover_text("Valeur héritée ou absente : cliquer en met une sur cet élément");
+            }
+            if now != on {
+                app.meta_edits.borrow_mut().push(MetaEdit::Set { path: path.to_path_buf(), def: def.id, value: Some(if now { "1" } else { "0" }.into()) });
+            }
+        }
+        MetaType::Text | MetaType::Number | MetaType::Date => {
+            let stored = match &*resolved {
+                Resolved::Own(v) => editable(def, v),
+                _ => String::new(),
+            };
+            let hint = match &*resolved {
+                Resolved::Inherited { .. } | Resolved::Summary(_) => {
+                    let text = resolved_text(def, &resolved, &date_text);
+                    if matches!(&*resolved, Resolved::Summary(_)) { format!("≈ {text}") } else { text }
+                }
+                _ => String::new(),
+            };
+            let id = egui::Id::unique(("meta-cell", def.id, path));
+            let mut buffer = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| stored.clone());
+            let response = ui.add(egui::TextEdit::singleline(&mut buffer).frame(egui::Frame::NONE).hint_text(RichText::new(hint).italics()).desired_width(f32::INFINITY));
+            if response.lost_focus() {
+                if buffer != stored {
+                    let value = match parse_typed(def, &buffer) {
+                        Typed::Value(v) => Some(Some(v)),
+                        Typed::Empty => Some(None),
+                        Typed::Invalid => None,
+                    };
+                    if let Some(value) = value {
+                        app.meta_edits.borrow_mut().push(MetaEdit::Set { path: path.to_path_buf(), def: def.id, value });
+                    }
+                }
+                ui.data_mut(|d| d.remove_temp::<String>(id));
+            } else if response.has_focus() {
+                ui.data_mut(|d| d.insert_temp(id, buffer));
+            } else {
+                ui.data_mut(|d| d.remove_temp::<String>(id));
+            }
+        }
+        MetaType::LongText | MetaType::Formula => cell(ui, app, def, path),
+    }
+}
+
+/// A list property as chips, like the tags: the color of the option, a cross to remove, a field to add (an open list
+/// takes a new label, a closed one only the ones it has)
+fn choice_cell(ui: &mut egui::Ui, app: &FinderApp, def: &MetaDef, path: &std::path::Path, resolved: &Resolved) {
+    use pyegui_core::tags::{tags_edit, Tags, TagsOptions};
+    let order = |id: &i64| def.config.options.iter().position(|o| o.id == *id);
+    let (mut base, shown): (Vec<i64>, Vec<i64>) = match resolved {
+        Resolved::Own(v) | Resolved::Inherited { value: v, .. } => (decode_ids(v), decode_ids(v)),
+        Resolved::Summary(s) => {
+            let mut all: Vec<i64> = s.values.iter().flat_map(|(v, _)| decode_ids(v)).collect();
+            all.sort_by_key(order);
+            all.dedup();
+            (vec![], all)
+        }
+        Resolved::None => (vec![], vec![]),
+    };
+    let clean = |label: &str| label.replace('/', "-");
+    let labels: Vec<String> = shown.iter().filter_map(|id| def.config.label_of(*id)).map(clean).collect();
+    let neutral = Color32::from_rgb(100, 116, 139);
+    let colors: HashMap<String, Color32> = def.config.options.iter().map(|o| (clean(&o.label), if o.color.is_empty() { neutral } else { parse_color(&o.color) })).collect();
+    let mut tags = Tags::new(labels.clone(), colors);
+    let mut options = TagsOptions::new(egui::Id::unique(("meta-choice-cell", def.id, path)));
+    options.small = true;
+    options.fit = true;
+    options.field_width = 64.0;
+    options.hint_text = "+".into();
+    options.on_hover = true;
+    options.dropdown = true;
+    options.list_height = 420.0;
+    options.suggestions = def.config.options.iter().map(|o| clean(&o.label)).collect();
+    if !matches!(resolved, Resolved::Own(_)) {
+        options.muted = labels.iter().cloned().collect();
+    }
+    if !tags_edit(ui, &mut tags, &options) {
+        return;
+    }
+    let find = |label: &str| def.config.options.iter().find(|o| clean(&o.label).to_lowercase() == label.to_lowercase()).map(|o| o.id);
+    // what was taken off, then what was put on (a closed list only knows its own options)
+    let removed: Vec<i64> = labels.iter().filter(|l| !tags.tags.contains(l)).filter_map(|l| find(l)).collect();
+    base.retain(|id| !removed.contains(id));
+    let mut new_labels = vec![];
+    let mut put: Vec<i64> = vec![];
+    for tag in tags.tags.iter().filter(|t| !labels.contains(t)) {
+        match find(tag) {
+            Some(id) => put.push(id),
+            None if def.config.mode == ListMode::Open => new_labels.push(tag.clone()),
+            None => {}
+        }
+    }
+    if !def.config.multiple && !(put.is_empty() && new_labels.is_empty()) {
+        base.clear();
+        put.truncate(1);
+        new_labels = if put.is_empty() { new_labels.into_iter().take(1).collect() } else { vec![] };
+    }
+    for id in put {
+        if !base.contains(&id) {
+            base.push(id);
+        }
+    }
+    base.sort_by_key(order);
+    app.meta_edits.borrow_mut().push(MetaEdit::Choice { path: path.to_path_buf(), def: def.id, ids: base, new_labels });
 }
 
 /// The seconds since 1970 of a day (midnight UTC: a date has no time zone)

@@ -153,12 +153,33 @@ enum ChipAction {
     Color(String, Option<Color32>),
 }
 
+/// The padding of a chip and the size of what is at the left of its text: a dot, or the tag icon
+fn chip_dot(small: bool, icon: bool) -> (f32, f32) {
+    match (small, icon) {
+        (true, false) => (6.0, 6.0),
+        (false, false) => (8.0, 8.0),
+        (true, true) => (6.0, 11.0),
+        (false, true) => (8.0, 13.0),
+    }
+}
+
+/// The SVG of the tag icon (white: it is tinted)
+pub const TAG_ICON: &[u8] = include_bytes!("../../examples/icons/tag.svg");
+
+/// Paints the tag icon of a color
+pub fn paint_tag_icon(ui: &egui::Ui, center: egui::Pos2, size: f32, color: Color32) {
+    egui::Image::from_bytes("bytes://pyegui-tag-icon.svg", TAG_ICON)
+        .tint(color)
+        .fit_to_exact_size(vec2(size, size))
+        .paint_at(ui, Rect::from_center_size(center, vec2(size, size)));
+}
+
 /// The width of the chip of a tag, with the room of its cross when it can be removed
-fn chip_width(ui: &egui::Ui, tag: &str, removable: bool, small: bool) -> f32 {
+fn chip_width(ui: &egui::Ui, tag: &str, removable: bool, small: bool, icon: bool) -> f32 {
     let font = chip_style(small).resolve(ui.style());
     let galley = ui.painter().layout_no_wrap(last_level(tag).to_owned(), font, Color32::WHITE);
     let height = galley.size().y + if small { 2.0 } else { 6.0 };
-    let (pad, dot) = if small { (6.0, 6.0) } else { (8.0, 8.0) };
+    let (pad, dot) = chip_dot(small, icon);
     let cross = if removable { height.min(14.0) } else { 0.0 };
     pad + dot + 6.0 + galley.size().x + cross + pad
 }
@@ -172,6 +193,7 @@ fn chip(
     editable: bool,
     small: bool,
     dim: bool,
+    icon: bool,
     id: Id,
 ) -> Option<ChipAction> {
     let color = if dim { muted(tags.color_of(tag)) } else { tags.color_of(tag) };
@@ -182,7 +204,7 @@ fn chip(
     let edge = color.lerp_to_gamma(ui.visuals().strong_text_color(), 0.45);
     let galley = ui.painter().layout_no_wrap(last_level(tag).to_owned(), font, edge);
     let height = galley.size().y + if small { 2.0 } else { 6.0 };
-    let (pad, dot) = if small { (6.0, 6.0) } else { (8.0, 8.0) };
+    let (pad, dot) = chip_dot(small, icon);
     let cross = if editable { height.min(14.0) } else { 0.0 };
     let width = pad + dot + 6.0 + galley.size().x + cross + pad;
     let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
@@ -199,7 +221,11 @@ fn chip(
         let fill = base.lerp_to_gamma(color, if hovered { 0.28 } else { 0.18 });
         painter.rect(rect, height / 2.0, fill, Stroke::new(1.2, color), StrokeKind::Inside);
         let dot_center = egui::pos2(rect.left() + pad + dot / 2.0, rect.center().y);
-        painter.circle_filled(dot_center, dot / 2.0, color);
+        if icon {
+            paint_tag_icon(ui, dot_center, dot, color);
+        } else {
+            painter.circle_filled(dot_center, dot / 2.0, color);
+        }
         let text_pos = egui::pos2(dot_center.x + dot / 2.0 + 6.0, rect.center().y - galley.size().y / 2.0);
         painter.galley(text_pos, galley, edge);
         if let Some(cross) = &cross_response {
@@ -284,9 +310,13 @@ pub struct TagsOptions {
     pub muted: HashSet<String>,
     pub on_hover: bool,
     pub dropdown: bool,
+    /// the preferred (maximum) height of the list of suggestions, which scrolls beyond it
+    pub list_height: f32,
     pub fit: bool,
     pub compact: bool,
     pub dot_size: f32,
+    /// the tag icon in the color of the tag at the left of a chip, instead of a dot
+    pub icon: bool,
 }
 
 impl TagsOptions {
@@ -302,9 +332,11 @@ impl TagsOptions {
             muted: HashSet::new(),
             on_hover: false,
             dropdown: false,
+            list_height: 220.0,
             fit: false,
             compact: false,
             dot_size: 10.0,
+            icon: false,
         }
     }
 }
@@ -322,6 +354,7 @@ pub fn tags_edit(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
     let muted_tags: HashSet<String> = o.muted.iter().map(|t| normalize(t)).collect();
     let on_hover = o.on_hover;
     let dropdown = o.dropdown;
+    let list_height = o.list_height;
     let field_id = id.with("field");
     let editing = editable
         && (!on_hover
@@ -339,7 +372,7 @@ pub fn tags_edit(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
         let room = (ui.available_width() - reserved).max(0.0);
         let (mut used, mut fitting) = (0.0, 0);
         for (i, tag) in state.tags.iter().enumerate() {
-            let width = chip_width(ui, tag, editable, small) + 6.0;
+            let width = chip_width(ui, tag, editable, small, o.icon) + 6.0;
             let badge = if i + 1 < count { 40.0 } else { 0.0 };
             if used + width + badge > room {
                 break;
@@ -395,7 +428,7 @@ pub fn tags_edit(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
         let actions: Vec<(String, ChipAction)> = state.tags[..shown]
             .iter()
             .filter_map(|tag| {
-                chip(ui, &state, tag, editing && !muted_tags.contains(tag), small, muted_tags.contains(tag), id.with(tag))
+                chip(ui, &state, tag, editing && !muted_tags.contains(tag), small, muted_tags.contains(tag), o.icon, id.with(tag))
                     .map(|action| (tag.clone(), action))
             })
             .collect();
@@ -542,16 +575,36 @@ pub fn tags_edit(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
         let popup_id = id.with("suggestions");
         if field.has_focus() && !matching.is_empty() {
             let mut picked = None;
-            egui::Area::new(popup_id)
-                .order(egui::Order::Foreground)
-                .fixed_pos(field.rect.left_bottom() + vec2(0.0, 4.0))
+            // under the field, or over it when the window has not the room for the list
+            let screen = ui.ctx().content_rect();
+            let row_h = ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y;
+            let wanted = (matching.len() as f32 * row_h + 20.0).min(list_height + 20.0);
+            let below = screen.bottom() - field.rect.bottom() - 12.0;
+            let above = field.rect.top() - screen.top() - 12.0;
+            let up = below < wanted && above > below;
+            let room = if up { above } else { below };
+            let list_max = list_height.min((room - 20.0).max(60.0));
+            let area = egui::Area::new(popup_id).order(egui::Order::Foreground);
+            let area = if up {
+                area.pivot(egui::Align2::LEFT_BOTTOM).fixed_pos(field.rect.left_top() - vec2(0.0, 4.0))
+            } else {
+                area.fixed_pos(field.rect.left_bottom() + vec2(0.0, 4.0))
+            };
+            area
                 .show(ui.ctx(), |ui| {
                     egui::Frame::popup(ui.style()).fill(soft_fill(ui)).show(ui, |ui| {
                         // the scroll bar takes its own room: it must not cover the long names
                         ui.spacing_mut().scroll.floating = false;
                         ui.set_min_width(field_width + 60.0);
                         // the whole list of a dropdown scrolls
-                        egui::ScrollArea::vertical().max_height(220.0).auto_shrink([true, true]).show(ui, |ui| {
+                        // the height of the content seen the frame before: the area is never shorter than its rows
+                        let height_id = popup_id.with("content-height");
+                        let known: f32 = ui.ctx().data(|d| d.get_temp(height_id)).unwrap_or(0.0);
+                        let scrolled = egui::ScrollArea::vertical()
+                            .min_scrolled_height(known.min(list_max))
+                            .max_height(list_max)
+                            .auto_shrink([true, true])
+                            .show(ui, |ui| {
                         for (index, suggestion) in matching.iter().enumerate() {
                             // the full path in the colors of its levels, over a row that lights up
                             let background = ui.painter().add(egui::Shape::Noop);
@@ -583,6 +636,11 @@ pub fn tags_edit(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
                             }
                         }
                         });
+                        let content = scrolled.content_size.y;
+                        if (content - known).abs() > 0.5 {
+                            ui.ctx().data_mut(|d| d.insert_temp(height_id, content));
+                            ui.ctx().request_repaint();
+                        }
                     });
                 });
             if let Some(suggestion) = picked {

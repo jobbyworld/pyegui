@@ -92,6 +92,10 @@ def update_func(ctx):
 
 - `FileListView.forward()` (method): Goes forward in the history, after back
 - `FileListView.go(folder)` (method): Enters a folder, kept in the history of back and forward
+- `FileListView.icon_clicked()` (method): The key of the column whose icon was clicked since the last call (the title of a column of your own,
+
+  see the "icon" of extra_columns), or None. The call forgets it
+
 - `FileListView.items` (attribute): Paths of the items shown at the last frame, in their order
 - `FileListView.keep_focus` (attribute): If True, the view takes back the keyboard focus at every frame when another widget
 
@@ -203,6 +207,10 @@ def update_func(ctx):
 
 - `FileIconView.forward()` (method): Goes forward in the history, after back
 - `FileIconView.go(folder)` (method): Enters a folder, kept in the history of back and forward
+- `FileIconView.icon_clicked()` (method): The key of the column whose icon was clicked since the last call (the title of a column of your own,
+
+  see the "icon" of extra_columns), or None. The call forgets it
+
 - `FileIconView.icon_size` (attribute): The size of the icons, between 16 and 256: the tiles of the grid grow with it, so there
 
   are fewer of them on a row. Default is 48. Give it a slider to let the user choose, like the
@@ -306,6 +314,10 @@ def update_func(ctx):
 
   next frame
 
+- `FileTreeView.icon_clicked()` (method): The key of the column whose icon was clicked since the last call (the title of a column of your own, see
+
+  the "icon" of extra_columns), or None. The call forgets it
+
 - `FileTreeView.is_open(path)` (method): True if the folder is open in the tree
 - `FileTreeView.items` (attribute): Paths of the rows shown at the last frame, in their order: the items of the open folders
 
@@ -356,7 +368,7 @@ in the ui and scrolls; only the visible rows are drawn, so large folders stay fa
 - `headers` (list[str]): the titles of the columns name, modified, size and kind. Default is ["Name", "Date Modified", "Size", "Kind"]
 - `date_format` (str): format of the dates, like strftime, or "human" for the dates in French words ("il y a 5 min", "Hier à 09:10", "12 mars"). Default is "human"
 - `row_height` (float): height of a row. Default is 24
-- `extra_columns` (list[tuple]): columns of your own, after the name: a title, a width and a function called with the path of the row inside the cell, to draw it with the usual widgets. They sort and filter when a fourth item, a dict, gives the type of their data and a function that returns the value of a row: {"type": "text" | "number" | "date" | "choice", "value": function(path) -> value}. A date is seconds since 1970 or a datetime. The values are kept for a second (see refresh_columns). The function runs while the view is drawn: it must not read or change the view itself
+- `extra_columns` (list[tuple]): columns of your own, after the name: a title, a width and a function called with the path of the row inside the cell, to draw it with the usual widgets. They sort and filter when a fourth item, a dict, gives the type of their data and a function that returns the value of a row: {"type": "text" | "number" | "date" | "choice", "value": function(path) -> value}. A date is seconds since 1970 or a datetime. The dict can also hold "icon": the path of an SVG file drawn at the left of the title, in the color of the title. The values are kept for a second (see refresh_columns). The function runs while the view is drawn: it must not read or change the view itself
 - `resizable` (bool): the border of a column can be dragged. Default is True
 - `reorderable` (bool): the title of a column can be dragged to another place. Default is True
 - `drag_out` (bool): a drag of the selection starts a drag of the files to the Finder (the Explorer, another application), see start_file_drag. Default is True
@@ -435,7 +447,7 @@ when they are opened and watched while they are open.
 - `columns` (list[str]): columns of the view at the right end of the rows, among "modified", "size" and "kind". Default is none, the tree is then only names
 - `headers` (list[str]): the titles of the columns name, modified, size and kind. Default is ["Name", "Date Modified", "Size", "Kind"]
 - `date_format` (str): format of the dates, like strftime, or "human" for the dates in French words ("il y a 5 min", "Hier à 09:10", "12 mars"). Default is "human"
-- `extra_columns` (list[tuple]): columns of your own at the right end of the rows: a title (shown above the tree), a width, and a function called with the path of each row to draw its cell, e.g. ("Tags", 160, lambda path: tags_edit(...)). A fourth item, a dict, makes the column sort and filter: {"type": "text" | "number" | "date" | "choice", "value": function(path) -> value}. A date is seconds since 1970 or a datetime
+- `extra_columns` (list[tuple]): columns of your own at the right end of the rows: a title (shown above the tree), a width, and a function called with the path of each row to draw its cell, e.g. ("Tags", 160, lambda path: tags_edit(...)). A fourth item, a dict, makes the column sort and filter: {"type": "text" | "number" | "date" | "choice", "value": function(path) -> value, "icon": path of an SVG file}. A date is seconds since 1970 or a datetime. The icon is drawn at the left of the title, in its color
 - `header` (bool): draws the header of the columns above the tree, pinned at the top while the tree scrolls. Default is True when there are columns
 - `resizable` (bool): the border of a column can be dragged. Default is True
 - `reorderable` (bool): the title of a column can be dragged to another place. Default is True

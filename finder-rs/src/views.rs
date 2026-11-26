@@ -124,6 +124,7 @@ fn sort_key(name: &str) -> Option<SortKey> {
 fn hooks(app: &FinderApp) -> Hooks<'_> {
     let tags = Extra {
         title: "Étiquettes".into(),
+        icon: Some(crate::glyphs::column_icon(crate::glyphs::TAG)),
         width: 140.0,
         cell: Box::new(move |ui, path| tagsui::cell(ui, app, path)),
         ty: DataType::Choice,
@@ -138,6 +139,7 @@ fn hooks(app: &FinderApp) -> Hooks<'_> {
     };
     let opened = Extra {
         title: "Dernière ouverture".into(),
+        icon: None,
         width: 140.0,
         cell: Box::new(move |ui, path| {
             ui.add(egui::Label::new(egui::RichText::new(crate::model::format_date(app.opened_at(path))).weak()).selectable(false));
@@ -236,6 +238,8 @@ struct Back {
     shown: Vec<PathBuf>,
     activated: Vec<PathBuf>,
     folder: Option<PathBuf>,
+    /// the column whose icon was clicked
+    icon: Option<String>,
 }
 
 /// Draws the view of the mode (list, icons or tree) in the central area
@@ -294,6 +298,7 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
             });
             out = menu_out.into_inner();
         }
+        let icon = shared.borrow_mut().columns.icon_clicked.take();
         let t = shared.borrow();
         back = Back {
             selected: t.selected.iter().map(PathBuf::from).collect(),
@@ -301,6 +306,7 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
             shown: t.shown.iter().map(PathBuf::from).collect(),
             activated: t.activated.iter().map(PathBuf::from).collect(),
             folder: None,
+            icon,
         };
         app.open_folders = t.open.iter().map(PathBuf::from).collect();
     } else {
@@ -331,6 +337,7 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
             shown: view.shown.clone(),
             activated: view.activated.clone(),
             folder: (view.folder() != app.folder()).then(|| view.folder().to_path_buf()),
+            icon: view.columns.icon_clicked.take(),
         };
         if icons {
             app.views.icons = Some(view);
@@ -340,6 +347,11 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
     }
 
     tagsui::apply_edits(app);
+    crate::metaui::apply_edits(app);
+    // the icon of a column shows the pane about it: the tags, or the properties
+    if let Some(key) = back.icon {
+        app.pending_pane = Some(if key == "Étiquettes" { crate::dock::Pane::Tags } else { crate::dock::Pane::Properties });
+    }
     app.selected = back.selected.into_iter().collect();
     if let Some(key) = sort_key(&back.sort.0) {
         app.sort_key = key;

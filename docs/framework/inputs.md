@@ -318,11 +318,17 @@ label(f"{math.degrees(angle.value):.0f}°")
 
 Show singleline text field and update the text
 
+Returns a Response: `lost_focus` is true during the frame where Enter, Tab or a click elsewhere ends the
+typing (what to do with the text, a cell of a table for instance), `has_focus` while it is typed and `changed`
+when a key changed the text.
+
 **Keyword args**
 
 - `hint_text` (str): grey text shown when the field is empty
 - `request_focus` (bool): give the field the keyboard focus this frame, for example to let the user type into it right as it appears, like a search field in a popup. Default is False
 - `select_all` (bool): select the whole text this frame, so that typing or pasting replaces it, e.g. together with request_focus when a field opens on a value. Default is False
+- `frame` (bool): draw the frame of the field. False gives a bare field, for a cell of a table. Default is True
+- `desired_width` (float): width of the field. float("inf") fills the available width
 
 **Example:**
 
@@ -330,6 +336,8 @@ Show singleline text field and update the text
 text = Str("editable")
 # inside update func
 text_edit_singleline(text, hint_text="hint me bro")
+if text_edit_singleline(text, frame=False).lost_focus:
+    save(text.value)
 ```
 
 
@@ -593,8 +601,10 @@ removes the last tag.
 - `field_width` (float): the width of the field, 120 by default
 - `on_hover` (bool): the chips are read only until the mouse is over the widget, e.g. the cell of a row: then the crosses show and an empty tag, a field in a pill like the chips with a chevron, to type or choose a tag. The pill stays while it has the focus. What is typed is kept by the widget (give each row its own id). The tags in muted have no cross. False by default
 - `dropdown` (bool): the field shows the list of all the suggestions as soon as it has the focus, filtered by what is typed, instead of only while typing. The keys Down and Up move a highlighted row (the list scrolls with it), Enter adds it, Escape clears what is typed. False by default
+- `list_height` (float): the preferred height of the list of suggestions, which scrolls beyond it. Default is 220
 - `compact` (bool): only a dot per tag in its color, the full path on hover, e.g. in a row of a list; read only
 - `dot_size` (float): the diameter of the dots of compact, 10 by default
+- `icon` (bool): the tag icon in the color of the tag at the left of a chip, instead of a dot. False by default
 - `muted` (list[str]): tags drawn with their colors desaturated, e.g. those an item inherits
 - `small` (bool): smaller chips, with the small text, e.g. in a row of a list or of a tree
 - `fit` (bool): shows as many tags as the room of the ui allows and the others in the "+5" badge, e.g. in a cell of a table; the room of the crosses and of the field is kept even when they do not show. Replaces max_visible. False by default
@@ -687,6 +697,8 @@ under it.
 - `deletable` (bool): a trash at the right of the row under the pointer: a first click turns it red, a second one deletes the level (it is given by `view.take_deleted()`, the app removes it from its data). False by default
 - `movable` (bool): the rows can be dragged: dropped on the middle of another level it goes under it, on its upper or lower edge it goes before or after it. The move is given by `view.take_moved()` as (path, parent, before), the app moves it in its data. False by default
 - `keep_order` (bool): the levels stay in the order of the tags instead of being sorted by name, so that a move before or after another level shows. False by default
+- `icon` (bool): the tag icon in the color of the level instead of a dot. False by default
+- `checks` (dict[str, str]): a check box at the left of every row, in the state given by the path of the level: "on", "off" or "mixed" (a level that is not in the dict is off). The tree then picks tags, e.g. for the selected items: a click on a row is returned like a selection, the app puts the tag on or takes it off.
 
 **Returns**
 
