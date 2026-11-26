@@ -427,7 +427,7 @@ fn editor(ui: &mut Ui, state: &mut PropertySetState, p: &Property, o: &PropertyS
 fn choice(ui: &mut Ui, state: &mut PropertySetState, p: &Property, options: &[PropOption], multiple: bool, open: bool, width: f32, o: &PropertySetOptions, changes: &mut Vec<Change>) {
     let note = if p.note.is_empty() { None } else { Some(p.note.as_str()) };
     let new_option = state.new_option.entry(p.id.clone()).or_default();
-    let spec = ChoiceSpec { salt: o.id.with(("choice", &p.id)), options, selected: &p.selected, multiple, open, editable: p.editable(), width, add_hint: &o.add_hint, note, flat: false };
+    let spec = ChoiceSpec { salt: o.id.with(("choice", &p.id)), options, selected: &p.selected, multiple, open, editable: p.editable(), width, add_hint: &o.add_hint, note, flat: false, muted: false };
     match choice_combo(ui, &spec, new_option) {
         Some(ChoiceChange::Choose(ids)) => changes.push(Change::Choose { id: p.id.clone(), ids }),
         Some(ChoiceChange::Clear) => changes.push(Change::Clear { id: p.id.clone() }),
@@ -451,6 +451,8 @@ pub struct ChoiceSpec<'a> {
     pub note: Option<&'a str>,
     /// no outline and no fill (the arrow shows while the mouse is over it), e.g. in a cell of a view
     pub flat: bool,
+    /// the values are drawn faded: a summary of what is below a folder, or a value inherited from it
+    pub muted: bool,
 }
 
 /// What the person did in a list editor
@@ -522,6 +524,9 @@ fn flat_choice(ui: &mut Ui, spec: &ChoiceSpec<'_>, new_option: &mut String, beha
         options.editable = false;
         options.small = true;
         options.fit = true;
+        if spec.muted {
+            options.muted = tags.tags.iter().cloned().collect();
+        }
         tags_edit(&mut inner, &mut tags, &options);
     }
     // after the chips, so that it is above them and gets the click

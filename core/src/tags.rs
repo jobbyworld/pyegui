@@ -21,7 +21,7 @@ pub fn hex(value: u32) -> Color32 {
 pub fn muted(color: Color32) -> Color32 {
     let [r, g, b, a] = color.to_srgba_unmultiplied();
     let gray = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
-    let mix = |c: u8| (c as f32 + (gray - c as f32) * 0.65).round() as u8;
+    let mix = |c: u8| (c as f32 + (gray - c as f32) * 0.85).round() as u8;
     Color32::from_rgba_unmultiplied(mix(r), mix(g), mix(b), a)
 }
 
@@ -207,7 +207,8 @@ fn chip(
     icon: bool,
     id: Id,
 ) -> Option<ChipAction> {
-    let color = if dim { muted(tags.color_of(tag)) } else { tags.color_of(tag) };
+    // faded: less color, and the color pulled toward the background of the chips
+    let color = if dim { muted(tags.color_of(tag)).lerp_to_gamma(soft_fill(ui), 0.4) } else { tags.color_of(tag) };
     let font = chip_style(small).resolve(ui.style());
     // the text and the cross in the color of the outline
     // the text and the cross: the color pulled toward the text of the theme, so it reads on the

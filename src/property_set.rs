@@ -335,6 +335,8 @@ unsafe fn property_set(py: Python<'_>, state: &Bound<'_, PropertySet>, propertie
 ///
 ///     add_hint (str): the hint of the field of a new option. Default is "New value"
 ///
+///     muted (bool): the values are drawn faded (a summary of the folder, an inherited value). False by default
+///
 ///     enabled (bool): False to show it without editing. True by default
 ///
 ///     flat (bool): no outline and no fill, the arrow shows while the mouse is over it (for a cell). False by default
@@ -368,6 +370,7 @@ unsafe fn choice_edit(py: Python<'_>, options: &Bound<'_, PyAny>, selected: Vec<
         add_hint: &add_hint,
         note: None,
         flat: kwarg::<bool>(kwargs, "flat")?.unwrap_or(false),
+        muted: kwarg::<bool>(kwargs, "muted")?.unwrap_or(false),
     };
     let change = choice_combo(ui, &spec, &mut typed);
     ui.data_mut(|d| d.insert_temp(typed_id, typed));

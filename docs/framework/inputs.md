@@ -830,6 +830,7 @@ labels chosen, which opens a list of the options, a check box for each one when 
 - `id` (str): tells apart two editors that have the same options (give each cell its own)
 - `width` (float): width of the combo box. Default is the room that is left
 - `add_hint` (str): the hint of the field of a new option. Default is "New value"
+- `muted` (bool): the values are drawn faded (a summary of the folder, an inherited value). False by default
 - `enabled` (bool): False to show it without editing. True by default
 - `flat` (bool): no outline and no fill, the arrow shows while the mouse is over it (for a cell). False by default
 

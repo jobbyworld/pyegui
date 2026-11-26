@@ -6903,6 +6903,7 @@ def meta_choice_cell(d, path, resolved):
         id=f"meta multi {d['id']} {path}",
         add_hint="Nouvelle valeur",
         flat=True,
+        muted=not (resolved and resolved[0] == "own"),
     )
     if change is None:
         return

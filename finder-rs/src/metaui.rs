@@ -308,7 +308,7 @@ fn choice_cell(ui: &mut egui::Ui, app: &FinderApp, def: &MetaDef, path: &std::pa
         let selected: Vec<String> = shown.iter().map(|i| i.to_string()).collect();
         let salt = egui::Id::unique(("meta-multi-cell", def.id, path));
         let mut typed: String = ui.data(|d| d.get_temp(salt.with("new"))).unwrap_or_default();
-        let spec = ChoiceSpec { salt, options: &options, selected: &selected, multiple: def.config.multiple, open: def.config.mode == ListMode::Open, editable: true, width: ui.available_width(), add_hint: "Nouvelle valeur", note: None, flat: true };
+        let spec = ChoiceSpec { salt, options: &options, selected: &selected, multiple: def.config.multiple, open: def.config.mode == ListMode::Open, editable: true, width: ui.available_width(), add_hint: "Nouvelle valeur", note: None, flat: true, muted: !matches!(resolved, Resolved::Own(_)) };
         let change = choice_combo(ui, &spec, &mut typed);
         ui.data_mut(|d| d.insert_temp(salt.with("new"), typed));
         let edit = match change {
