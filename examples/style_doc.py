@@ -852,4 +852,5 @@ def update_func(ctx):
 
 
 if __name__ == "__main__":
-    run_native("Styles des widgets", update_func, inner_width=1250, inner_height=860)
+    # the glass sheets (finder) are translucent: the backdrop of the system shows through, as in finder.py
+    run_native("Styles des widgets", update_func, backdrop=Backdrop.LIQUID_GLASS, inner_width=1250, inner_height=860)
