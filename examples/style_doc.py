@@ -50,6 +50,63 @@ def by_state(fill, stroke="stroke", text="fg_stroke", rounding="rounding", state
 
 
 TEXT = "colors.text"
+STRONG, WEAK = "colors.strong_text", "colors.weak_text"
+ROUND = "widgets.inactive.rounding"  # the corners of most controls
+LINE = "widgets.noninteractive.stroke"  # the thin line of separators, groups, header rules
+SEL, SEL_TEXT = "colors.selection_bg", "colors.selection_stroke"
+# factors the widgets apply to a token (alpha multiplied): named once, since several widgets want the same look
+SEL_SOFT = SEL + "*0.35"  # a range, a selected row of a list, a dragged row
+UNFOCUSED = TEXT + "*0.15"  # a selection in a list that has lost the focus
+HOVER_ROW = TEXT + "*0.06"  # a hovered row of a table
+HOVER_SOFT = "widgets.hovered.weak_fill*0.5"  # a hovered row of a property grid or of a file view
+TRACK = TEXT + "*0.08"  # the track of a horizontal scroll bar, a moved column
+BOX_LINE = TEXT + "*0.7"  # the outline of an empty check box
+
+
+def tokens_of(rows):
+    """the tokens (without the factor) that rows read"""
+    return {split(r[k])[0] for r in rows for k in ("fill", "stroke", "text", "rounding") if isinstance(r[k], str)}
+
+
+def popup(label, rounding="window.rounding"):
+    """the look of a window, a menu, a calendar: the window color, its stroke and corners"""
+    return row(label, fill="colors.window", stroke="window.stroke", text=TEXT, rounding=rounding)
+
+
+def chip(label, inherited=False):
+    """a tag or a choice as a chip: the soft background of the theme; an inherited one is fainter"""
+    return row(label, fill="derived.soft_fill" + "*0.6" * inherited, text=WEAK if inherited else STRONG, rounding=10)
+
+
+def field(label, stroke, rounding=ROUND, dim=1.0):
+    """a text field: the background of the edits, a stroke that follows the state"""
+    return row(label, fill="colors.text_edit_bg", stroke=stroke, text=TEXT, rounding=rounding, dim=dim)
+
+
+def selection_rows(feminine=True, rounding=None):
+    """the selected item of a list: the selection of the theme with the focus, a discreet background without"""
+    word = "Sélectionnée" if feminine else "Sélectionné"
+    return [row(f"{word} (focus)", fill=SEL, text=SEL_TEXT, rounding=rounding), row(f"{word} (sans focus)", fill=UNFOCUSED, text=STRONG, rounding=rounding)]
+
+
+def tab_rows(prefix, rounding=None):
+    """the tabs of a Dock / TabView: bar, active, inactive and hovered tab, from the `<prefix>.*` tokens"""
+    t = lambda name: f"{prefix}.{name}"
+    return [
+        ("Barre", [row("Fond de la barre", fill=t("bar_fill"), text=TEXT)]),
+        ("Onglet", [
+            row("Actif", fill=t("active_fill"), stroke=t("active_stroke"), text=t("active_text"), rounding=rounding),
+            row("Inactif", fill=t("inactive_fill"), stroke=t("inactive_stroke"), text=t("inactive_text"), rounding=rounding),
+            row("Survol", fill=t("hovered_fill"), stroke=t("inactive_stroke"), text=t("inactive_text"), rounding=rounding)]),
+    ]
+
+
+# rows that several widgets draw the same way
+HEADER_RULE = row("Trait sous l'en-tête", stroke=LINE)
+ROW_PLAIN, ROW_STRIPED = row("Normale", text=TEXT), row("Rayée", fill="colors.striped_bg", text=TEXT)
+ROW_HOVERED = row("Survol", fill=HOVER_ROW, text=TEXT)
+LIST_HOVERED = row("Ligne survolée", fill="widgets.hovered.weak_fill", text=TEXT, rounding=5)
+BOX_ON, BOX_OFF = row("Case cochée", fill="colors.hyperlink", rounding=3), row("Case vide", stroke=BOX_LINE, rounding=3)
 
 WIDGETS = [
     dict(
@@ -57,7 +114,7 @@ WIDGETS = [
         functions="label, strong, weak, small, heading, monospace, colored_label",
         note="Le texte n'a pas de fond ni de bordure: il prend la couleur du texte du thème, le fort et le faible en dérivent.",
         parts=[
-            ("Texte", [row("Courant", text="colors.text", font="Body"), row("Fort (strong)", text="colors.strong_text", font="Body"), row("Faible (weak)", text="colors.weak_text", font="Body"), row("Titre (heading)", text="colors.strong_text", font="Heading"), row("Petit (small)", text="colors.text", font="Small")]),
+            ("Texte", [row("Courant", text="colors.text", font="Body"), row("Fort (strong)", text=STRONG, font="Body"), row("Faible (weak)", text=WEAK, font="Body"), row("Titre (heading)", text=STRONG, font="Heading"), row("Petit (small)", text="colors.text", font="Small")]),
             ("Alertes", [row("Avertissement", text="colors.warn"), row("Erreur", text="colors.error")]),
         ],
     ),
@@ -79,7 +136,7 @@ WIDGETS = [
     dict(
         name="Selectable", category="Boutons", sample="Choix", functions="selectable_label_clicked, selectable_value",
         note="Sélectionné: fond de la sélection. Sinon: sans fond, comme un bouton plat; le fond n'apparaît qu'au survol.",
-        parts=[("Choix", [row("Non sélectionné", text="widgets.inactive.fg_stroke", rounding="widgets.inactive.rounding")] + [row(l, fill=f"widgets.{k}.weak_fill", stroke=f"widgets.{k}.stroke", text=f"widgets.{k}.fg_stroke", rounding=f"widgets.{k}.rounding") for l, k in [("Survol", "hovered"), ("Pressé", "active")]] + [row("Sélectionné", fill="colors.selection_bg", stroke="colors.selection_stroke", text="colors.selection_stroke", rounding="widgets.inactive.rounding")])],
+        parts=[("Choix", [row("Non sélectionné", text="widgets.inactive.fg_stroke", rounding=ROUND)] + by_state("weak_fill", states=[("Survol", "hovered"), ("Pressé", "active")], disabled=False) + [row("Sélectionné", fill=SEL, stroke=SEL_TEXT, text=SEL_TEXT, rounding=ROUND)])],
     ),
     dict(
         name="Checkbox / Radio", category="Boutons", sample="✓", functions="checkbox, radio_value",
@@ -89,12 +146,12 @@ WIDGETS = [
     dict(
         name="Switch", category="Boutons", sample="●", functions="switch",
         note="Allumé: le fond est la couleur de la sélection.",
-        parts=[("Interrupteur", [row("Éteint", fill="widgets.inactive.fill", stroke="widgets.inactive.stroke", text="widgets.inactive.fg_stroke", rounding="widgets.inactive.rounding"), row("Survol", fill="widgets.hovered.fill", stroke="widgets.hovered.stroke", text="widgets.hovered.fg_stroke", rounding="widgets.hovered.rounding"), row("Allumé", fill="colors.selection_bg", stroke="colors.selection_stroke", text="widgets.active.fg_stroke", rounding="widgets.inactive.rounding")])],
+        parts=[("Interrupteur", by_state("fill", states=[("Éteint", "inactive"), ("Survol", "hovered")], disabled=False) + [row("Allumé", fill=SEL, stroke=SEL_TEXT, text="widgets.active.fg_stroke", rounding=ROUND)])],
     ),
     dict(
         name="Slider / DragValue", category="Boutons", sample="42", functions="slider_int, slider_float, drag_int, drag_float",
         note="Le rail est `inactive.fill`, la partie remplie la couleur de la sélection, la poignée suit l'état. Le champ de valeur est un bouton.",
-        parts=[("Rail", [row("Rail", fill="widgets.inactive.fill", rounding="widgets.inactive.rounding"), row("Partie remplie", fill="colors.selection_bg", rounding="widgets.inactive.rounding")]), ("Poignée", by_state("fill", disabled=False)), ("Champ de valeur", by_state("weak_fill", disabled=False))],
+        parts=[("Rail", [row("Rail", fill="widgets.inactive.fill", rounding=ROUND), row("Partie remplie", fill=SEL, rounding=ROUND)]), ("Poignée", by_state("fill", disabled=False)), ("Champ de valeur", by_state("weak_fill", disabled=False))],
     ),
     dict(
         name="ComboBox", category="Boutons", sample="Choisir ▾", functions="combo_box, choice_combo",
@@ -103,24 +160,24 @@ WIDGETS = [
     ),
     dict(
         name="ProgressBar", category="Boutons", sample="60 %", functions="progress",
-        parts=[("Barre", [row("Fond", fill="colors.text_edit_bg", stroke="widgets.noninteractive.stroke", text="colors.text", rounding="widgets.inactive.rounding"), row("Partie remplie", fill="colors.selection_bg", text="colors.text", rounding="widgets.inactive.rounding")])],
+        parts=[("Barre", [row("Fond", fill="colors.text_edit_bg", stroke=LINE, text=TEXT, rounding=ROUND), row("Partie remplie", fill=SEL, text=TEXT, rounding=ROUND)])],
     ),
     dict(
         name="TextEdit", category="Saisie", sample="texte saisi", functions="text_edit_singleline, text_edit_multiline, code_editor",
         note="Fond `text_edit_bg` (le même que les tracés et les barres de défilement). Le focus prend le trait de la sélection.",
         parts=[
-            ("Champ", [row("Inactif", fill="colors.text_edit_bg", stroke="widgets.inactive.stroke", text="colors.text", rounding="widgets.inactive.rounding"), row("Survol", fill="colors.text_edit_bg", stroke="widgets.hovered.stroke", text="colors.text", rounding="widgets.hovered.rounding"), row("Focus", fill="colors.text_edit_bg", stroke="colors.selection_stroke", text="colors.text", rounding="widgets.inactive.rounding"), row("Désactivé (fondu)", fill="colors.text_edit_bg", stroke="widgets.inactive.stroke", text="colors.text", rounding="widgets.inactive.rounding", dim=0.45)]),
-            ("Texte sélectionné", [row("Sélection", fill="colors.selection_bg", text="colors.text"), row("Curseur", text="colors.cursor")]),
+            ("Champ", [field("Inactif", "widgets.inactive.stroke"), field("Survol", "widgets.hovered.stroke", "widgets.hovered.rounding"), field("Focus", SEL_TEXT), field("Désactivé (fondu)", "widgets.inactive.stroke", dim=0.45)]),
+            ("Texte sélectionné", [row("Sélection", fill=SEL, text=TEXT), row("Curseur", text="colors.cursor")]),
         ],
     ),
     dict(
         name="Window / Modal", category="Conteneurs", sample="Fenêtre", functions="window, modal, settings_window",
-        parts=[("Fenêtre", [row("Fenêtre", fill="colors.window", stroke="window.stroke", text="colors.text", rounding="window.rounding")])],
+        parts=[("Fenêtre", [popup("Fenêtre")])],
     ),
     dict(
         name="Menu / Popup / Tooltip", category="Conteneurs", sample="Menu", functions="menu_button, context_menu, tooltip, popup",
         note="Même fond que les fenêtres, coins `menu_rounding`, ombre `popup_shadow`. Un élément de menu est un bouton (survol/actif).",
-        parts=[("Menu", [row("Menu", fill="colors.window", stroke="window.stroke", text="colors.text", rounding="window.menu_rounding")]), ("Élément de menu", by_state("weak_fill", disabled=False, states=[("Inactif", "inactive"), ("Survol", "hovered"), ("Actif (pressé)", "active")]))],
+        parts=[("Menu", [popup("Menu", "window.menu_rounding")]), ("Élément de menu", by_state("weak_fill", disabled=False, states=[("Inactif", "inactive"), ("Survol", "hovered"), ("Actif (pressé)", "active")]))],
     ),
     dict(
         name="Panel", category="Conteneurs", sample="Panneau", functions="left_panel, right_panel, top_panel, bottom_panel, sidebar_panel...",
@@ -130,24 +187,24 @@ WIDGETS = [
     dict(
         name="Group / Frame", category="Conteneurs", sample="Groupe", functions="group, frame",
         note="`group` prend le trait des widgets non interactifs et leurs coins; `frame` n'a ni fond ni trait par défaut.",
-        parts=[("Groupe", [row("Groupe", stroke="widgets.noninteractive.stroke", text="colors.text", rounding="widgets.noninteractive.rounding")])],
+        parts=[("Groupe", [row("Groupe", stroke=LINE, text=TEXT, rounding="widgets.noninteractive.rounding")])],
     ),
     dict(
         name="Table / Grid", category="Données", sample="ligne", functions="table, grid(striped), tree_view",
         note="Une ligne sur deux a le fond `striped_bg`; la ligne choisie, la couleur de la sélection.",
-        parts=[("Lignes", [row("Ligne", text="colors.text"), row("Ligne rayée", fill="colors.striped_bg", text="colors.text"), row("Sélectionnée", fill="colors.selection_bg", text="colors.selection_stroke")])],
+        parts=[("Lignes", [row("Ligne", text=TEXT), row("Ligne rayée", fill="colors.striped_bg", text=TEXT), row("Sélectionnée", fill=SEL, text=SEL_TEXT)])],
     ),
     dict(
         name="Separator", category="Données", sample="", functions="separator",
-        parts=[("Ligne", [row("Trait", stroke="widgets.noninteractive.stroke")])],
+        parts=[("Ligne", [row("Trait", stroke=LINE)])],
     ),
     dict(
         name="PropertySet", category="Widgets du framework", sample="Valeur", functions="PropertySet, property_set",
         note="Une page de propriétés comme la fenêtre Propriétés de Visual Studio. Tout vient des jetons des widgets non interactifs et de la sélection, atténués par un facteur (×0.7 = alpha multiplié).",
         parts=[
-            ("Cadre", [row("Cadre", stroke="widgets.noninteractive.stroke", text="colors.text", rounding=8)]),
+            ("Cadre", [row("Cadre", stroke=LINE, text=TEXT, rounding=8)]),
             ("En-tête de groupe", [row("Repos", fill="widgets.noninteractive.weak_fill*0.7", text="colors.strong_text"), row("Survol", fill="widgets.noninteractive.weak_fill", text="colors.strong_text"), row("Compteur", text="colors.weak_text")]),
-            ("Ligne", [row("Repos", text="colors.text"), row("Survol", fill="widgets.hovered.weak_fill*0.5", text="colors.text"), row("Sélectionnée", fill="colors.selection_bg*0.35", text="colors.text"), row("Lecture seule", text="colors.weak_text"), row("Séparateur", stroke="widgets.noninteractive.stroke*0.6"), row("Champ qui a le focus", stroke="colors.selection_stroke", text="colors.text", rounding=3)]),
+            ("Ligne", [row("Repos", text="colors.text"), row("Survol", fill=HOVER_SOFT, text=TEXT), row("Sélectionnée", fill=SEL_SOFT, text=TEXT), row("Lecture seule", text="colors.weak_text"), row("Séparateur", stroke=LINE + "*0.6"), row("Champ qui a le focus", stroke=SEL_TEXT, text=TEXT, rounding=3)]),
             ("Description", [row("Zone de description", fill="widgets.noninteractive.weak_fill*0.8", text="colors.text", rounding=8)]),
         ],
     ),
@@ -155,72 +212,68 @@ WIDGETS = [
         name="Table", category="Widgets du framework", sample="cellule", functions="table, table(view=...), TableView",
         note="Le titre est fort quand la colonne est triée ou survolée, faible sinon. La barre de défilement horizontale se dessine avec la couleur du texte à faible alpha.",
         parts=[
-            ("En-tête", [row("Trait sous l'en-tête", stroke="widgets.noninteractive.stroke"), row("Titre (trié ou survolé)", text="colors.strong_text"), row("Titre (autre colonne)", text="colors.weak_text"), row("Filtre actif", text="colors.hyperlink"), row("Filtre inactif", text="colors.weak_text"), row("Colonne déplacée", fill="colors.text*0.08", text="colors.text")]),
-            ("Lignes", [row("Normale", text="colors.text"), row("Rayée", fill="colors.striped_bg", text="colors.text"), row("Survol", fill="colors.text*0.06", text="colors.text"), row("Sélectionnée", fill="colors.selection_bg", text="colors.text")]),
-            ("Barre de défilement horizontale", [row("Piste", fill="colors.text*0.08", rounding=3), row("Poignée", fill="colors.text*0.3", rounding=3), row("Poignée (survol, glissée)", fill="colors.text*0.5", rounding=3)]),
-            ("Réglage des colonnes", [row("Bouton au repos", fill="widgets.inactive.weak_fill", text="colors.text", rounding=4), row("Bouton au survol", fill="widgets.hovered.fill", text="colors.text", rounding=4), row("Ligne survolée", fill="widgets.hovered.weak_fill", text="colors.text", rounding=5), row("Ligne glissée", fill="colors.selection_bg*0.35", text="colors.text", rounding=5)]),
+            ("En-tête", [HEADER_RULE, row("Titre (trié ou survolé)", text=STRONG), row("Titre (autre colonne)", text=WEAK), row("Filtre actif", text="colors.hyperlink"), row("Filtre inactif", text=WEAK), row("Colonne déplacée", fill=TRACK, text=TEXT)]),
+            ("Lignes", [ROW_PLAIN, ROW_STRIPED, ROW_HOVERED, row("Sélectionnée", fill=SEL, text=TEXT)]),
+            ("Barre de défilement horizontale", [row("Piste", fill=TRACK, rounding=3), row("Poignée", fill=TEXT + "*0.3", rounding=3), row("Poignée (survol, glissée)", fill=TEXT + "*0.5", rounding=3)]),
+            ("Réglage des colonnes", [row("Bouton au repos", fill="widgets.inactive.weak_fill", text=TEXT, rounding=4), row("Bouton au survol", fill="widgets.hovered.fill", text=TEXT, rounding=4), LIST_HOVERED, row("Ligne glissée", fill=SEL_SOFT, text=TEXT, rounding=5)]),
         ],
     ),
     dict(
         name="Dock / TabView (onglets)", category="Widgets du framework", sample="Fichiers", functions="Dock, DockPane, tab_view, TabView",
         note="Le Dock et le TabView lisent les mêmes jetons `tabs.*` (onglets classiques, collés à leur panneau). Une option donnée à l'appel (`active_tab_fill=...`) l'emporte sur le jeton, le jeton sur le défaut. Un onglet classique actif sans fond prend celui de son panneau.",
-        parts=[("Barre", [row("Fond de la barre", fill="tabs.bar_fill", text="colors.text")]), ("Onglet", [
-            row("Actif", fill="tabs.active_fill", stroke="tabs.active_stroke", text="tabs.active_text"),
-            row("Inactif", fill="tabs.inactive_fill", stroke="tabs.inactive_stroke", text="tabs.inactive_text"),
-            row("Survol", fill="tabs.hovered_fill", stroke="tabs.inactive_stroke", text="tabs.inactive_text")])],
+        parts=tab_rows("tabs"),
     ),
     dict(
         name="Dock / TabView (pilules)", category="Widgets du framework", sample="Fichiers", functions="Dock(tab_style='pill'), tab_view(tab_style='pill')",
         note="Les onglets en pilule flottent dans la barre: l'actif a la couleur de la sélection, les autres sont nus, sans trait. Jetons `pill_tabs.*`.",
-        parts=[("Barre", [row("Fond de la barre", fill="pill_tabs.bar_fill", text="colors.text")]), ("Onglet", [
-            row("Actif", fill="pill_tabs.active_fill", stroke="pill_tabs.active_stroke", text="pill_tabs.active_text", rounding=12),
-            row("Inactif", fill="pill_tabs.inactive_fill", stroke="pill_tabs.inactive_stroke", text="pill_tabs.inactive_text", rounding=12),
-            row("Survol", fill="pill_tabs.hovered_fill", stroke="pill_tabs.inactive_stroke", text="pill_tabs.inactive_text", rounding=12)])],
+        parts=tab_rows("pill_tabs", rounding=12),
     ),
     dict(
         name="Date", category="Widgets du framework", sample="27/11/2026", functions="date_picker_button, date_range_picker, DateRange",
         note="Le bouton est un bouton ordinaire. Dans le calendrier, les jours de la plage sont la couleur de la sélection atténuée; les bornes, la sélection pleine.",
         parts=[("Bouton de date", by_state("weak_fill", disabled=False, states=[("Inactif", "inactive"), ("Survol", "hovered"), ("Ouvert", "open")])), ("Calendrier", [
-            row("Fond du calendrier", fill="colors.window", stroke="window.stroke", text="colors.text", rounding="window.rounding"),
-            row("Jour", text="colors.text"),
-            row("Jour d'un autre mois", text="colors.weak_text"),
-            row("Jour au survol", fill="widgets.hovered.weak_fill", text="colors.text", rounding="widgets.hovered.rounding"),
-            row("Jour dans la plage", fill="colors.selection_bg*0.35", text="colors.text"),
-            row("Borne de la plage", fill="colors.selection_bg", text="colors.selection_stroke"),
-            row("Aujourd'hui", stroke="widgets.noninteractive.fg_stroke", text="colors.text")])],
+            popup("Fond du calendrier"),
+            row("Jour", text=TEXT),
+            row("Jour d'un autre mois", text=WEAK),
+            row("Jour au survol", fill="widgets.hovered.weak_fill", text=TEXT, rounding="widgets.hovered.rounding"),
+            row("Jour dans la plage", fill=SEL_SOFT, text=TEXT),
+            row("Borne de la plage", fill=SEL, text=SEL_TEXT),
+            row("Aujourd'hui", stroke="widgets.noninteractive.fg_stroke", text=TEXT)])],
     ),
     dict(
         name="Tags (puces)", category="Widgets du framework", sample="dev/web", functions="Tags, tags_edit, TagTreeView, tags_pick",
         note="La puce est le fond doux du thème (`derived.soft_fill`, la fenêtre tirée vers le texte) avec la couleur du tag en point et en contour; le texte est la couleur du tag tirée vers le texte fort. La couleur d'un tag est une donnée, pas un jeton.",
         parts=[
-            ("Puce", [row("Puce", fill="derived.soft_fill", text="colors.strong_text", rounding=10), row("Puce héritée (atténuée)", fill="derived.soft_fill*0.6", text="colors.weak_text", rounding=10)]),
-            ("Bouton « ajouter »", [row("Repos", fill="widgets.inactive.weak_fill", stroke="colors.weak_text*0.4", text="colors.weak_text", rounding=10), row("Survol", fill="widgets.hovered.weak_fill", stroke="colors.weak_text*0.4", text="colors.weak_text", rounding=10)]),
-            ("Liste des tags", [row("Ligne", text="colors.text"), row("Ligne survolée", fill="widgets.hovered.weak_fill", text="colors.text", rounding=5), row("Case cochée", fill="colors.hyperlink", rounding=3), row("Case vide", stroke="colors.text*0.7", rounding=3), row("Case cochée (héritée)", fill="colors.hyperlink*0.5", rounding=3)]),
+            ("Puce", [chip("Puce"), chip("Puce héritée (atténuée)", inherited=True)]),
+            ("Bouton « ajouter »", [row("Repos", fill="widgets.inactive.weak_fill", stroke=WEAK + "*0.4", text=WEAK, rounding=10), row("Survol", fill="widgets.hovered.weak_fill", stroke=WEAK + "*0.4", text=WEAK, rounding=10)]),
+            ("Liste des tags", [row("Ligne", text=TEXT), LIST_HOVERED, BOX_ON, BOX_OFF, row("Case cochée (héritée)", fill="colors.hyperlink*0.5", rounding=3)]),
         ],
     ),
     dict(
         name="Liste de choix (simple / multiple)", category="Widgets du framework", sample="Statut", functions="choice_combo, choice_edit, ChoiceSpec (property_set, colonnes)",
         note="Choix multiple: des cases. Choix unique: des ronds, un seul est plein. La valeur choisie s'affiche comme une puce.",
         parts=[
-            ("Choix multiple (cases)", [row("Case cochée", fill="colors.hyperlink", rounding=3), row("Case vide", stroke="colors.text*0.7", rounding=3), row("Ligne survolée", fill="widgets.hovered.weak_fill", text="colors.text", rounding=5)]),
-            ("Choix unique (ronds)", [row("Rond choisi", fill="colors.hyperlink", rounding=10), row("Rond vide", stroke="colors.text", rounding=10)]),
-            ("Valeur affichée", [row("Puce de la valeur", fill="derived.soft_fill", text="colors.strong_text", rounding=10), row("Valeur héritée ou résumée", fill="derived.soft_fill*0.6", text="colors.weak_text", rounding=10)]),
+            ("Choix multiple (cases)", [BOX_ON, BOX_OFF, LIST_HOVERED]),
+            ("Choix unique (ronds)", [row("Rond choisi", fill="colors.hyperlink", rounding=10), row("Rond vide", stroke=TEXT, rounding=10)]),
+            ("Valeur affichée", [chip("Puce de la valeur"), chip("Valeur héritée ou résumée", inherited=True)]),
         ],
     ),
     dict(
         name="DataGrid", category="Widgets du framework", sample="Pomme", functions="DataGrid, data_grid (liste ou arbre, cellules éditables)",
         note="Une grille de données qui n'est pas liée aux fichiers: la liste et l'arbre dessinent comme les vues de fichiers. La sélection avec le focus est la sélection du thème; sans focus, le texte à 15 %.",
-        parts=[("Lignes", [row("Normale", text="colors.text"), row("Rayée", fill="colors.striped_bg", text="colors.text"), row("Survol", fill="colors.text*0.06", text="colors.text"), row("Sélectionnée (focus)", fill="colors.selection_bg", text="colors.selection_stroke"), row("Sélectionnée (sans focus)", fill="colors.text*0.15", text="colors.strong_text")]), ("En-tête", [row("Trait sous l'en-tête", stroke="widgets.noninteractive.stroke"), row("Titre", text="colors.weak_text"), row("Titre trié", text="colors.strong_text")]), ("Cellule en édition", [row("Champ", fill="colors.text_edit_bg", stroke="colors.selection_stroke", text="colors.text", rounding="widgets.inactive.rounding")])],
+        parts=[("Lignes", [ROW_PLAIN, ROW_STRIPED, ROW_HOVERED] + selection_rows()), ("En-tête", [HEADER_RULE, row("Titre", text=WEAK), row("Titre trié", text=STRONG)]), ("Cellule en édition", [field("Champ", SEL_TEXT)]),
+               ("Traits (jetons grid.*)", [row("Entre les lignes", stroke="grid.row_line"), row("Entre les colonnes", stroke="grid.column_line"), row("Guides de l'arbre", stroke="grid.guide_line")]),
+               ("Symbole d'ouverture (jetons grid.chevron*)", [row("Symbole", text="grid.chevron_color"), row("Symbole survolé", text="grid.chevron_hover_color")])],
     ),
     dict(
         name="TreeView", category="Widgets du framework", sample="dossier", functions="tree_view, TreeView, TagTreeView",
         note="Dessiné par egui_ltreeview. La sélection d'un arbre sans focus est un fond discret, pas la couleur de la sélection.",
-        parts=[("Lignes", [row("Normale", text="colors.text"), row("Sélectionnée (arbre actif)", fill="colors.selection_bg", text="colors.selection_stroke", rounding="widgets.active.rounding"), row("Sélectionnée (sans focus)", fill="widgets.inactive.weak_fill*0.3", text="colors.text", rounding="widgets.active.rounding")]), ("Repères", [row("Guides d'indentation", stroke="widgets.noninteractive.stroke"), row("Marqueur de dépôt", fill="colors.selection_bg*0.6", rounding="widgets.active.rounding")])],
+        parts=[("Lignes", [ROW_PLAIN, row("Sélectionnée (arbre actif)", fill=SEL, text=SEL_TEXT, rounding="widgets.active.rounding"), row("Sélectionnée (sans focus)", fill="widgets.inactive.weak_fill*0.3", text=TEXT, rounding="widgets.active.rounding")]), ("Repères", [row("Guides d'indentation", stroke=LINE), row("Marqueur de dépôt", fill=SEL + "*0.6", rounding="widgets.active.rounding")])],
     ),
     dict(
         name="FileListView / FileTreeView", category="Widgets du framework", sample="photo.png", functions="FileListView, FileIconView, FileTreeView",
         note="Une sélection avec le focus utilise la sélection du thème; sans focus, la couleur du texte à 15 %. Un dossier visé par un dépôt prend un cadre de la couleur de la sélection.",
-        parts=[("Éléments", [row("Normal", text="colors.text"), row("Rayé (liste)", fill="colors.striped_bg", text="colors.text"), row("Survol", fill="widgets.hovered.weak_fill*0.5", text="colors.text", rounding=4), row("Sélectionné (focus)", fill="colors.selection_bg", text="colors.selection_stroke", rounding=4), row("Sélectionné (sans focus)", fill="colors.text*0.15", text="colors.strong_text", rounding=4), row("Cible d'un dépôt", fill="colors.selection_bg*0.25", stroke="colors.selection_bg", text="colors.text", rounding=4)]), ("Séparateurs", [row("Colonnes et en-tête", stroke="widgets.noninteractive.stroke"), row("Entre les lignes", stroke="widgets.noninteractive.stroke*0.6")])],
+        parts=[("Éléments", [row("Normal", text=TEXT), row("Rayé (liste)", fill="colors.striped_bg", text=TEXT), row("Survol", fill=HOVER_SOFT, text=TEXT, rounding=4)] + selection_rows(False, 4) + [row("Cible d'un dépôt", fill=SEL + "*0.25", stroke=SEL, text=TEXT, rounding=4)]), ("Séparateurs", [row("Colonnes et en-tête", stroke=LINE), row("Entre les lignes", stroke=LINE + "*0.6")])],
     ),
 ]
 
@@ -241,13 +294,9 @@ def split(path):
 USED_BY = {}
 for _w in WIDGETS:
     for _title, _rows in _w["parts"]:
-        for _r in _rows:
-            for _key in ("fill", "stroke", "text", "rounding"):
-                if isinstance(_r[_key], str):
-                    _token = split(_r[_key])[0]
-                    USED_BY.setdefault(_token, [])
-                    if _w["name"] not in USED_BY[_token]:
-                        USED_BY[_token].append(_w["name"])
+        for _token in tokens_of(_rows):
+            if _w["name"] not in USED_BY.setdefault(_token, []):
+                USED_BY[_token].append(_w["name"])
 
 # ---------------------------------------------------------------------------------------------------------
 # the style sheet: tokens of both themes, edits on top of the defaults, a global transparency
@@ -630,7 +679,7 @@ def widget_page(w):
 
         columns(2, pair)
         add_space(8)
-    paths = sorted({split(p)[0] for _, rs in w["parts"] for r in rs for p in (r["fill"], r["stroke"], r["text"], r["rounding"]) if isinstance(p, str)})
+    paths = sorted(set().union(*(tokens_of(rs) for _, rs in w["parts"])))
     collapsing("Jetons utilisés", lambda: [code(p) for p in paths])
 
 
@@ -729,6 +778,10 @@ def sidebar():
 
 def update_func(ctx):
     if not base:
+        if os.environ.get("STYLE_DOC_THEME") == "dark":  # for the checks
+            ctx.set_dark_theme()
+        elif os.environ.get("STYLE_DOC_THEME") == "light":
+            ctx.set_light_theme()
         for theme, _ in THEMES:
             snap = ctx.style_snapshot(theme)
             base[theme] = flatten(snap)
