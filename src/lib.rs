@@ -230,12 +230,23 @@ impl Context {
         d.set_item("chevron_hover_color", hex(g.chevron_hover_color))?;
         d.set_item("chevron_size", g.chevron_size)?;
         out.set_item("grid", d)?;
+
+        // the fill of the popups: the token, or the window fill when there is none
+        let d = PyDict::new(py);
+        for (name, kind) in [
+            ("dropdown_fill", pyegui_core::popup_style::Kind::Dropdown),
+            ("menu_fill", pyegui_core::popup_style::Kind::Menu),
+            ("tooltip_fill", pyegui_core::popup_style::Kind::Tooltip),
+        ] {
+            d.set_item(name, hex(pyegui_core::popup_style::fill(&style, kind).unwrap_or(v.window_fill)))?;
+        }
+        out.set_item("popups", d)?;
         Ok(out)
     }
 
     /// Changes any value of the style of a theme by its path, the same paths as the dict of `style_snapshot`
     /// (`colors.panel`, `widgets.hovered.weak_fill`, `widgets.active.stroke`, `window.rounding`, `fonts.Body`,
-    /// `spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`...). The tabs of a `Dock` and of a `tab_view` read the
+    /// `spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`, `popups.dropdown_fill`...). The fill of the popups is an RGBA color whose alpha is the transparency: `popups.dropdown_fill` (the list of a combo box), `popups.menu_fill` (menus and context menus) and `popups.tooltip_fill` (tooltips), e.g. `{"popups.dropdown_fill": "#1e1e2e80"}` for a half transparent dropdown. The tabs of a `Dock` and of a `tab_view` read the
     /// `tabs.*` (classic tabs) and `pill_tabs.*` tokens. Only the given paths are changed. Colors are "#rrggbb[aa]", (r, g, b[, a]);
     /// a stroke is (width, color); a rounding or a size is a float; a font is (size, family) or a size.
     ///
@@ -374,6 +385,20 @@ impl Context {
                             "chevron_size" => t.chevron_size = value.extract().ok(),
                             _ => bad = true,
                         }
+                    });
+                    if bad {
+                        unknown.push(path.clone());
+                    }
+                }
+                ["popups", field] => {
+                    let dark = theme == egui::Theme::Dark;
+                    let color = extract_color(&value).ok();
+                    let mut bad = false;
+                    pyegui_core::popup_style::update_tokens(dark, |t| match *field {
+                        "dropdown_fill" => t.dropdown_fill = color,
+                        "menu_fill" => t.menu_fill = color,
+                        "tooltip_fill" => t.tooltip_fill = color,
+                        _ => bad = true,
                     });
                     if bad {
                         unknown.push(path.clone());
@@ -613,10 +638,11 @@ impl Context {
         }
     }
 
-    /// Restores the default style of both themes, and forgets the tokens of the tabs (`tabs.*`, `pill_tabs.*`) and of the grids (`grid.*`).
+    /// Restores the default style of both themes, and forgets the tokens of the tabs (`tabs.*`, `pill_tabs.*`) of the grids (`grid.*`) and of the popups (`popups.*`).
     fn reset_style(&self) {
         pyegui_core::tabs::reset_tokens();
         pyegui_core::grid_style::reset_tokens();
+        pyegui_core::popup_style::reset_tokens();
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
             self.0.set_style_of(theme, style::default_style(theme));
         }
@@ -2879,6 +2905,7 @@ unsafe fn combo_box(
     let ui = current_ui(&UI)?;
 
     egui::ComboBox::from_label(label)
+        .popup_style(pyegui_core::popup_style::modifier(pyegui_core::popup_style::Kind::Dropdown))
         .selected_text(
             names
                 .get(current_value.value.try_into().unwrap_or(0))
@@ -2957,8 +2984,12 @@ unsafe fn color_edit_button_rgb(rgb: &mut RGB) -> PyResult<()> {
 ///
 ///     tint (color): multiplies the colors of the image. With a white icon, the icon takes the color
 ///
+///     stroke (color): for an SVG file, replaces the color of its strokes (and its `currentColor`). The color
+///         can be RGBA, `"#1e1e2e80"` or `(30, 30, 46, 128)`: its alpha is the opacity of the strokes
+///
 /// Example::
 ///
+///     image("file://icons/gear.svg", size=16, stroke="#ff8800a0")
 ///     image("https://picsum.photos/480")
 ///     image("file://icons/folder.svg", size=48)
 ///     image("file://assets/ferris.png", max_height = 50, max_width = 50)
@@ -2968,7 +2999,14 @@ unsafe fn color_edit_button_rgb(rgb: &mut RGB) -> PyResult<()> {
 unsafe fn image(source: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
     let ui = current_ui(&UI)?;
 
-    let mut img = egui::Image::new(source);
+    let recolored = match style::kwarg_color(kwargs, "stroke")? {
+        Some(color) => pyegui_core::icons::svg_with_stroke(source, color),
+        None => None,
+    };
+    let mut img = match recolored {
+        Some(src) => egui::Image::new(src),
+        None => egui::Image::new(source),
+    };
 
     if let Some(kwargs) = kwargs {
         if let Some(height) = kwargs.get_item("max_height")? {

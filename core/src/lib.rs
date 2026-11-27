@@ -25,6 +25,7 @@ pub mod meta;
 pub mod table;
 pub mod grid;
 pub mod grid_style;
+pub mod popup_style;
 pub mod date_range;
 pub mod date_input;
 pub mod human_date;

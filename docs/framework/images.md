@@ -11,10 +11,12 @@ Show an image available at the given uri.
 - max_width (int), max_height (int): the image is scaled down to fit
 - `size` (float): shows the image in a square of this side, scaled up or down. The space is kept while the image loads, so the layout does not jump when it appears
 - `tint` (color): multiplies the colors of the image. With a white icon, the icon takes the color
+- `stroke` (color): for an SVG file, replaces the color of its strokes (and its `currentColor`). The color can be RGBA, `"#1e1e2e80"` or `(30, 30, 46, 128)`: its alpha is the opacity of the strokes
 
 **Example:**
 
 ```python
+image("file://icons/gear.svg", size=16, stroke="#ff8800a0")
 image("https://picsum.photos/480")
 image("file://icons/folder.svg", size=48)
 image("file://assets/ferris.png", max_height = 50, max_width = 50)
@@ -22,7 +24,7 @@ image("file://icons/gear.svg", max_width=16, max_height=16, tint=(120, 120, 128)
 ```
 
 
-## `image_button_clicked(source, text=None, size=16.0, tint=None, selected=False, frame=True, tooltip=None, menu=None, min_width=0.0)`
+## `image_button_clicked(source, text=None, size=16.0, tint=None, selected=False, frame=True, tooltip=None, menu=None, min_width=0.0, stroke=None)`
 
 A button showing an image, and a text if given. Returns True when it is clicked.
 
@@ -37,6 +39,7 @@ A button showing an image, and a text if given. Returns True when it is clicked.
 - `tooltip` (str): a text shown when the button is hovered, to keep the button small. Default is none
 - `menu` (Callable[[], None]): draws a menu shown when the button is right-clicked. A left click still returns True. Default is none
 - `min_width` (float): the button is at least this wide, e.g. to give the buttons of a list the same width. Default is 0
+- `stroke` (color): for an SVG file, replaces the color of its strokes, with an RGBA color (`"#ff8800a0"`, the alpha is the opacity of the strokes)
 
 **Example:**
 

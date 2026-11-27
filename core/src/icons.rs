@@ -220,3 +220,46 @@ pub fn entry_icon_uri(ctx: &egui::Context, path: &std::path::Path, is_dir: bool,
     };
     icon_uri(ctx, &key, size)
 }
+
+/// An SVG file with its stroke color (and the `currentColor` of its paths) replaced by an RGBA color: the alpha
+/// becomes a `stroke-opacity`. The result is a `bytes://` image whose uri holds the color, so it is loaded once
+/// for each color. None when the source is not a readable SVG file (the caller then draws the source as it is).
+pub fn svg_with_stroke(source: &str, color: egui::Color32) -> Option<egui::ImageSource<'static>> {
+    use std::hash::{Hash, Hasher};
+    let path = source.strip_prefix("file://").unwrap_or(source);
+    if !path.to_ascii_lowercase().ends_with(".svg") {
+        return None;
+    }
+    let text = std::fs::read_to_string(absolute(path)).ok()?;
+    let [r, g, b, a] = color.to_srgba_unmultiplied();
+    let hex = format!("#{r:02x}{g:02x}{b:02x}");
+    let opacity = f32::from(a) / 255.0;
+
+    // stroke="..." attributes (except none and url(...)), then the currentColor left
+    let mut out = String::with_capacity(text.len() + 64);
+    let mut rest = text.as_str();
+    while let Some(i) = rest.find("stroke=\"") {
+        let (head, tail) = rest.split_at(i + 8);
+        out.push_str(head);
+        let end = tail.find('"').unwrap_or(tail.len());
+        let value = tail[..end].trim();
+        if value == "none" || value.starts_with("url(") {
+            out.push_str(value);
+        } else {
+            out.push_str(&hex);
+            out.push_str(&format!("\" stroke-opacity=\"{opacity:.3}"));
+        }
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    let out = out.replace("currentColor", &hex);
+    // a svg that draws with the default stroke of its root gets one
+    let out = if text.contains("stroke=") { out } else { out.replacen("<svg", &format!("<svg stroke=\"{hex}\" stroke-opacity=\"{opacity:.3}\""), 1) };
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (path, r, g, b, a).hash(&mut hasher);
+    Some(egui::ImageSource::Bytes {
+        uri: format!("bytes://stroke-{:016x}.svg", hasher.finish()).into(),
+        bytes: out.into_bytes().into(),
+    })
+}

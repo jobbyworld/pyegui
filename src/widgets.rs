@@ -404,12 +404,15 @@ fn extract_tint(tint: Option<&Bound<'_, PyAny>>) -> PyResult<Option<egui::Color3
 ///     min_width (float): the button is at least this wide, e.g. to give the buttons of a list the
 ///         same width. Default is 0
 ///
+///     stroke (color): for an SVG file, replaces the color of its strokes, with an RGBA color
+///         (`"#ff8800a0"`, the alpha is the opacity of the strokes)
+///
 /// Example::
 ///
 ///     if image_button_clicked("file://icons/list.svg", tooltip="List", selected=view == LIST):
 ///         view = LIST
 #[pyfunction]
-#[pyo3(signature = (source, text=None, size=16.0, tint=None, selected=false, frame=true, tooltip=None, menu=None, min_width=0.0))]
+#[pyo3(signature = (source, text=None, size=16.0, tint=None, selected=false, frame=true, tooltip=None, menu=None, min_width=0.0, stroke=None))]
 #[allow(clippy::too_many_arguments)]
 unsafe fn image_button_clicked(
     source: &str,
@@ -421,9 +424,15 @@ unsafe fn image_button_clicked(
     tooltip: Option<&str>,
     menu: Option<Bound<'_, PyAny>>,
     min_width: f32,
+    stroke: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<bool> {
     let ui = current_ui(&UI)?;
-    let image = menu_image(source, size, extract_tint(tint)?);
+    let mut image = menu_image(source, size, extract_tint(tint)?);
+    if let Some(color) = extract_tint(stroke)? {
+        if let Some(src) = pyegui_core::icons::svg_with_stroke(source, color) {
+            image = egui::Image::new(src).fit_to_exact_size(egui::vec2(size, size));
+        }
+    }
     let button = match text {
         Some(text) => egui::Button::image_and_text(image, text),
         None => egui::Button::image(image),
@@ -432,7 +441,7 @@ unsafe fn image_button_clicked(
     let button = if frame { button } else { button.frame_when_inactive(selected) };
     let response = ui.add(button);
     let response = match tooltip {
-        Some(tip) => response.on_hover_text(tip),
+        Some(tip) => pyegui_core::popup_style::with_tooltip_fill(&response.ctx.clone(), || response.on_hover_text(tip)),
         None => response,
     };
     if let Some(menu_fun) = menu {
@@ -896,7 +905,7 @@ unsafe fn segmented_control(
                         picked = Some(index as i32);
                     }
                     if let Some(Some(tip)) = tooltips.as_ref().and_then(|t| t.get(index)) {
-                        response.on_hover_text(tip);
+                        pyegui_core::popup_style::with_tooltip_fill(&response.ctx.clone(), || response.on_hover_text(tip));
                     }
                 }
             });

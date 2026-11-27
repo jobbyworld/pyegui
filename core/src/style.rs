@@ -371,6 +371,7 @@ pub fn menu_style() -> egui::style::StyleModifier {
     let modern = theme_state().glass.is_some();
     (move |style: &mut Style| {
         egui::containers::menu::menu_style(style);
+        crate::popup_style::apply(style, crate::popup_style::Kind::Menu);
         if modern {
             style.spacing.button_padding = egui::vec2(10.0, 4.0);
         }

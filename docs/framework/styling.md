@@ -90,7 +90,7 @@ print(s["widgets"]["hovered"]["weak_fill"], s["colors"]["text_edit_bg"])
 
 Changes any value of the style of a theme by its path, the same paths as the dict of `style_snapshot`
 (`colors.panel`, `widgets.hovered.weak_fill`, `widgets.active.stroke`, `window.rounding`, `fonts.Body`,
-`spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`...). The tabs of a `Dock` and of a `tab_view` read the
+`spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`, `popups.dropdown_fill`...). The fill of the popups is an RGBA color whose alpha is the transparency: `popups.dropdown_fill` (the list of a combo box), `popups.menu_fill` (menus and context menus) and `popups.tooltip_fill` (tooltips), e.g. `{"popups.dropdown_fill": "#1e1e2e80"}` for a half transparent dropdown. The tabs of a `Dock` and of a `tab_view` read the
 `tabs.*` (classic tabs) and `pill_tabs.*` tokens. Only the given paths are changed. Colors are "#rrggbb[aa]", (r, g, b[, a]);
 a stroke is (width, color); a rounding or a size is a float; a font is (size, family) or a size.
 
@@ -110,7 +110,7 @@ ctx.set_style_tokens("dark", {"widgets.hovered.weak_fill": "#3a3a4aff", "widgets
 
 ## `Context.reset_style()`
 
-Restores the default style of both themes, and forgets the tokens of the tabs (`tabs.*`, `pill_tabs.*`) and of the grids (`grid.*`).
+Restores the default style of both themes, and forgets the tokens of the tabs (`tabs.*`, `pill_tabs.*`) of the grids (`grid.*`) and of the popups (`popups.*`).
 
 
 ## `Context.set_layout(**kwargs)`

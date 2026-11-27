@@ -604,6 +604,7 @@ pub fn choice_combo(ui: &mut Ui, spec: &ChoiceSpec<'_>, new_option: &mut String)
     };
     ui.add_enabled_ui(spec.editable, |ui| {
         egui::ComboBox::from_id_salt(spec.salt)
+            .popup_style(crate::popup_style::modifier(crate::popup_style::Kind::Dropdown))
             .selected_text(shown)
             .width((spec.width - 4.0).max(40.0))
             .close_behavior(behavior)

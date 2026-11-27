@@ -507,7 +507,8 @@ unsafe fn context_menu(update_fun: Bound<'_, PyAny>, menu_fun: Bound<'_, PyAny>)
 #[pyfunction]
 unsafe fn tooltip(text: &str, update_fun: Bound<'_, PyAny>) -> PyResult<()> {
     let response = current_ui(&UI)?.scope(|ui| run_nested_update_func(ui, update_fun));
-    response.response.on_hover_text(text);
+    let ctx = response.response.ctx.clone();
+    pyegui_core::popup_style::with_tooltip_fill(&ctx, || response.response.on_hover_text(text));
     response.inner
 }
 
@@ -526,8 +527,11 @@ unsafe fn tooltip_ui(update_fun: Bound<'_, PyAny>, tooltip_fun: Bound<'_, PyAny>
     response.inner?;
 
     let mut result = Ok(());
-    response.response.on_hover_ui(|ui| {
-        result = run_nested_update_func(ui, tooltip_fun);
+    let ctx = response.response.ctx.clone();
+    pyegui_core::popup_style::with_tooltip_fill(&ctx, || {
+        response.response.on_hover_ui(|ui| {
+            result = run_nested_update_func(ui, tooltip_fun);
+        });
     });
     result
 }
