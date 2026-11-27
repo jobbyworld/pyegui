@@ -4893,6 +4893,9 @@ def after_view(v):
     icon = v.icon_clicked()  # the icon of a column shows the pane about it: the tags, or the properties
     if icon:
         show_pane("Tags" if icon == "Tags" else "Propriétés")
+    middle = v.take_middle_clicked()  # the middle button opens an item in a new tab, like a link of a browser
+    if middle:
+        open_path_in_new_tab(Path(middle))
     paths, tree_menu["paths"] = tree_menu["paths"], None
     if paths and not set(paths) <= set(v.selected):
         v.selected = (
@@ -8132,6 +8135,27 @@ def new_tab(folder=None):
     """a tab of folder in the tabs of the files, on the folder given, else the selected folder, else the one shown"""
     pane = make_tab(folder or new_target())
     show_dock.value = True  # the tabs are the ones of the dock
+    dock.add_pane(pane)
+    dock.set_active(pane.title)
+
+
+def open_path_in_new_tab(path):
+    """a folder opens in a new tab; a file the viewer shows opens in the viewer of a new tab, on the folder that
+    holds it; any other file opens with its app, like the Open button"""
+    if path.is_dir():
+        new_tab(path)
+        return
+    if not path.exists():
+        return
+    if not (is_markdown(path) or is_code(path) or is_image(path) or is_pdf(path)):
+        open_file(str(path))
+        tags.opened(path)
+        return
+    pane = make_tab(path.parent)
+    tab_state["parked"][pane.title]["reading"].value = str(path)  # read by the viewer of the tab when it is shown
+    watcher.watch(str(path))
+    tags.opened(path)
+    show_dock.value = True
     dock.add_pane(pane)
     dock.set_active(pane.title)
 

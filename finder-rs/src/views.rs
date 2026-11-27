@@ -262,6 +262,8 @@ struct Back {
     sort: (String, bool),
     shown: Vec<PathBuf>,
     activated: Vec<PathBuf>,
+    /// the item that got a click of the middle button: it opens in a new tab
+    middle: Option<PathBuf>,
     folder: Option<PathBuf>,
     /// the column whose icon was clicked
     icon: Option<String>,
@@ -330,6 +332,7 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
             sort: (t.columns.sort_key.clone(), t.columns.ascending),
             shown: t.shown.iter().map(PathBuf::from).collect(),
             activated: t.activated.iter().map(PathBuf::from).collect(),
+            middle: t.middle_clicked.as_ref().map(PathBuf::from),
             folder: None,
             icon,
         };
@@ -361,6 +364,7 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
             sort: (view.columns.sort_key.clone(), view.columns.ascending),
             shown: view.shown.clone(),
             activated: view.activated.clone(),
+            middle: view.middle_clicked.clone(),
             folder: (view.folder() != app.folder()).then(|| view.folder().to_path_buf()),
             icon: view.columns.icon_clicked.take(),
         };
@@ -389,6 +393,9 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
     }
     for path in back.activated {
         app.open(&path);
+    }
+    if let Some(path) = back.middle {
+        app.open_in_new_tab(path);
     }
     out.apply(app, &ctx);
 }
