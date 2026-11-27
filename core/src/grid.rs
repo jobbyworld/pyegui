@@ -366,6 +366,51 @@ pub fn rows_in_band(shown: &[String], row_height: f32, top: f32, bottom: f32) ->
     shown[first..=last].to_vec()
 }
 
+/// The points of an elbow: down the line `x` from `top` to the middle of the row, then to the right up to `end`, the
+/// corner rounded by `radius`
+pub fn elbow(x: f32, top: f32, middle: f32, end: f32, radius: f32) -> Vec<egui::Pos2> {
+    let mut points = vec![pos2(x, top)];
+    if radius <= 0.5 {
+        points.push(pos2(x, middle));
+    } else {
+        points.push(pos2(x, middle - radius));
+        // a quarter of a circle, from the bottom of the vertical to the start of the horizontal
+        let centre = pos2(x + radius, middle - radius);
+        for step in 1..8 {
+            let angle = std::f32::consts::FRAC_PI_2 * step as f32 / 8.0;
+            points.push(pos2(centre.x - radius * angle.cos(), centre.y + radius * angle.sin()));
+        }
+        points.push(pos2(x + radius, middle));
+    }
+    points.push(pos2(end.max(x), middle));
+    points
+}
+
+/// The symbol of a branch, centered on `c`
+pub fn draw_chevron(painter: &egui::Painter, c: egui::Pos2, open: bool, look: &crate::grid_style::GridLook, hovered: bool) {
+    use crate::grid_style::Chevron;
+    let ink = if hovered { look.chevron_hover_color } else { look.chevron_color };
+    let k = look.chevron_size;
+    match look.chevron {
+        Chevron::Triangle => {
+            let points = if open { vec![c + vec2(-k, -k / 2.0), c + vec2(k, -k / 2.0), c + vec2(0.0, k * 0.75)] } else { vec![c + vec2(-k / 2.0, -k), c + vec2(-k / 2.0, k), c + vec2(k * 0.75, 0.0)] };
+            painter.add(egui::Shape::convex_polygon(points, ink, egui::Stroke::NONE));
+        }
+        Chevron::Arrow => {
+            let points = if open { vec![c + vec2(-k, -k / 2.0), c + vec2(0.0, k / 2.0), c + vec2(k, -k / 2.0)] } else { vec![c + vec2(-k / 2.0, -k), c + vec2(k / 2.0, 0.0), c + vec2(-k / 2.0, k)] };
+            painter.add(egui::Shape::line(points, egui::Stroke::new(1.5, ink)));
+        }
+        Chevron::Plus => {
+            let stroke = egui::Stroke::new(1.0, ink);
+            painter.rect_stroke(Rect::from_center_size(c, vec2(k * 2.0, k * 2.0)), 2.0, stroke, egui::StrokeKind::Inside);
+            painter.hline((c.x - k / 2.0)..=(c.x + k / 2.0), c.y, stroke);
+            if !open {
+                painter.vline(c.x, (c.y - k / 2.0)..=(c.y + k / 2.0), stroke);
+            }
+        }
+    }
+}
+
 // -- drawing ------------------------------------------------------------------------------------------------
 
 /// Draws the grid. `cell` may draw a cell itself (a chip, a switch): called with the cell rectangle, it returns
@@ -463,6 +508,7 @@ pub fn show(
     }
     let (selected_fill, selected_text) = selection_colors(ui, focused);
     let font = TextStyle::Body.resolve(ui.style());
+    let look = crate::grid_style::look(ui.visuals());
     let text_color = ui.visuals().text_color();
     let faint = ui.visuals().faint_bg_color;
 
@@ -523,8 +569,7 @@ pub fn show(
                 ui.painter().rect_filled(rect, 0.0, text_color.gamma_multiply(0.06));
             }
             if options.row_lines {
-                let line = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color.gamma_multiply(0.5));
-                ui.painter().hline(rect.x_range(), rect.bottom().round() - 0.5, line);
+                ui.painter().hline(rect.x_range(), rect.bottom().round() - 0.5, look.row_line);
             }
             let ink = if is_selected { selected_text } else { text_color };
             let ink = if row.dim { ink.gamma_multiply(0.5) } else { ink };
@@ -547,17 +592,24 @@ pub fn show(
                 if options.tree && is_first {
                     // the guide lines of the tree: a vertical line under the chevron of each ancestor that goes on while it has
                     // later children, and an elbow to this row
-                    let guide = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color.gamma_multiply(0.9));
+                    let guide = look.guide_line;
                     let painter = ui.painter().with_clip_rect(clip);
                     let x_of = |level: usize| (cell_rect.left() + 8.0 + level as f32 * options.indent + 6.0).round() - 0.5;
                     let middle = rect.center().y.round() - 0.5;
                     for level in 0..line.depth {
                         let x = x_of(level);
                         if level + 1 == line.depth {
-                            let bottom = if continues[position].get(level + 1).copied().unwrap_or(false) { rect.bottom() } else { middle };
-                            painter.vline(x, rect.top()..=bottom, guide);
+                            let more = continues[position].get(level + 1).copied().unwrap_or(false);
                             let end = if line.has_children { x_of(level + 1) - 8.0 } else { x_of(level + 1) + 6.0 };
-                            painter.hline(x..=end, middle, guide);
+                            if more {
+                                // a junction: the line goes on, a tick leaves it
+                                painter.vline(x, rect.y_range(), guide);
+                                painter.hline(x..=end, middle, guide);
+                            } else {
+                                // the last child: an elbow, rounded by the radius of the token
+                                let r = look.guide_radius.min((end - x).max(0.0)).min((middle - rect.top()).max(0.0));
+                                painter.add(egui::Shape::line(elbow(x, rect.top(), middle, end, r), guide));
+                            }
                         } else if continues[position].get(level + 1).copied().unwrap_or(false) {
                             painter.vline(x, rect.y_range(), guide);
                         }
@@ -566,10 +618,7 @@ pub fn show(
                     if line.has_children {
                         let chevron = Rect::from_center_size(pos2(left + 6.0, cell_rect.center().y), vec2(14.0, row_height));
                         let hit = ui.interact(chevron.intersect(clip), id.with(("chevron", &row.id)), Sense::click());
-                        let ink = if hit.hovered() { ui.visuals().strong_text_color() } else { ui.visuals().weak_text_color() };
-                        let c = chevron.center();
-                        let points = if line.open { vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 3.0)] } else { vec![c + vec2(-2.0, -4.0), c + vec2(-2.0, 4.0), c + vec2(3.0, 0.0)] };
-                        ui.painter().with_clip_rect(clip).add(egui::Shape::convex_polygon(points, ink, egui::Stroke::NONE));
+                        draw_chevron(&ui.painter().with_clip_rect(clip), chevron.center(), line.open, &look, hit.hovered());
                         if hit.clicked() {
                             toggled = Some((row.id.clone(), !line.open));
                         }
@@ -645,7 +694,7 @@ pub fn show(
 
     // the separators of the columns, in line with the ones of the header
     {
-        let line = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color.gamma_multiply(0.6));
+        let line = look.column_line;
         let rows_rect = output.inner_rect;
         let painter = ui.painter().with_clip_rect(rows_rect);
         let count = zones.placed.len();
@@ -839,6 +888,18 @@ mod tests {
         assert!(shown[0].has_children && !shown[0].open);
         let open: HashSet<String> = ["dir".to_string()].into();
         assert!(arrange(&leaf, &cols(), &ColumnsState::new("name"), true, &open)[0].open);
+    }
+
+    #[test]
+    fn an_elbow_is_square_without_radius_and_rounded_with_one() {
+        let square = elbow(10.0, 0.0, 20.0, 30.0, 0.0);
+        assert_eq!(square, vec![pos2(10.0, 0.0), pos2(10.0, 20.0), pos2(30.0, 20.0)]);
+        let round = elbow(10.0, 0.0, 20.0, 30.0, 6.0);
+        assert!(round.len() > 4);
+        assert_eq!(round.first(), Some(&pos2(10.0, 0.0)));
+        assert_eq!(round.last(), Some(&pos2(30.0, 20.0)));
+        // the curve stays inside the corner square
+        assert!(round.iter().all(|p| p.x >= 10.0 - 0.01 && p.y <= 20.0 + 0.01));
     }
 
     #[test]

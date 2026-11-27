@@ -217,12 +217,25 @@ impl Context {
             d.set_item("bar_height", l.bar_height)?;
             out.set_item(key, d)?;
         }
+
+        // the lines and the open symbol of the grids and trees
+        let g = pyegui_core::grid_style::look(v);
+        let d = PyDict::new(py);
+        d.set_item("row_line", stroke(g.row_line))?;
+        d.set_item("column_line", stroke(g.column_line))?;
+        d.set_item("guide_line", stroke(g.guide_line))?;
+        d.set_item("guide_radius", g.guide_radius)?;
+        d.set_item("chevron", g.chevron.name())?;
+        d.set_item("chevron_color", hex(g.chevron_color))?;
+        d.set_item("chevron_hover_color", hex(g.chevron_hover_color))?;
+        d.set_item("chevron_size", g.chevron_size)?;
+        out.set_item("grid", d)?;
         Ok(out)
     }
 
     /// Changes any value of the style of a theme by its path, the same paths as the dict of `style_snapshot`
     /// (`colors.panel`, `widgets.hovered.weak_fill`, `widgets.active.stroke`, `window.rounding`, `fonts.Body`,
-    /// `spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`...). The tabs of a `Dock` and of a `tab_view` read the
+    /// `spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`...). The tabs of a `Dock` and of a `tab_view` read the
     /// `tabs.*` (classic tabs) and `pill_tabs.*` tokens. Only the given paths are changed. Colors are "#rrggbb[aa]", (r, g, b[, a]);
     /// a stroke is (width, color); a rounding or a size is a float; a font is (size, family) or a size.
     ///
@@ -337,6 +350,28 @@ impl Context {
                             "spacing" => t.spacing = value.extract().ok(),
                             "title_spacing" => t.title_spacing = value.extract().ok(),
                             "bar_height" => t.bar_height = value.extract().ok(),
+                            _ => bad = true,
+                        }
+                    });
+                    if bad {
+                        unknown.push(path.clone());
+                    }
+                }
+                ["grid", field] => {
+                    let dark = theme == egui::Theme::Dark;
+                    let mut bad = false;
+                    pyegui_core::grid_style::update_tokens(dark, |t| {
+                        let c = |v: &Bound<'_, PyAny>| extract_color(v).ok();
+                        let st = |v: &Bound<'_, PyAny>| v.extract::<(f32, Bound<'_, PyAny>)>().ok().and_then(|(w, col)| extract_color(&col).ok().map(|col| egui::Stroke::new(w, col)));
+                        match *field {
+                            "row_line" => t.row_line = st(&value),
+                            "column_line" => t.column_line = st(&value),
+                            "guide_line" => t.guide_line = st(&value),
+                            "guide_radius" => t.guide_radius = value.extract().ok(),
+                            "chevron" => t.chevron = value.extract::<String>().ok().and_then(|n| pyegui_core::grid_style::Chevron::parse(&n)),
+                            "chevron_color" => t.chevron_color = c(&value),
+                            "chevron_hover_color" => t.chevron_hover_color = c(&value),
+                            "chevron_size" => t.chevron_size = value.extract().ok(),
                             _ => bad = true,
                         }
                     });
@@ -578,9 +613,10 @@ impl Context {
         }
     }
 
-    /// Restores the default style of both themes, and forgets the tokens of the tabs (`tabs.*`, `pill_tabs.*`).
+    /// Restores the default style of both themes, and forgets the tokens of the tabs (`tabs.*`, `pill_tabs.*`) and of the grids (`grid.*`).
     fn reset_style(&self) {
         pyegui_core::tabs::reset_tokens();
+        pyegui_core::grid_style::reset_tokens();
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
             self.0.set_style_of(theme, style::default_style(theme));
         }
