@@ -18,12 +18,12 @@
     "widgets.noninteractive.fill": "#eef3f8ff",
     "widgets.inactive.fill": "#dde7f2ff",
     "widgets.inactive.weak_fill": "#dde7f2ff",
-    "widgets.hovered.fill": "#cddcee",
-    "widgets.hovered.weak_fill": "#cddcee",
+    "widgets.hovered.fill": "#cddceeff",
+    "widgets.hovered.weak_fill": "#cddceeff",
     "widgets.active.fill": "#b9cee8ff",
     "widgets.active.weak_fill": "#b9cee8ff",
-    "widgets.open.fill": "#cddcee",
-    "widgets.open.weak_fill": "#cddcee",
+    "widgets.open.fill": "#cddceeff",
+    "widgets.open.weak_fill": "#cddceeff",
     "widgets.noninteractive.rounding": 10,
     "widgets.inactive.rounding": 10,
     "widgets.hovered.rounding": 10,
@@ -37,7 +37,7 @@
     ],
     "grid.row_line": [
       1.0,
-      "#c3d3e6ff99"
+      "#c3d3e699"
     ],
     "grid.column_line": [
       1.0,
@@ -88,7 +88,7 @@
     ],
     "grid.row_line": [
       1.0,
-      "#2b3c52ff99"
+      "#2b3c5299"
     ],
     "grid.column_line": [
       1.0,

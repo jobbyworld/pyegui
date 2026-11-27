@@ -20,6 +20,7 @@ import os
 from pyegui import *
 
 SHEET = os.path.join(os.path.dirname(os.path.abspath(__file__)), "style_sheet.json")
+SHEETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "style_sheets")
 THEMES = [("light", "Clair"), ("dark", "Sombre")]
 
 # ---------------------------------------------------------------------------------------------------------
@@ -307,11 +308,13 @@ FILLS = {"colors.panel", "colors.window", "colors.text_edit_bg", "colors.striped
 
 base = {}        # theme -> {path: value}, the defaults
 edits = {"light": {}, "dark": {}}  # theme -> {path: value}, what the user changed
+extras = {"light": {}, "dark": {}}  # tokens of a chosen sheet that the editors do not show (the symbol of the grids), given as they are
 view = {}        # theme -> {path: value}, base + edits + transparency: what is drawn and applied
 holders = {}     # (theme, path) -> RGBA / Float holders of the editors
 opacity = Float(1.0)
 state = dict(selected="Button", tab=0, dirty=True, last_opacity=1.0, filter=Str(""), note="")
 filter_text = Str("")
+sheet_choice = Int(0)
 if os.environ.get("STYLE_DOC"):  # for the checks: STYLE_DOC=tokens or the name of a widget
     state["tab"], state["selected"] = (1, "Button") if os.environ["STYLE_DOC"] == "tokens" else (0, os.environ["STYLE_DOC"])
 
@@ -327,6 +330,9 @@ def flatten(snap):
     for group in ("tabs", "pill_tabs"):
         for name, value in snap[group].items():
             out[f"{group}.{name}"] = value
+    for name, value in snap["grid"].items():
+        if name != "chevron":  # a name of symbol, not a color: kept as it is by `extras`
+            out[f"grid.{name}"] = value
     for name, value in snap["window"].items():
         if "shadow" not in name:  # a shadow has five values: not edited here
             out[f"window.{name}"] = value
@@ -334,7 +340,7 @@ def flatten(snap):
 
 
 def is_number(path):
-    return path.endswith(("rounding", "expansion", "spacing", "bar_height"))
+    return path.endswith(("rounding", "expansion", "spacing", "bar_height", "radius", "size"))
 
 
 def is_fill(path):
@@ -390,6 +396,8 @@ def apply(ctx):
         if opacity.value < 1.0:
             changed |= {p for p in view[theme] if is_fill(p)}
         ctx.set_style_tokens(theme, {p: view[theme][p] for p in changed if p not in DERIVED and p in view[theme]})
+        if extras[theme]:
+            ctx.set_style_tokens(theme, extras[theme])
 
 
 def holder_for(theme, path):
@@ -427,6 +435,33 @@ def edit_token(theme, path):
         edits[theme][path] = (value[0], hexa) if isinstance(value, (tuple, list)) else hexa
         return True
     return False
+
+
+def sheet_names():
+    """the sheets of `examples/style_sheets/`, by name"""
+    try:
+        return sorted(f[:-5] for f in os.listdir(SHEETS_DIR) if f.endswith(".json"))
+    except OSError:
+        return []
+
+
+def choose_sheet(name):
+    """the tokens of a sheet become the edits (the ones the editors do not know go to `extras`); None is the defaults"""
+    for theme, _ in THEMES:
+        edits[theme].clear()
+        extras[theme].clear()
+    opacity.value = 1.0
+    if name is not None:
+        with open(os.path.join(SHEETS_DIR, name + ".json")) as f:
+            data = json.load(f)
+        opacity.value = data.get("opacity", 1.0)
+        for theme, _ in THEMES:
+            for path, value in data.get(theme, {}).items():
+                value = tuple(value) if isinstance(value, list) else value
+                (edits if path in base[theme] else extras)[theme][path] = value
+    reset_holders()
+    state["dirty"] = True
+    state["note"] = f"Feuille: {name or 'défaut'}"
 
 
 def save_sheet():
@@ -744,6 +779,13 @@ def toolbar(ctx):
         if button_clicked("Système"):
             ctx.set_system_theme()
         separator()
+        label("Feuille")
+        names = ["Défaut"] + sheet_names()
+        before = sheet_choice.value
+        combo_box(sheet_choice, list(range(len(names))), names, "")
+        if sheet_choice.value != before:
+            choose_sheet(None if sheet_choice.value == 0 else names[sheet_choice.value])
+        separator()
         label("Transparence")
         slider_float(opacity, 0.2, 1.0, "")
         if button_clicked("Enregistrer"):
@@ -751,11 +793,8 @@ def toolbar(ctx):
         if button_clicked("Charger"):
             load_sheet()
         if button_clicked("Réinitialiser"):
-            edits["light"].clear()
-            edits["dark"].clear()
-            opacity.value = 1.0
-            reset_holders()
-            state["dirty"] = True
+            sheet_choice.value = 0
+            choose_sheet(None)
         if state["note"]:
             weak(state["note"])
 
@@ -787,6 +826,9 @@ def update_func(ctx):
             base[theme] = flatten(snap)
             base[theme].update(derived_tokens(base[theme], theme == "dark"))
             FONTS[theme] = {k: tuple(v) for k, v in snap["fonts"].items()}
+        if os.environ.get("STYLE_DOC_SHEET") in sheet_names():  # for the checks
+            sheet_choice.value = 1 + sheet_names().index(os.environ["STYLE_DOC_SHEET"])
+            choose_sheet(os.environ["STYLE_DOC_SHEET"])
     if opacity.value != state["last_opacity"]:
         state["last_opacity"] = opacity.value
         state["dirty"] = True
