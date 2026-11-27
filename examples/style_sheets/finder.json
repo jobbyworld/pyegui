@@ -4,7 +4,7 @@
   "opacity": 1.0,
   "light": {
     "colors.panel": "#81818484",
-    "colors.window": "#f9f9ffff",
+    "colors.window": "#f9f9ffd8",
     "colors.text_edit_bg": "#82828282",
     "colors.striped_bg": "#32323232",
     "colors.code_bg": "#6e6e6e6e",
@@ -28,9 +28,9 @@
       1.0,
       "#6c6c6c6c"
     ],
-    "popups.dropdown_fill": "#f9f9ffff",
-    "popups.menu_fill": "#f9f9ffff",
-    "popups.tooltip_fill": "#f9f9ffff",
+    "popups.dropdown_fill": "#f9f9ffd0",
+    "popups.menu_fill": "#f9f9ffd0",
+    "popups.tooltip_fill": "#f9f9ffe0",
     "widgets.noninteractive.fill": "#00000000",
     "widgets.noninteractive.weak_fill": "#00000000",
     "widgets.noninteractive.stroke": [
@@ -75,9 +75,9 @@
   },
   "dark": {
     "colors.panel": "#06070a54",
-    "colors.window": "#13151df0",
+    "colors.window": "#13151dc8",
     "colors.text_edit_bg": "#00000046",
-    "colors.striped_bg": "#08080808",
+    "colors.striped_bg": "#ffffff14",
     "colors.code_bg": "#12121212",
     "colors.hyperlink": "#80aef9ff",
     "colors.selection_bg": "#3473d9e1",
@@ -99,9 +99,9 @@
       1.0,
       "#1b1b1b1b"
     ],
-    "popups.dropdown_fill": "#13151df0",
-    "popups.menu_fill": "#13151df0",
-    "popups.tooltip_fill": "#13151df0",
+    "popups.dropdown_fill": "#13151dc0",
+    "popups.menu_fill": "#13151dc0",
+    "popups.tooltip_fill": "#13151dd8",
     "widgets.noninteractive.fill": "#00000000",
     "widgets.noninteractive.weak_fill": "#00000000",
     "widgets.noninteractive.stroke": [
