@@ -13,11 +13,14 @@ ACCENT, OPACITY, LEVELS = "#3b82f6", 1.2, {"central": 0.3, "dock": 0.3}  # as in
 
 # what the glass needs on top of the plain style: contrast of the text and of the striped rows, windows and popups half transparent
 CONTRAST = {
-    "light": {"spacing.button_padding_radius": 0.8, "menu.button_padding_radius": 0.8, "colors.text": "#1c1c1eff", "colors.window": "#f9f9ffeb", "popups.menu_fill": "#f9f9ffe8",
-              "popups.dropdown_fill": "#f9f9ffe8", "popups.tooltip_fill": "#f9f9fff2"},
-    # dark: the striped rows are lighter than the glass, the windows and the popups let the backdrop through
-    "dark": {"spacing.button_padding_radius": 0.8, "menu.button_padding_radius": 0.8, "colors.text": "#f2f2f7ff", "colors.striped_bg": "#ffffff14", "colors.window": "#13151deb",
-             "popups.menu_fill": "#13151de6", "popups.dropdown_fill": "#13151de6", "popups.tooltip_fill": "#13151df2"},
+    # opaque windows and popups, a little lighter than the glass, so that they stand out from the sheet behind them
+    "light": {"spacing.button_padding_radius": 0.8, "menu.button_padding_radius": 0.8, "colors.text": "#1c1c1eff",
+              "colors.window": "#ffffffff", "popups.menu_fill": "#fdfdffff", "popups.dropdown_fill": "#fdfdffff",
+              "popups.tooltip_fill": "#ffffffff"},
+    # dark: the striped rows are lighter than the glass
+    "dark": {"spacing.button_padding_radius": 0.8, "menu.button_padding_radius": 0.8, "colors.text": "#f2f2f7ff",
+             "colors.striped_bg": "#ffffff14", "colors.window": "#1d212cff", "popups.menu_fill": "#222734ff",
+             "popups.dropdown_fill": "#222734ff", "popups.tooltip_fill": "#272c3bff"},
 }
 
 
@@ -54,7 +57,7 @@ def update(ctx):
     for t in ("light", "dark"):
         now = flatten(ctx.style_snapshot(t))
         sheet[t] = {p: (list(v) if isinstance(v, tuple) else v) for p, v in now.items() if v != plain[t].get(p)}
-    sheet["app"] = {"light": dict(APP), "dark": dict(APP)}
+    sheet["app"] = {"light": dict(APP, dialog_fill="#ffffffff"), "dark": dict(APP, dialog_fill="#1d212cff")}
     for t, tokens in CONTRAST.items():
         sheet[t].update(tokens)
     with open(OUT, "w") as f:
