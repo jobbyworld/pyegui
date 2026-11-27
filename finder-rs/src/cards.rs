@@ -63,7 +63,11 @@ pub fn show(ui: &mut egui::Ui, card: &Card, selected: bool, height: Option<f32>)
             ui.add(egui::Label::new(if i == 0 { rich } else { rich.weak() }).truncate().selectable(false));
         }
     });
-    let response = ui.interact(shown.response.rect, ui.make_persistent_id(("card", card.path)), egui::Sense::click());
+    let response = ui.interact(shown.response.rect, ui.make_persistent_id(("card", card.path)), egui::Sense::click_and_drag());
+    if response.drag_started() && pyegui_core::native_dnd::start_file_drag(vec![card.path.to_path_buf()]) {
+        // the file goes out of the window (to the Finder, another application): the mouse is the system's now
+        ui.ctx().stop_dragging();
+    }
     if response.hovered() {
         ui.painter().rect_filled(shown.response.rect, 8.0, text.gamma_multiply(0.06));
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
