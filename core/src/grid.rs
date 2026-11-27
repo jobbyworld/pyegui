@@ -156,6 +156,8 @@ pub struct GridOutput {
     pub drag_started: Option<Vec<String>>,
     /// the id of the row the pointer is over
     pub hovered: Option<String>,
+    /// the rectangles of the rows drawn this frame
+    pub row_rects: Vec<(String, Rect)>,
 }
 
 /// One line of what is shown
@@ -491,6 +493,7 @@ pub fn show(
             let row = &rows[line.index];
             let (rect, response) = ui.allocate_exact_size(vec2(available, row_height), Sense::click_and_drag());
             let is_selected = selected_set.contains(&row.id);
+            out.row_rects.push((row.id.clone(), rect));
             if response.hovered() {
                 out.hovered = Some(row.id.clone());
             }
@@ -599,7 +602,7 @@ pub fn show(
         }
     });
     hscroll_bar(ui, id, &mut state.columns, &zones, output.inner_rect);
-    state.offset_y = output.state.offset().y;
+    state.offset_y = output.state.clamped_offset().y;
 
     // the separators of the columns, in line with the ones of the header
     {
@@ -620,7 +623,7 @@ pub fn show(
 
     // the lasso
     if options.multi_select {
-        let origin = output.inner_rect.min - vec2(0.0, output.state.offset().y);
+        let origin = output.inner_rect.min - vec2(0.0, output.state.clamped_offset().y);
         let mods = ui.input(|i| i.modifiers);
         if band_sense.drag_started() {
             if let Some(start) = ui.input(|i| i.pointer.press_origin()) {

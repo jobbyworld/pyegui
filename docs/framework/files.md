@@ -474,6 +474,7 @@ when they are opened and watched while they are open.
 - `date_format` (str): format of the dates, like strftime, or "human" for the dates in French words ("il y a 5 min", "Hier à 09:10", "12 mars"). Default is "human"
 - `extra_columns` (list[tuple]): columns of your own at the right end of the rows: a title (shown above the tree), a width, and a function called with the path of each row to draw its cell, e.g. ("Tags", 160, lambda path: tags_edit(...)). A fourth item, a dict, makes the column sort and filter: {"type": "text" | "number" | "date" | "choice", "value": function(path) -> value, "icon": path of an SVG file}. A date is seconds since 1970 or a datetime. The icon is drawn at the left of the title, in its color
 - `header` (bool): draws the header of the columns above the tree, pinned at the top while the tree scrolls. Default is True when there are columns
+- `grid` (bool): draw the tree with the generic data grid (`DataGrid`): its header, columns, keyboard and lasso. Default is False
 - `resizable` (bool): the border of a column can be dragged. Default is True
 - `reorderable` (bool): the title of a column can be dragged to another place. Default is True
 - `settings` (bool): a settings icon at the right end of the header, seen while the mouse is over it, opens a popup to order the columns by drag and drop, hide them (the eye, see hidden_columns) and pin them at the left, at the right or not. Default is True
