@@ -22,6 +22,7 @@ mod containers;
 mod icons;
 mod layout;
 mod dock;
+mod tab_view;
 mod files;
 mod markdown;
 #[cfg(feature = "pdf")]
@@ -197,12 +198,31 @@ impl Context {
         spacing.set_item("slider_width", sp.slider_width)?;
         spacing.set_item("icon_width", sp.icon_width)?;
         out.set_item("spacing", spacing)?;
+
+        // the tabs of a Dock or a TabView: what they are drawn with now (tokens, else defaults)
+        for (key, pill) in [("tabs", false), ("pill_tabs", true)] {
+            let l = pyegui_core::tabs::look(v, pill, Default::default());
+            let d = PyDict::new(py);
+            d.set_item("bar_fill", hex(l.bar_fill))?;
+            d.set_item("active_fill", hex(l.active_fill))?;
+            d.set_item("inactive_fill", hex(l.inactive_fill))?;
+            d.set_item("hovered_fill", hex(l.hovered_fill))?;
+            d.set_item("active_text", hex(l.active_text))?;
+            d.set_item("inactive_text", hex(l.inactive_text))?;
+            d.set_item("active_stroke", stroke(l.active_stroke))?;
+            d.set_item("inactive_stroke", stroke(l.inactive_stroke))?;
+            d.set_item("spacing", l.spacing)?;
+            d.set_item("title_spacing", l.title_spacing)?;
+            d.set_item("bar_height", l.bar_height)?;
+            out.set_item(key, d)?;
+        }
         Ok(out)
     }
 
     /// Changes any value of the style of a theme by its path, the same paths as the dict of `style_snapshot`
     /// (`colors.panel`, `widgets.hovered.weak_fill`, `widgets.active.stroke`, `window.rounding`, `fonts.Body`,
-    /// `spacing.item_spacing`...). Only the given paths are changed. Colors are "#rrggbb[aa]", (r, g, b[, a]);
+    /// `spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`...). The tabs of a `Dock` and of a `tab_view` read the
+    /// `tabs.*` (classic tabs) and `pill_tabs.*` tokens. Only the given paths are changed. Colors are "#rrggbb[aa]", (r, g, b[, a]);
     /// a stroke is (width, color); a rounding or a size is a float; a font is (size, family) or a size.
     ///
     /// Args:
@@ -295,6 +315,32 @@ impl Context {
                             }
                         }
                         None => unknown.push(path.clone()),
+                    }
+                }
+                [group @ ("tabs" | "pill_tabs"), field] => {
+                    let pill = *group == "pill_tabs";
+                    let dark = theme == egui::Theme::Dark;
+                    let mut bad = false;
+                    pyegui_core::tabs::update_tokens(dark, pill, |t| {
+                        let c = |v: &Bound<'_, PyAny>| extract_color(v).ok();
+                        let st = |v: &Bound<'_, PyAny>| v.extract::<(f32, Bound<'_, PyAny>)>().ok().and_then(|(w, col)| extract_color(&col).ok().map(|col| egui::Stroke::new(w, col)));
+                        match *field {
+                            "bar_fill" => t.bar_fill = c(&value),
+                            "active_fill" => t.active_fill = c(&value),
+                            "inactive_fill" => t.inactive_fill = c(&value),
+                            "hovered_fill" => t.hovered_fill = c(&value),
+                            "active_text" => t.active_text = c(&value),
+                            "inactive_text" => t.inactive_text = c(&value),
+                            "active_stroke" => t.active_stroke = st(&value),
+                            "inactive_stroke" => t.inactive_stroke = st(&value),
+                            "spacing" => t.spacing = value.extract().ok(),
+                            "title_spacing" => t.title_spacing = value.extract().ok(),
+                            "bar_height" => t.bar_height = value.extract().ok(),
+                            _ => bad = true,
+                        }
+                    });
+                    if bad {
+                        unknown.push(path.clone());
                     }
                 }
                 ["spacing", name] => {
@@ -531,8 +577,9 @@ impl Context {
         }
     }
 
-    /// Restores the default style of both themes.
+    /// Restores the default style of both themes, and forgets the tokens of the tabs (`tabs.*`, `pill_tabs.*`).
     fn reset_style(&self) {
+        pyegui_core::tabs::reset_tokens();
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
             self.0.set_style_of(theme, style::default_style(theme));
         }
@@ -3221,6 +3268,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     viewport::register(m)?;
     transfer::register(m)?;
     dock::register(m)?;
+    tab_view::register(m)?;
     plot::register(m)?;
     markdown::register(m)?;
     #[cfg(feature = "pdf")]

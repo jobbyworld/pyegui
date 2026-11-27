@@ -9,7 +9,7 @@ Generated from the docstrings by `scripts/gen_framework_docs.py`, do not edit by
 - [Layout, sizes and scrolling](layout.md): 43 names
 - [Panels, windows, menus and popups](panels.md): 22 names
 - [Tables, tree views and plots](data.md): 11 names
-- [Docking tabs](docking.md): 6 names
+- [Docking tabs](docking.md): 8 names
 - [Terminal](terminal.md): 2 names
 - [File views and watcher](files.md): 12 names
 - [Images and icons](images.md): 7 names

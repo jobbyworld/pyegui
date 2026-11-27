@@ -161,6 +161,52 @@ WIDGETS = [
         ],
     ),
     dict(
+        name="Dock / TabView (onglets)", category="Widgets du framework", sample="Fichiers", functions="Dock, DockPane, tab_view, TabView",
+        note="Le Dock et le TabView lisent les mêmes jetons `tabs.*` (onglets classiques, collés à leur panneau). Une option donnée à l'appel (`active_tab_fill=...`) l'emporte sur le jeton, le jeton sur le défaut. Un onglet classique actif sans fond prend celui de son panneau.",
+        parts=[("Barre", [row("Fond de la barre", fill="tabs.bar_fill", text="colors.text")]), ("Onglet", [
+            row("Actif", fill="tabs.active_fill", stroke="tabs.active_stroke", text="tabs.active_text"),
+            row("Inactif", fill="tabs.inactive_fill", stroke="tabs.inactive_stroke", text="tabs.inactive_text"),
+            row("Survol", fill="tabs.hovered_fill", stroke="tabs.inactive_stroke", text="tabs.inactive_text")])],
+    ),
+    dict(
+        name="Dock / TabView (pilules)", category="Widgets du framework", sample="Fichiers", functions="Dock(tab_style='pill'), tab_view(tab_style='pill')",
+        note="Les onglets en pilule flottent dans la barre: l'actif a la couleur de la sélection, les autres sont nus, sans trait. Jetons `pill_tabs.*`.",
+        parts=[("Barre", [row("Fond de la barre", fill="pill_tabs.bar_fill", text="colors.text")]), ("Onglet", [
+            row("Actif", fill="pill_tabs.active_fill", stroke="pill_tabs.active_stroke", text="pill_tabs.active_text", rounding=12),
+            row("Inactif", fill="pill_tabs.inactive_fill", stroke="pill_tabs.inactive_stroke", text="pill_tabs.inactive_text", rounding=12),
+            row("Survol", fill="pill_tabs.hovered_fill", stroke="pill_tabs.inactive_stroke", text="pill_tabs.inactive_text", rounding=12)])],
+    ),
+    dict(
+        name="Date", category="Widgets du framework", sample="27/11/2026", functions="date_picker_button, date_range_picker, DateRange",
+        note="Le bouton est un bouton ordinaire. Dans le calendrier, les jours de la plage sont la couleur de la sélection atténuée; les bornes, la sélection pleine.",
+        parts=[("Bouton de date", by_state("weak_fill", disabled=False, states=[("Inactif", "inactive"), ("Survol", "hovered"), ("Ouvert", "open")])), ("Calendrier", [
+            row("Fond du calendrier", fill="colors.window", stroke="window.stroke", text="colors.text", rounding="window.rounding"),
+            row("Jour", text="colors.text"),
+            row("Jour d'un autre mois", text="colors.weak_text"),
+            row("Jour au survol", fill="widgets.hovered.weak_fill", text="colors.text", rounding="widgets.hovered.rounding"),
+            row("Jour dans la plage", fill="colors.selection_bg*0.35", text="colors.text"),
+            row("Borne de la plage", fill="colors.selection_bg", text="colors.selection_stroke"),
+            row("Aujourd'hui", stroke="widgets.noninteractive.fg_stroke", text="colors.text")])],
+    ),
+    dict(
+        name="Tags (puces)", category="Widgets du framework", sample="dev/web", functions="Tags, tags_edit, TagTreeView, tags_pick",
+        note="La puce est le fond doux du thème (`derived.soft_fill`, la fenêtre tirée vers le texte) avec la couleur du tag en point et en contour; le texte est la couleur du tag tirée vers le texte fort. La couleur d'un tag est une donnée, pas un jeton.",
+        parts=[
+            ("Puce", [row("Puce", fill="derived.soft_fill", text="colors.strong_text", rounding=10), row("Puce héritée (atténuée)", fill="derived.soft_fill*0.6", text="colors.weak_text", rounding=10)]),
+            ("Bouton « ajouter »", [row("Repos", fill="widgets.inactive.weak_fill", stroke="colors.weak_text*0.4", text="colors.weak_text", rounding=10), row("Survol", fill="widgets.hovered.weak_fill", stroke="colors.weak_text*0.4", text="colors.weak_text", rounding=10)]),
+            ("Liste des tags", [row("Ligne", text="colors.text"), row("Ligne survolée", fill="widgets.hovered.weak_fill", text="colors.text", rounding=5), row("Case cochée", fill="colors.hyperlink", rounding=3), row("Case vide", stroke="colors.text*0.7", rounding=3), row("Case cochée (héritée)", fill="colors.hyperlink*0.5", rounding=3)]),
+        ],
+    ),
+    dict(
+        name="Liste de choix (simple / multiple)", category="Widgets du framework", sample="Statut", functions="choice_combo, choice_edit, ChoiceSpec (property_set, colonnes)",
+        note="Choix multiple: des cases. Choix unique: des ronds, un seul est plein. La valeur choisie s'affiche comme une puce.",
+        parts=[
+            ("Choix multiple (cases)", [row("Case cochée", fill="colors.hyperlink", rounding=3), row("Case vide", stroke="colors.text*0.7", rounding=3), row("Ligne survolée", fill="widgets.hovered.weak_fill", text="colors.text", rounding=5)]),
+            ("Choix unique (ronds)", [row("Rond choisi", fill="colors.hyperlink", rounding=10), row("Rond vide", stroke="colors.text", rounding=10)]),
+            ("Valeur affichée", [row("Puce de la valeur", fill="derived.soft_fill", text="colors.strong_text", rounding=10), row("Valeur héritée ou résumée", fill="derived.soft_fill*0.6", text="colors.weak_text", rounding=10)]),
+        ],
+    ),
+    dict(
         name="TreeView", category="Widgets du framework", sample="dossier", functions="tree_view, TreeView, TagTreeView",
         note="Dessiné par egui_ltreeview. La sélection d'un arbre sans focus est un fond discret, pas la couleur de la sélection.",
         parts=[("Lignes", [row("Normale", text="colors.text"), row("Sélectionnée (arbre actif)", fill="colors.selection_bg", text="colors.selection_stroke", rounding="widgets.active.rounding"), row("Sélectionnée (sans focus)", fill="widgets.inactive.weak_fill*0.3", text="colors.text", rounding="widgets.active.rounding")]), ("Repères", [row("Guides d'indentation", stroke="widgets.noninteractive.stroke"), row("Marqueur de dépôt", fill="colors.selection_bg*0.6", rounding="widgets.active.rounding")])],
@@ -201,7 +247,7 @@ for _w in WIDGETS:
 # the style sheet: tokens of both themes, edits on top of the defaults, a global transparency
 # ---------------------------------------------------------------------------------------------------------
 
-DERIVED = {"colors.strong_text", "colors.weak_text"}  # follow other tokens: not set
+DERIVED = {"colors.strong_text", "colors.weak_text", "derived.soft_fill"}  # follow other tokens: not set
 FILLS = {"colors.panel", "colors.window", "colors.text_edit_bg", "colors.striped_bg", "colors.code_bg", "colors.selection_bg"}
 
 base = {}        # theme -> {path: value}, the defaults
@@ -223,14 +269,30 @@ def flatten(snap):
     for st, d in snap["widgets"].items():
         for name, value in d.items():
             out[f"widgets.{st}.{name}"] = value
+    for group in ("tabs", "pill_tabs"):
+        for name, value in snap[group].items():
+            out[f"{group}.{name}"] = value
     for name, value in snap["window"].items():
         if "shadow" not in name:  # a shadow has five values: not edited here
             out[f"window.{name}"] = value
     return out
 
 
+def is_number(path):
+    return path.endswith(("rounding", "expansion", "spacing", "bar_height"))
+
+
 def is_fill(path):
-    return path in FILLS or path.endswith(".fill") or path.endswith(".weak_fill")
+    return path in FILLS or path.endswith("fill")
+
+
+def derived_tokens(flat, dark):
+    """tokens the widgets compute from others: the soft background of the chips (the window pulled toward the text)"""
+    window = hex_to_rgba(flat["colors.window"])
+    text = hex_to_rgba(flat["colors.text"])
+    amount = 0.14 if dark else 0.03
+    mixed = [round(window[i] + (text[i] - window[i]) * amount) for i in range(3)] + [255]
+    return {"derived.soft_fill": rgba_hex(mixed)}
 
 
 def hex_to_rgba(hex_color):
@@ -257,6 +319,7 @@ def recompute():
     for theme, _ in THEMES:
         merged = dict(base[theme])
         merged.update(edits[theme])
+        merged.update(derived_tokens(merged, theme == "dark"))
         for path, value in list(merged.items()):
             if is_fill(path) and isinstance(value, str):
                 merged[path] = fade(value, opacity.value)
@@ -264,15 +327,21 @@ def recompute():
 
 
 def apply(ctx):
+    """only what differs from the defaults is given to the app: a token that is only the default value would pin it
+    (a tab with no fill takes the one of its pane, a token set to transparent would not)"""
+    ctx.reset_style()
     for theme, _ in THEMES:
-        ctx.set_style_tokens(theme, {p: v for p, v in view[theme].items() if p not in DERIVED})
+        changed = set(edits[theme])
+        if opacity.value < 1.0:
+            changed |= {p for p in view[theme] if is_fill(p)}
+        ctx.set_style_tokens(theme, {p: view[theme][p] for p in changed if p not in DERIVED and p in view[theme]})
 
 
 def holder_for(theme, path):
     key = (theme, path)
     if key not in holders:
         value = edits[theme].get(path, base[theme][path])
-        if path.endswith("rounding") or path.endswith("expansion"):
+        if is_number(path):
             holders[key] = Float(float(value))
         else:
             r, g, b, a = hex_to_rgba(color_of(value))
@@ -288,9 +357,9 @@ def edit_token(theme, path):
     """an editor of a color (with the width of the stroke) or of a rounding; returns True if it changed"""
     value = edits[theme].get(path, base[theme][path])
     h = holder_for(theme, path)
-    if path.endswith("rounding") or path.endswith("expansion"):
+    if is_number(path):
         before = h.value
-        slider_float(h, 0.0, 32.0, "")
+        slider_float(h, 0.0, 40.0, "")
         if h.value != before:
             edits[theme][path] = round(h.value)
             return True
@@ -445,7 +514,7 @@ def duplicates(theme):
     """tokens that have the same value under different names: candidates to be one"""
     groups = {}
     for path, value in view[theme].items():
-        if path in DERIVED or path.endswith("rounding") or path.endswith("expansion"):
+        if path in DERIVED or is_number(path):
             continue
         key = format_value(value)
         groups.setdefault(key, []).append(path)
@@ -536,6 +605,7 @@ def update_func(ctx):
         for theme, _ in THEMES:
             snap = ctx.style_snapshot(theme)
             base[theme] = flatten(snap)
+            base[theme].update(derived_tokens(base[theme], theme == "dark"))
             FONTS[theme] = {k: tuple(v) for k, v in snap["fonts"].items()}
     if opacity.value != state["last_opacity"]:
         state["last_opacity"] = opacity.value

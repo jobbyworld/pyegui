@@ -499,8 +499,14 @@ const STYLE_KEYS: [&str; 20] = [
 ];
 
 impl DockStyle {
-    fn tab_spacing(&self) -> f32 {
+    /// the tokens of the style sheet for the tabs of this dock, in the theme drawn
+    fn tokens(&self, dark: bool) -> pyegui_core::tabs::TabSet {
+        pyegui_core::tabs::tokens(dark, self.pill)
+    }
+
+    fn tab_spacing(&self, dark: bool) -> f32 {
         self.tab_spacing
+            .or(self.tokens(dark).spacing)
             .unwrap_or(if self.glass || self.pill { 4.0 } else { 2.0 })
     }
 
@@ -514,7 +520,7 @@ impl DockStyle {
     }
 
     fn active_tab_stroke(&self, visuals: &Visuals) -> Stroke {
-        self.active_tab_stroke.unwrap_or_else(|| match crate::layout::dock_rules() {
+        self.active_tab_stroke.or(self.tokens(visuals.dark_mode).active_stroke).unwrap_or_else(|| match crate::layout::dock_rules() {
             Some(rules) => rules.outline,
             None => Stroke::new(1.0, Self::border(visuals, 45)),
         })
@@ -1313,7 +1319,7 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
             let radius = radius.min(ui.available_height() / 2.0);
             self.tab_title_spacing(ui.visuals()).max(radius * 0.6) + stroke
         };
-        let spacing = self.style.tab_spacing();
+        let spacing = self.style.tab_spacing(ui.visuals().dark_mode);
 
         let button_width = galley.size().x
             + 2.0 * x_margin
@@ -1361,6 +1367,7 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
                 bg_color = self
                     .style
                     .hovered_tab_fill
+                    .or(self.style.tokens(ui.visuals().dark_mode).hovered_fill)
                     .unwrap_or(if self.style.pill {
                         ui.visuals().widgets.hovered.weak_bg_fill
                     } else if let Some(rules) = crate::layout::dock_rules() {
@@ -1550,7 +1557,7 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
     }
 
     fn tab_bar_height(&self, _style: &egui::Style) -> f32 {
-        self.style.tab_bar_height.unwrap_or(if self.style.glass { 28.0 } else { 24.0 })
+        self.style.tab_bar_height.or(self.style.tokens(_style.visuals.dark_mode).bar_height).unwrap_or(if self.style.glass { 28.0 } else { 24.0 })
     }
 
     fn is_tab_bar_visible(&self, _tile_id: TileId, tabs: &egui_tiles::Tabs) -> bool {
@@ -1588,12 +1595,12 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
     }
 
     fn tab_title_spacing(&self, _visuals: &Visuals) -> f32 {
-        self.style.tab_title_spacing.unwrap_or(if self.style.glass { 12.0 } else { 8.0 })
+        self.style.tab_title_spacing.or(self.style.tokens(_visuals.dark_mode).title_spacing).unwrap_or(if self.style.glass { 12.0 } else { 8.0 })
     }
 
     fn tab_bar_color(&self, _visuals: &Visuals) -> Color32 {
         // transparent, so the active tab shows the same background as its pane
-        self.style.tab_bar_color.unwrap_or(Color32::TRANSPARENT)
+        self.style.tab_bar_color.or(self.style.tokens(_visuals.dark_mode).bar_fill).unwrap_or(Color32::TRANSPARENT)
     }
 
     fn tab_bg_color(
@@ -1609,16 +1616,16 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         };
         match (state.active, self.style.pill) {
             // pill: the active tab is filled with the selection color, the others are bare
-            (true, true) => self.style.active_tab_fill.unwrap_or(visuals.selection.bg_fill),
-            (false, true) => self.style.inactive_tab_fill.unwrap_or(Color32::TRANSPARENT),
+            (true, true) => self.style.active_tab_fill.or(self.style.tokens(visuals.dark_mode).active_fill).unwrap_or(visuals.selection.bg_fill),
+            (false, true) => self.style.inactive_tab_fill.or(self.style.tokens(visuals.dark_mode).inactive_fill).unwrap_or(Color32::TRANSPARENT),
             // classic: the active tab has the background of its pane, the others are tinted
             // with layout rules: the sheet of the pane, and a fainter one for the others
-            (true, false) => self.style.active_tab_fill.unwrap_or_else(|| match crate::layout::dock_rules() {
+            (true, false) => self.style.active_tab_fill.or(self.style.tokens(visuals.dark_mode).active_fill).unwrap_or_else(|| match crate::layout::dock_rules() {
                 Some(rules) => pane_sheet(&rules, own, visuals),
                 // a pane filled with its glass level: its tab is the top of the same sheet
                 None => glass_tile_fill(tiles, tile_id, visuals).unwrap_or(Color32::TRANSPARENT),
             }),
-            (false, false) => self.style.inactive_tab_fill.unwrap_or_else(|| match crate::layout::dock_rules() {
+            (false, false) => self.style.inactive_tab_fill.or(self.style.tokens(visuals.dark_mode).inactive_fill).unwrap_or_else(|| match crate::layout::dock_rules() {
                 Some(rules) => pane_sheet(&rules, own, visuals).gamma_multiply(INACTIVE_SHEET),
                 None => glass_tile_fill(tiles, tile_id, visuals)
                     .map_or_else(|| DockStyle::inactive_tint(visuals, false), |fill| fill.gamma_multiply(INACTIVE_SHEET)),
@@ -1636,9 +1643,9 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         // pill tabs have no outline unless one is given
         if self.style.pill {
             return if state.active {
-                self.style.active_tab_stroke.unwrap_or(Stroke::NONE)
+                self.style.active_tab_stroke.or(self.style.tokens(visuals.dark_mode).active_stroke).unwrap_or(Stroke::NONE)
             } else {
-                self.style.inactive_tab_stroke.unwrap_or(Stroke::NONE)
+                self.style.inactive_tab_stroke.or(self.style.tokens(visuals.dark_mode).inactive_stroke).unwrap_or(Stroke::NONE)
             };
         }
         // fainter on inactive tabs
@@ -1647,6 +1654,7 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         } else {
             self.style
                 .inactive_tab_stroke
+                .or(self.style.tokens(visuals.dark_mode).inactive_stroke)
                 .unwrap_or_else(|| match crate::layout::dock_rules() {
                     Some(rules) => rules.outline,
                     None => Stroke::new(1.0, DockStyle::border(visuals, 25)),
@@ -1665,14 +1673,17 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
             // readable on the selection color
             self.style
                 .active_tab_text_color
+                .or(self.style.tokens(visuals.dark_mode).active_text)
                 .unwrap_or(visuals.selection.stroke.color)
         } else if state.active {
             self.style
                 .active_tab_text_color
+                .or(self.style.tokens(visuals.dark_mode).active_text)
                 .unwrap_or(visuals.widgets.active.text_color())
         } else {
             self.style
                 .inactive_tab_text_color
+                .or(self.style.tokens(visuals.dark_mode).inactive_text)
                 .unwrap_or(visuals.widgets.noninteractive.text_color().gamma_multiply(0.75))
         }
     }
