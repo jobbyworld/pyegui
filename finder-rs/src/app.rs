@@ -2129,8 +2129,8 @@ impl FinderApp {
         options.row_height = 28.0;
         let mut changes = Vec::new();
         // as tall as the window allows (the title of the popup and the margins taken off)
-        let height = (ui.ctx().content_rect().height() - 140.0).max(560.0);
-        egui::ScrollArea::vertical().id_salt("appearance-scroll").max_height(height).auto_shrink([false, true]).show(ui, |ui| {
+        let height = (ui.ctx().content_rect().height() - 140.0).max(200.0);
+        egui::ScrollArea::vertical().id_salt("appearance-scroll").min_scrolled_height(height).max_height(height).auto_shrink([false, false]).show(ui, |ui| {
             changes = property_set(ui, &mut self.appearance_set, &rows, &options);
         });
         for change in changes {

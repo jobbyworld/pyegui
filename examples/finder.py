@@ -3034,7 +3034,8 @@ def background_window():
             apply_look_change(change)
 
     def bounded():
-        set_max_height(560)
+        # never taller than the window: the room left in it, less the margin of the window and the gear below
+        set_max_height(max(200, min(560, available_height() - 20)))
         scroll_area_vertical(rows)
 
     vertical(bounded)
