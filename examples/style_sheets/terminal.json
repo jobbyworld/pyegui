@@ -1,0 +1,107 @@
+{
+  "name": "terminal",
+  "description": "Phosphore vert sur noir, coins droits, traits discrets",
+  "opacity": 1.0,
+  "light": {
+    "colors.panel": "#eaf3eaff",
+    "colors.window": "#eaf3eaff",
+    "colors.text_edit_bg": "#f8fcf8ff",
+    "colors.striped_bg": "#0a3a0a0c",
+    "colors.code_bg": "#d8e8d8ff",
+    "colors.text": "#1d3a1dff",
+    "colors.strong_text": "#062006ff",
+    "colors.weak_text": "#1d3a1d99",
+    "colors.hyperlink": "#0a7a2aff",
+    "colors.selection_bg": "#a8e0a8ff",
+    "colors.selection_stroke": "#0a5a1aff",
+    "colors.separator": "#b6ccb6ff",
+    "widgets.noninteractive.fill": "#eaf3eaff",
+    "widgets.inactive.fill": "#d8e8d8ff",
+    "widgets.inactive.weak_fill": "#d8e8d8ff",
+    "widgets.hovered.fill": "#c6dcc6ff",
+    "widgets.hovered.weak_fill": "#c6dcc6ff",
+    "widgets.active.fill": "#b2d0b2ff",
+    "widgets.active.weak_fill": "#b2d0b2ff",
+    "widgets.open.fill": "#c6dcc6ff",
+    "widgets.open.weak_fill": "#c6dcc6ff",
+    "widgets.noninteractive.rounding": 0,
+    "widgets.inactive.rounding": 0,
+    "widgets.hovered.rounding": 0,
+    "widgets.active.rounding": 0,
+    "widgets.open.rounding": 0,
+    "window.rounding": 0,
+    "window.menu_rounding": 0,
+    "window.stroke": [
+      1.0,
+      "#b6ccb6ff"
+    ],
+    "grid.row_line": [
+      1.0,
+      "#b6ccb6ff99"
+    ],
+    "grid.column_line": [
+      1.0,
+      "#b6ccb6ff"
+    ],
+    "grid.guide_line": [
+      1.0,
+      "#7fb07fff"
+    ],
+    "grid.guide_radius": 0.0,
+    "grid.chevron": "plus",
+    "grid.chevron_color": "#1d3a1d99",
+    "grid.chevron_hover_color": "#062006ff",
+    "grid.chevron_size": 4.0
+  },
+  "dark": {
+    "colors.panel": "#0b0f0bff",
+    "colors.window": "#0b0f0bff",
+    "colors.text_edit_bg": "#050805ff",
+    "colors.striped_bg": "#39ff1409",
+    "colors.code_bg": "#050805ff",
+    "colors.text": "#7cfc7cff",
+    "colors.strong_text": "#c8ffc8ff",
+    "colors.weak_text": "#7cfc7c99",
+    "colors.hyperlink": "#39ff14ff",
+    "colors.selection_bg": "#0f4a1aff",
+    "colors.selection_stroke": "#39ff14ff",
+    "colors.separator": "#1f3a1fff",
+    "widgets.noninteractive.fill": "#0b0f0bff",
+    "widgets.inactive.fill": "#142014ff",
+    "widgets.inactive.weak_fill": "#142014ff",
+    "widgets.hovered.fill": "#1d301dff",
+    "widgets.hovered.weak_fill": "#1d301dff",
+    "widgets.active.fill": "#264226ff",
+    "widgets.active.weak_fill": "#264226ff",
+    "widgets.open.fill": "#1d301dff",
+    "widgets.open.weak_fill": "#1d301dff",
+    "widgets.noninteractive.rounding": 0,
+    "widgets.inactive.rounding": 0,
+    "widgets.hovered.rounding": 0,
+    "widgets.active.rounding": 0,
+    "widgets.open.rounding": 0,
+    "window.rounding": 0,
+    "window.menu_rounding": 0,
+    "window.stroke": [
+      1.0,
+      "#1f3a1fff"
+    ],
+    "grid.row_line": [
+      1.0,
+      "#1f3a1fff99"
+    ],
+    "grid.column_line": [
+      1.0,
+      "#1f3a1fff"
+    ],
+    "grid.guide_line": [
+      1.0,
+      "#2e5a2eff"
+    ],
+    "grid.guide_radius": 0.0,
+    "grid.chevron": "plus",
+    "grid.chevron_color": "#7cfc7c99",
+    "grid.chevron_hover_color": "#c8ffc8ff",
+    "grid.chevron_size": 4.0
+  }
+}
