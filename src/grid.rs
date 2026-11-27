@@ -293,6 +293,7 @@ impl DataGrid {
 ///     row_height (float): the height of a row. Default is the one of a button
 ///     indent (float): the indentation of a level of the tree. Default is 16
 ///     drag (bool): tell the start of a drag of the selection (`take_drag_started`). Default is False
+///     row_lines (bool): a thin horizontal line under each row. Default is True
 ///     context_menu (callable): called with the list of ids concerned when a row is right-clicked, inside a menu
 ///     cell (callable): called with the row id and the column key for each cell of a column with `custom=True`, in
 ///         a ui of the size of the cell: draw a widget there (a chip, a switch, a button)
@@ -325,6 +326,7 @@ unsafe fn data_grid(py: Python<'_>, grid: Py<DataGrid>, rows: &Bound<'_, PyAny>,
     options.row_height = kwarg(kwargs, "row_height")?;
     options.indent = kwarg(kwargs, "indent")?.unwrap_or(16.0);
     options.drag = kwarg(kwargs, "drag")?.unwrap_or(false);
+    options.row_lines = kwarg(kwargs, "row_lines")?.unwrap_or(true);
     let menu: Option<Bound<'_, PyAny>> = kwarg(kwargs, "context_menu")?;
     let cell_fn: Option<Bound<'_, PyAny>> = kwarg(kwargs, "cell")?;
 

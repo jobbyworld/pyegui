@@ -118,6 +118,8 @@ pub struct GridOptions {
     pub tree_column: Option<String>,
     /// the rows come sorted and filtered by the caller: the grid keeps their order and ignores the filters
     pub keep_order: bool,
+    /// a thin horizontal line under each row
+    pub row_lines: bool,
 }
 
 impl Default for GridOptions {
@@ -135,6 +137,7 @@ impl Default for GridOptions {
             drag: false,
             tree_column: None,
             keep_order: false,
+            row_lines: true,
         }
     }
 }
@@ -465,6 +468,21 @@ pub fn show(
 
     // the empty space (and the rows' gaps) answers to a click that clears the selection and to the lasso
     let band_sense = ui.interact(body_rect, id.with("band"), if options.multi_select { Sense::click_and_drag() } else { Sense::click() });
+    // for each line, at each depth: a later line of that depth comes before any line that is less deep
+    let mut continues: Vec<Vec<bool>> = vec![vec![]; if options.tree { lines.len() } else { 0 }];
+    if options.tree {
+        let mut pending: Vec<bool> = vec![];
+        for (n, line) in lines.iter().enumerate().rev() {
+            if pending.len() <= line.depth + 1 {
+                pending.resize(line.depth + 2, false);
+            }
+            continues[n] = pending[..=line.depth].to_vec();
+            pending[line.depth] = true;
+            for deeper in pending.iter_mut().skip(line.depth + 1) {
+                *deeper = false;
+            }
+        }
+    }
     let mut area = egui::ScrollArea::vertical().id_salt(id.with("rows")).max_height(body_height).auto_shrink([false, options.max_height.is_some()]);
     if state.scroll_by != 0.0 {
         area = area.vertical_scroll_offset((state.offset_y + std::mem::take(&mut state.scroll_by)).max(0.0));
@@ -504,6 +522,10 @@ pub fn show(
             } else if response.hovered() {
                 ui.painter().rect_filled(rect, 0.0, text_color.gamma_multiply(0.06));
             }
+            if options.row_lines {
+                let line = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color.gamma_multiply(0.5));
+                ui.painter().hline(rect.x_range(), rect.bottom().round() - 0.5, line);
+            }
             let ink = if is_selected { selected_text } else { text_color };
             let ink = if row.dim { ink.gamma_multiply(0.5) } else { ink };
             let mut cell_hit: Option<String> = None;
@@ -523,12 +545,21 @@ pub fn show(
                 let mut left = cell_rect.left() + 8.0;
                 let is_first = Some(&column.key) == first_key.as_ref();
                 if options.tree && is_first {
-                    // the guides of the levels above: one vertical line under the chevron of each ancestor
-                    let guide = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color.gamma_multiply(0.8));
+                    // the guide lines of the tree: a vertical line under the chevron of each ancestor that goes on while it has
+                    // later children, and an elbow to this row
+                    let guide = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color.gamma_multiply(0.9));
+                    let painter = ui.painter().with_clip_rect(clip);
+                    let x_of = |level: usize| (cell_rect.left() + 8.0 + level as f32 * options.indent + 6.0).round() - 0.5;
+                    let middle = rect.center().y.round() - 0.5;
                     for level in 0..line.depth {
-                        let x = (cell_rect.left() + 8.0 + level as f32 * options.indent + 6.0).round() - 0.5;
-                        if x > clip.left() && x < clip.right() {
-                            ui.painter().with_clip_rect(clip).vline(x, rect.y_range(), guide);
+                        let x = x_of(level);
+                        if level + 1 == line.depth {
+                            let bottom = if continues[position].get(level + 1).copied().unwrap_or(false) { rect.bottom() } else { middle };
+                            painter.vline(x, rect.top()..=bottom, guide);
+                            let end = if line.has_children { x_of(level + 1) - 8.0 } else { x_of(level + 1) + 6.0 };
+                            painter.hline(x..=end, middle, guide);
+                        } else if continues[position].get(level + 1).copied().unwrap_or(false) {
+                            painter.vline(x, rect.y_range(), guide);
                         }
                     }
                     left += line.depth as f32 * options.indent;

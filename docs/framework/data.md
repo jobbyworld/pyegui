@@ -184,6 +184,7 @@ only the visible rows are drawn.
 - `row_height` (float): the height of a row. Default is the one of a button
 - `indent` (float): the indentation of a level of the tree. Default is 16
 - `drag` (bool): tell the start of a drag of the selection (`take_drag_started`). Default is False
+- `row_lines` (bool): a thin horizontal line under each row. Default is True
 - `context_menu` (callable): called with the list of ids concerned when a row is right-clicked, inside a menu
 - `cell` (callable): called with the row id and the column key for each cell of a column with `custom=True`, in a ui of the size of the cell: draw a widget there (a chip, a switch, a button)
 
