@@ -13,6 +13,7 @@ inherited through the layouts.
     .venv/bin/python examples/style_doc.py
 """
 
+import datetime
 import json
 import os
 
@@ -488,12 +489,114 @@ def theme_column(theme, title, w, part_rows):
     frame(card, fill=view[theme]["colors.panel"], rounding=10.0, inner_margin=12.0, stroke=(1.0, "#80808040"))
 
 
+
+# ---------------------------------------------------------------------------------------------------------
+# the live preview of each widget: the real control, drawn with the style that is applied now
+# ---------------------------------------------------------------------------------------------------------
+
+pv = dict(
+    flag=Bool(True), off=Bool(False), index=Int(0), number=Int(40), real=Float(0.4), text=Str("texte saisi"),
+    long=Str("plusieurs\nlignes"), row=Int(-1), window=Bool(False), date=Date(datetime.datetime.now()),
+    range=DateRange(None, None), tags=Tags(["projet/web", "perso"], colors={"projet": "#3b82f6"}),
+    tabs=TabView(["Fichiers", "Éditeur", "Journal"]), pills=TabView(["Un", "Deux", "Trois"]),
+    tree=TreeView("sd-tree", multi_select=True), props=PropertySet(), files=None,
+    multi=["a", "c"], single=["b"], values={"name": "Rapport", "done": False, "size": "21", "alpha": "0.5"},
+)
+CHOICES = [dict(id="a", label="À faire", color="#f59e0b"), dict(id="b", label="En cours", color="#3b82f6"), dict(id="c", label="Terminé", color="#10b981")]
+NODES = [TreeNode(0, "src", [TreeNode(1, "main.py"), TreeNode(2, "style.py")]), TreeNode(3, "docs", [TreeNode(4, "guide.md")]), TreeNode(5, "README.md")]
+TABLE = [["Alice", "32", "Paris"], ["Bob", "27", "Lyon"], ["Camille", "41", "Nice"], ["Dan", "19", "Lille"]]
+
+
+def preview_window():
+    if button_clicked("Ouvrir une fenêtre"):
+        pv["window"].value = True
+    window("Exemple", lambda: (label("Le fond, le trait, les coins et l'ombre de la fenêtre."), button_clicked("Fermer") and None), open=pv["window"], default_width=280)
+
+
+def preview_props():
+    p = pv["values"]
+    rows = [
+        dict(id="name", name="Nom", group="Général", value=p["name"], description="Le titre du rapport"),
+        dict(id="done", name="Terminé", type="bool", group="Général", value=p["done"]),
+        dict(id="size", name="Taille", type="number", group="Mise en page", unit="cm", value=p["size"]),
+        dict(id="id", name="Identifiant", type="readonly", group="Mise en page", value="R-0042"),
+    ]
+    set_height(260)
+    for change in property_set(pv["props"], rows, key="sd", id="sd-props", row_height=26):
+        if change[0] == "set" and change[1] in p:
+            p[change[1]] = (change[2] == "1") if change[1] == "done" else change[2]
+
+
+def preview_files():
+    if pv["files"] is None:
+        pv["files"] = FileListView("sd-files", "~")
+    set_height(220)
+    file_list_view(pv["files"])
+
+
+def preview_choice(multiple):
+    key = "multi" if multiple else "single"
+    change = choice_edit(CHOICES, pv[key], multiple=multiple, id="sd-" + key, width=220)
+    if change and change[0] == "choose":
+        pv[key] = change[1]
+    elif change and change[0] == "clear":
+        pv[key] = []
+
+
+def preview_tabs(pill):
+    t = pv["pills"] if pill else pv["tabs"]
+    tab_view(t, lambda i: label("Contenu de " + t.titles[i]), tab_style="pill" if pill else "classic", closable=True, add_button=True)
+    if t.take_added():
+        t.add(f"Onglet {len(t.titles) + 1}")
+
+
+PREVIEWS = {
+    "Label": lambda: (label("Texte courant"), strong("Texte fort"), weak("Texte faible"), small("Petit texte"), heading("Titre"), colored_label("#ef4444", "Texte coloré")),
+    "Hyperlink": lambda: (hyperlink_to("pyegui sur GitHub", "https://github.com/GachiLord/pyegui"), link_clicked("un faux lien")),
+    "Code": lambda: (code("let x = 1;"), set_max_height(90), code_editor(pv["long"])),
+    "Button": lambda: horizontal(lambda: (button_clicked("Valider"), add_enabled(False, lambda: button_clicked("Désactivé")), small_button_clicked("Petit"))),
+    "Selectable": lambda: horizontal(lambda: [selectable_value(pv["index"], i, t) for i, t in enumerate(["Un", "Deux", "Trois"])]),
+    "Checkbox / Radio": lambda: (checkbox(pv["flag"], "Une case"), horizontal(lambda: [radio_value(pv["index"], i, t) for i, t in enumerate(["Un", "Deux", "Trois"])])),
+    "Switch": lambda: (switch(pv["flag"], "Interrupteur"), switch(pv["off"], "Éteint")),
+    "Slider / DragValue": lambda: (slider_int(pv["number"], 0, 100, "Curseur"), drag_int(pv["number"], 0, 100, 1)),
+    "ComboBox": lambda: combo_box(pv["index"], [0, 1, 2], ["Premier", "Deuxième", "Troisième"], "Choisir"),
+    "ProgressBar": lambda: (progress(0.6), progress(pv["real"].value)),
+    "TextEdit": lambda: (text_edit_singleline(pv["text"], hint_text="Saisir"), text_edit_multiline(pv["long"], hint_text="Plusieurs lignes")),
+    "Window / Modal": preview_window,
+    "Menu / Popup / Tooltip": lambda: menu_button("Menu ▾", lambda: (button_clicked("Ouvrir"), button_clicked("Enregistrer"), separator(), button_clicked("Quitter"))),
+    "Panel": lambda: group(lambda: (strong("Un panneau"), label("Le fond entre les boîtes est celui du panneau."))),
+    "Group / Frame": lambda: (group(lambda: label("Un groupe")), frame(lambda: label("Un cadre"), fill="#8080801a", rounding=8.0, inner_margin=8.0)),
+    "Table / Grid": lambda: table(["Nom", "Âge", "Ville"], TABLE, pv["row"], id="sd-grid"),
+    "Separator": lambda: (label("Au-dessus"), separator(), label("En dessous")),
+    "PropertySet": preview_props,
+    "Table": lambda: table(["Nom", "Âge", "Ville"], TABLE, pv["row"], id="sd-table", striped=True),
+    "Dock / TabView (onglets)": lambda: preview_tabs(False),
+    "Dock / TabView (pilules)": lambda: preview_tabs(True),
+    "Date": lambda: (date_picker_button(pv["date"]), date_range_picker(pv["range"])),
+    "Tags (puces)": lambda: tags_edit(pv["tags"]),
+    "Liste de choix (simple / multiple)": lambda: (label("Choix multiple"), preview_choice(True), label("Choix unique"), preview_choice(False)),
+    "TreeView": lambda: tree_view(pv["tree"], NODES),
+    "FileListView / FileTreeView": preview_files,
+}
+
+
+def preview(w):
+    """the real control, in a frame, with the look given by the style that is applied (the mode of the bar above)"""
+    fn = PREVIEWS.get(w["name"])
+    if fn is None:
+        return
+    strong("Aperçu")
+    weak("Le vrai contrôle, avec le style appliqué. Les boutons Clair / Sombre de la barre changent le thème.")
+    frame(lambda: (set_min_width(max(200.0, available_width() - 8)), fn()), rounding=8.0, inner_margin=12.0, stroke=(1.0, "#80808040"))
+    add_space(10)
+
 def widget_page(w):
     heading(w["name"])
     weak(w["functions"])
     if w.get("note"):
         label(w["note"])
     separator()
+    preview(w)
     for title, part_rows in w["parts"]:
         strong(title)
 
