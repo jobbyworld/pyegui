@@ -116,9 +116,39 @@ pub fn format_date(time: Option<SystemTime>) -> String {
     }
 }
 
+/// The item that gets the selection once `gone` are removed from `items`: the one after the last of them, else the
+/// one before the first (None when nothing is left)
+pub fn next_after(items: &[PathBuf], gone: &[PathBuf]) -> Option<PathBuf> {
+    let gone: std::collections::HashSet<&PathBuf> = gone.iter().collect();
+    let last = items.iter().rposition(|p| gone.contains(p));
+    let first = items.iter().position(|p| gone.contains(p));
+    last.and_then(|i| items[i + 1..].iter().find(|p| !gone.contains(p)))
+        .or_else(|| first.and_then(|i| items[..i].iter().rev().find(|p| !gone.contains(p))))
+        .cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn paths(names: &[&str]) -> Vec<PathBuf> {
+        names.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn the_selection_goes_to_the_next_item_after_a_delete() {
+        let items = paths(&["a", "b", "c", "d"]);
+        assert_eq!(next_after(&items, &paths(&["b"])), Some(PathBuf::from("c")));
+        // several items: the one after the last of them, even when they are not together
+        assert_eq!(next_after(&items, &paths(&["a", "c"])), Some(PathBuf::from("d")));
+        // the last item goes: the one before the first
+        assert_eq!(next_after(&items, &paths(&["d"])), Some(PathBuf::from("c")));
+        assert_eq!(next_after(&items, &paths(&["c", "d"])), Some(PathBuf::from("b")));
+        // everything goes
+        assert_eq!(next_after(&items, &items), None);
+        // nothing of the list goes
+        assert_eq!(next_after(&items, &paths(&["x"])), None);
+    }
 
     #[test]
     fn history_forgets_what_was_forward() {

@@ -147,8 +147,7 @@ The repository is a Cargo workspace of three crates:
 
   `python scripts/bundle_finder_macos.py makes dist/Finder.app and dist/Finder.dmg`. The CI builds
   and attaches the executables of Windows (x64, ARM64), macOS (x86_64, aarch64) and Linux to the release.
-  Not done compared with `finder.py`: drag of files
-  out of the window, Windows Explorer integration.
+  Not done compared with `finder.py`: Windows Explorer integration.
 
 ## Source map (`src/`)
 

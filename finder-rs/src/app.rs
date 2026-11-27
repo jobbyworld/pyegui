@@ -1141,13 +1141,8 @@ impl FinderApp {
     /// The item that gets the selection once `paths` are gone: the one after the last of them in the list, else
     /// the one before the first
     fn select_next_after(&mut self, paths: &[PathBuf]) {
-        let gone: HashSet<&PathBuf> = paths.iter().collect();
-        let last = self.items.iter().rposition(|e| gone.contains(&e.path));
-        let first = self.items.iter().position(|e| gone.contains(&e.path));
-        let next = last
-            .and_then(|i| self.items[i + 1..].iter().find(|e| !gone.contains(&e.path)))
-            .or_else(|| first.and_then(|i| self.items[..i].iter().rev().find(|e| !gone.contains(&e.path))))
-            .map(|e| e.path.clone());
+        let shown: Vec<PathBuf> = self.items.iter().map(|e| e.path.clone()).collect();
+        let next = crate::model::next_after(&shown, paths);
         self.selected.clear();
         if let Some(next) = next {
             self.selected.insert(next);
@@ -3118,6 +3113,20 @@ impl eframe::App for FinderApp {
         screenshot_for_checks(ui.ctx());
         if std::env::var_os("FINDER_TAB2").is_some() && ui.ctx().cumulative_frame_nr() == 20 {
             self.open_in_new_tab(self.folder().to_path_buf()); // for the checks with two tabs of folder
+        }
+        // for the checks of the look: a pane of the dock shown by itself (FINDER_PANE=activity, tags, recent...)
+        if let Some(name) = std::env::var_os("FINDER_PANE") {
+            if ui.ctx().cumulative_frame_nr() == 20 {
+                let pane = match name.to_string_lossy().as_ref() {
+                    "activity" => Some(crate::dock::Pane::Activity),
+                    "tags" => Some(crate::dock::Pane::Tags),
+                    "recent" => Some(crate::dock::Pane::Recent),
+                    "properties" => Some(crate::dock::Pane::Properties),
+                    "actions" => Some(crate::dock::Pane::Actions),
+                    _ => None,
+                };
+                self.pending_pane = pane;
+            }
         }
         pyegui_core::native_dnd::set_window(&*frame);
         #[cfg(target_os = "macos")]
