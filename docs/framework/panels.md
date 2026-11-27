@@ -239,6 +239,8 @@ A floating window which can be moved, resized and collapsed.
 - default_width (float), default_height (float), min_width (float), min_height (float)
 - `default_pos` (tuple[float, float]): initial position of the window
 - `fixed_pos` (tuple[float, float]): the window cannot be moved from this position
+- `anchor` (str): the window is anchored to a corner or a side of the screen and cannot be moved: one of "left_top", "center_top", "right_top", "left_center", "center_center", "right_center", "left_bottom", "center_bottom", "right_bottom"
+- `anchor_offset` (tuple[float, float]): the distance from the anchor, e.g. (-8, -40) from "right_bottom" puts the window 8 points from the right edge and 40 above the bottom one
 - fill, stroke, rounding, inner_margin, outer_margin, shadow: look of the window, see the frame function
 
 **Example:**
@@ -278,6 +280,82 @@ def update_func(ctx):
         confirm.value = True
     if confirm.value and modal("confirm", confirm_ui):
         confirm.value = False
+```
+
+
+## `SettingsWindow`
+
+
+The state of a settings window: the width of its list, that the person can change with the splitter.
+Create it once, outside the update function, and draw it with settings_window().
+
+Attributes (read and write):
+    list_width (float): the width of the list at the left, from 150 points
+
+**Usage:**
+
+```python
+window_state = SettingsWindow()
+```
+
+
+- `SettingsWindow.list_width` (attribute)
+
+## `settings_window(state, items, detail, **kwargs)`
+
+A configuration window with the same frame everywhere: a title with its close cross, a list at the left
+(rows that can be moved by drag and drop, a splitter to resize it, a button at its foot to add one), the
+panel of the item chosen at the right, and a foot with the buttons of the window (the close button is
+always at the right). It is a modal window: draw it only while it must be open.
+
+It returns what happened, to be applied by the caller: `("select", id)`, `("move", from, to)` (the item at
+index `from` goes to index `to`: reorder the items), `("add",)` (the panel must show a new item: pass
+`adding=True` until it is created or given up) and `("close",)` (the cross, the close button or Escape:
+stop drawing the window).
+
+**Args**
+
+- `state` (SettingsWindow): the state, created once
+- `items` (list[dict]): the rows of the list, each a dict with `id`, `label` and an optional `hint` (a small text at the right of the row)
+- `detail` (callable): draws the panel at the right: the item chosen, or the form of a new one
+
+**Keyword args**
+
+- `selected` (str): the id of the row chosen
+- `footer` (callable): draws the left of the foot (a note, a secondary button)
+- title (str), subtitle (str): the head of the window
+- `list_title` (str): the small heading over the list
+- `add_label` (str): the text of the button at the foot of the list, "Nouveau" by default
+- `close_label` (str): the text of the close button, "Fermer" by default
+- `empty_text` (str): shown when the list has no row
+- width (float), height (float): the size of the window (720) and of the list and the panel (400)
+- `reorderable` (bool): the rows can be moved by drag and drop. True by default
+- `adding` (bool): the panel is the one of a new item, the add button is lit. False by default
+- `id` (str): tells apart two windows
+- fill, stroke, rounding, inner_margin, shadow: look of the window, see the frame function
+
+**Example:**
+
+```python
+win = SettingsWindow()
+names = ["Statut", "Client"]
+chosen = Str("Statut")
+adding = Bool(False)
+
+def detail():
+    label(chosen.value)
+
+def update_func(ctx):
+    if open_window.value:
+        items = [dict(id=n, label=n, hint="texte") for n in names]
+        for event in settings_window(win, items, detail, selected=chosen.value, title="Propriétés",
+                                     add_label="Nouvelle propriété", adding=adding.value):
+            if event[0] == "select":
+                chosen.value = event[1]
+            elif event[0] == "move":
+                names.insert(event[2], names.pop(event[1]))
+            elif event[0] == "close":
+                open_window.value = False
 ```
 
 

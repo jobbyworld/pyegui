@@ -981,6 +981,12 @@ pub fn paint_list_row(
         if visible.width() <= 0.0 {
             continue;
         }
+        // the separator at the left of the column, inside its zone
+        let zone = zones.zone_rect(rect, placed.zone);
+        if cell.left() > zone.left() + 0.5 && cell.left() < zone.right() {
+            let line = Stroke::new(1.0, row_ui.visuals().widgets.noninteractive.bg_stroke.color.gamma_multiply(0.6));
+            row_ui.painter().with_clip_rect(zone).vline(cell.left(), rect.y_range(), line);
+        }
         // a column pinned or scrolling is cut by its zone
         let mut zone_ui = row_ui.new_child(egui::UiBuilder::new().max_rect(rect));
         zone_ui.shrink_clip_rect(visible);
@@ -994,7 +1000,7 @@ pub fn paint_list_row(
                         .max_rect(cell.shrink2(vec2(8.0, 0.0)))
                         .layout(egui::Layout::left_to_right(Align::Center)),
                 );
-                cell_ui.shrink_clip_rect(cell);
+                cell_ui.shrink_clip_rect(visible);
                 (hooks.extras[*k].cell)(&mut cell_ui, &e.path);
                 continue;
             }
@@ -1483,6 +1489,8 @@ pub struct TreeLayout {
     pub scroll: f32,
     /// the width of the tree is known: the header can be drawn
     pub finite: bool,
+    /// the left edge of the tree, where the header starts: the cells of the rows are placed from it
+    pub origin_x: Option<f32>,
 }
 
 impl TreeLayout {
@@ -1502,7 +1510,7 @@ impl TreeLayout {
         widths.extend(columns.iter().map(|(_, w)| *w));
         let zones = Zones::new(&keys, &widths, state, width, Some("name"));
         let scroll = state.scroll.clamp(0.0, zones.max_scroll());
-        TreeLayout { width, name, zones, scroll, finite }
+        TreeLayout { width, name, zones, scroll, finite, origin_x: None }
     }
 }
 
@@ -1524,9 +1532,17 @@ pub fn with_tree_accessory<'a>(
     }
     b.accessory(move |ui| {
         let area = ui.max_rect();
-        let row = Rect::from_min_max(pos2(area.right() - layout.width, area.top()), area.max);
+        // from the left edge of the tree, like the header: the right of a row is not the right of the tree
+        let left = layout.origin_x.unwrap_or(area.right() - layout.width);
+        let row = Rect::from_min_max(pos2(left, area.top()), pos2(left + layout.width, area.bottom()));
         // the left edge of the first column
         let first = row.left() + layout.name;
+        // the room of the columns (and of the badges) is taken from the label, which truncates its
+        // text to the name column instead of running under the cells
+        if layout.finite {
+            let dots = if badges.is_empty() { 0.0 } else { dots_width(&badges, 9.0) + 8.0 };
+            ui.allocate_space(vec2((area.right() - first).max(0.0) + dots, 1.0));
+        }
         for placed in layout.zones.placed.iter().filter(|p| p.index > 0) {
             let (column, width) = &columns[placed.index - 1];
             let cell = layout.zones.cell_rect(row, placed, layout.scroll);
@@ -1785,6 +1801,9 @@ pub fn draw_tree(
     let available = ui.available_width();
     let mut layout = Some(TreeLayout::new(available, &columns, hooks, &view.borrow().columns));
     let origin_x = ui.cursor().min.x;
+    if let Some(l) = layout.as_mut() {
+        l.origin_x = Some(origin_x);
+    }
     // the room of the header, which is drawn once the rows are, over them
     let slot = match (&layout, *header) {
         (Some(layout), true) if layout.finite && (!columns.is_empty() || !view.borrow().columns.catalog.is_empty()) => Some(ui.allocate_exact_size(vec2(layout.width, columns::HEADER_H), Sense::hover()).0),
@@ -1935,10 +1954,29 @@ pub fn draw_tree(
         let below = (slot.bottom() + shift).max(full_clip.top()).min(full_clip.bottom().max(full_clip.top()));
         ui.shrink_clip_rect(Rect::from_min_max(pos2(full_clip.left(), below), full_clip.max));
     }
+    // a tree of a known width: the rows keep to it, so the names are cut before the columns
+    if let Some(l) = layout.as_ref().filter(|l| l.finite) {
+        tree = tree.min_width(l.width).max_width(l.width);
+    }
+    let rows_top = slot.as_ref().map(|slot| (slot.bottom() + (full_clip.top() - slot.top()).max(0.0)).max(full_clip.top()).min(full_clip.bottom().max(full_clip.top()))).unwrap_or(full_clip.top());
     let (tree_response, actions) = tree.show_state(ui, &mut state, |builder| {
         add_tree_nodes(builder, &nodes, &ctx, show_root, activatable_dirs, hooks, &columns, layout.as_ref(), date_format)
     });
     ui.set_clip_rect(full_clip);
+    // the separators of the columns, one line over all the rows (not one piece per row)
+    if let Some(l) = layout.as_ref().filter(|l| l.finite) {
+        let line = Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color.gamma_multiply(0.6));
+        let clip = Rect::from_min_max(pos2(full_clip.left(), rows_top), full_clip.max);
+        let painter = ui.painter().with_clip_rect(clip);
+        let row = Rect::from_min_size(pos2(origin_x, tree_top.y), vec2(l.width, tree_response.rect.bottom() - tree_top.y));
+        for placed in l.zones.placed.iter().filter(|p| p.index > 0) {
+            let zone = l.zones.zone_rect(row, placed.zone);
+            let x = l.zones.cell_rect(row, placed, l.scroll).left();
+            if x > zone.left() + 0.5 && x < zone.right() {
+                painter.vline(x, row.y_range(), line);
+            }
+        }
+    }
 
     // files from the Finder or from the window over the tree: the folder under the pointer takes them
     let mut drop_target = None;

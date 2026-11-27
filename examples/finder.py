@@ -68,6 +68,9 @@ def dlog(category, message):
 
 from pyegui import (
     RGB,
+    RGBA,
+    drag_float,
+    color_edit_button_rgba,
     table,
     TableView,
     FileTransfer,
@@ -146,6 +149,8 @@ from pyegui import (
     pointer_pressed,
     PropertySet,
     property_set,
+    SettingsWindow,
+    settings_window,
     choice_edit,
     radio_value,
     run_native,
@@ -283,7 +288,8 @@ CREATE TABLE IF NOT EXISTS meta_rules (
     id INTEGER PRIMARY KEY,
     root TEXT NOT NULL,
     pattern TEXT NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1
+    enabled INTEGER NOT NULL DEFAULT 1,
+    name TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -436,6 +442,10 @@ class TagStore:
                     "(SELECT COALESCE(MAX(position) + 1, 0) FROM favorites))",
                     (path, title, icon),
                 )
+        # bases made before the rules had a name
+        rule_columns = {row[1] for row in self.db.execute("PRAGMA table_info(meta_rules)")}
+        if rule_columns and "name" not in rule_columns:
+            self.db.execute("ALTER TABLE meta_rules ADD COLUMN name TEXT NOT NULL DEFAULT ''")
         # bases made before the index have only the first columns of files
         have = {row[1] for row in self.db.execute("PRAGMA table_info(files)")}
         for column, kind in INDEX_COLUMNS.items():
@@ -1297,8 +1307,8 @@ class TagStore:
     # and what they are called goes in the properties of those names
 
     def meta_rules(self):
-        rows = self.db.execute("SELECT id, root, pattern, enabled FROM meta_rules ORDER BY id").fetchall()
-        return [{"id": i, "root": root, "pattern": pattern, "enabled": bool(enabled)} for i, root, pattern, enabled in rows]
+        rows = self.db.execute("SELECT id, root, pattern, enabled, name FROM meta_rules ORDER BY id").fetchall()
+        return [{"id": i, "root": root, "pattern": pattern, "enabled": bool(enabled), "name": name} for i, root, pattern, enabled, name in rows]
 
     def add_meta_rule(self, root, pattern):
         """a rule; None if the pattern names nothing"""
@@ -1312,8 +1322,8 @@ class TagStore:
 
     def update_meta_rule(self, rule):
         self.db.execute(
-            "UPDATE meta_rules SET root = ?, pattern = ?, enabled = ? WHERE id = ?",
-            (rule["root"], rule["pattern"].strip(), int(rule["enabled"]), rule["id"]),
+            "UPDATE meta_rules SET root = ?, pattern = ?, enabled = ?, name = ? WHERE id = ?",
+            (rule["root"], rule["pattern"].strip(), int(rule["enabled"]), rule.get("name", "").strip(), rule["id"]),
         )
         self.changed()
 
@@ -1992,9 +2002,8 @@ tags = (
     TagStore()
 )  # the tags and what they are put on, in a SQLite file, see TagStore
 tag_filter = Int(0)  # id of the tag whose items are shown instead of a folder, or 0
-tag_manager_open = Bool(
-    False
-)  # the window to create, rename, recolor, move and delete tags
+tag_title = {"id": 0, "fresh": False}  # the tag whose name is edited in the title of its view
+tag_title_text = Str("")
 tag_picker_open = Bool(False)  # the window to put tags on the selected items
 tag_edit = {
     "id": 0,
@@ -2100,24 +2109,135 @@ view = Int(TREE)
 search = Str("")
 show_sidebar = Bool(True)
 blue_folders = Bool(not MACOS)  # Windows: the folders in the blue of the Finder, not the yellow of the Explorer
-# a picture as the backdrop of the window (ctx.set_backdrop_image), with a filter for each theme
-BACKGROUND_FITS = ["cover", "contain", "stretch", "center"]
+# the look of the app, one for each theme (light, dark), like finder-rs: the background (the glass of the system, a
+# picture or a color), the three glasses, the outlines, the text; and the fonts and the accent, for both themes
 BACKGROUND_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
-bg_on = Bool(False)  # the mode "Image": the picture is shown (with the full glass, or it would be hidden)
-bg_mode = Int(0)  # the segment of the mode control: flat, partial glass, full glass, image
-bg_edit = Int(1)  # the theme whose sliders are shown in the window: 0 light, 1 dark
-bg_image = Str("")
-bg_luminance = {"light": Float(1.0), "dark": Float(0.6)}
-bg_saturation = {"light": Float(1.0), "dark": Float(0.9)}
-bg_auto = Bool(True)  # the luminance is measured and set for the theme, the sliders of it are off
-bg_scrim = {"light": Float(0.55), "dark": Float(0.3)}  # a veil over the picture, white or black
-bg_contrast = {"light": Float(0.5), "dark": Float(0.6)}  # less than 1 flattens the picture: the text reads better
-bg_blur = Float(12.0)
-bg_opacity = Float(1.0)
+BACKGROUND_COLORS = ((235, 235, 240), (22, 24, 30))  # the plain background of the light and of the dark theme
+LAYER_NAMES = ("Barre latérale", "Contenu inactif", "Contenu actif")
+# the tint and the opacity of the three glasses (sidebar, inactive content, active content), light then dark
+LAYER_DEFAULTS = (
+    (((240, 240, 246), 0.55), ((232, 232, 238), 0.5), ((251, 251, 253), 0.9)),
+    (((24, 26, 34), 0.55), ((28, 30, 38), 0.5), ((36, 38, 46), 0.9)),
+)
+
+
+def unit(color):
+    return tuple(c / 255 for c in color)
+
+
+def rgb_of(holder):
+    return tuple(round(max(0.0, min(1.0, c)) * 255) for c in (holder.r, holder.g, holder.b))
+
+
+class Look:
+    """the settings of one theme. A color that was never chosen is not applied: the one of the style stays"""
+
+    def __init__(self, dark):
+        self.dark = dark
+        self.reset()
+
+    def reset(self):
+        d = self.dark
+        self.background = Int(0 if BACKDROP is not None else 2)  # 0 glass of the system, 1 picture, 2 plain color
+        self.color = RGB(*unit(BACKGROUND_COLORS[d]))
+        self.color_set = False
+        self.image = Str("")
+        self.blur = Int(0)
+        self.contrast = Int(100)
+        self.saturation = Int(100)
+        self.layers = [RGBA(*unit(tint), opacity) for tint, opacity in LAYER_DEFAULTS[d]]
+        self.layer_set = [False, False, False]
+        self.outline = [RGBA(0.5, 0.5, 0.5, 0.27), RGBA(0.5, 0.5, 0.5, 0.14)]  # active tabs and panes, inactive tabs
+        self.outline_set = [False, False]
+        self.outline_width = [Float(1.0), Float(1.0)]
+        self.text = RGB(*unit((230, 230, 235) if d else (30, 30, 34)))
+        self.text_set = False
+
+    def style_signature(self):
+        """what the style of the app is made from (not the background, which has its own)"""
+        return (
+            tuple(l.to_tuple() if s else None for l, s in zip(self.layers, self.layer_set)),
+            tuple(o.to_tuple() if s else None for o, s in zip(self.outline, self.outline_set)),
+            tuple(round(w.value, 2) for w in self.outline_width),
+            rgb_of(self.text) if self.text_set else None,
+        )
+
+    def background_signature(self):
+        return (
+            self.background.value,
+            rgb_of(self.color),
+            self.image.value,
+            self.blur.value,
+            self.contrast.value,
+            self.saturation.value,
+        )
+
+    def to_dict(self):
+        return {
+            "background": self.background.value,
+            "color": list(rgb_of(self.color)) if self.color_set else None,
+            "image": self.image.value,
+            "blur": self.blur.value,
+            "contrast": self.contrast.value,
+            "saturation": self.saturation.value,
+            "layers": [list(l.to_tuple()) if s else None for l, s in zip(self.layers, self.layer_set)],
+            "outline": [list(o.to_tuple()) if s else None for o, s in zip(self.outline, self.outline_set)],
+            "outline_width": [w.value for w in self.outline_width],
+            "text": list(rgb_of(self.text)) if self.text_set else None,
+        }
+
+    def load(self, saved):
+        if not isinstance(saved, dict):
+            return
+
+        def numbers(value, count):
+            return isinstance(value, (list, tuple)) and len(value) == count and all(isinstance(v, (int, float)) for v in value)
+
+        if saved.get("background") in (0, 1, 2) and not (saved["background"] == 0 and BACKDROP is None):
+            self.background.value = saved["background"]
+        if numbers(saved.get("color"), 3):
+            self.color.r, self.color.g, self.color.b = unit(saved["color"])
+            self.color_set = True
+        if isinstance(saved.get("image"), str):
+            self.image.value = saved["image"]
+        for holder, key in ((self.blur, "blur"), (self.contrast, "contrast"), (self.saturation, "saturation")):
+            if isinstance(saved.get(key), int):
+                holder.value = saved[key]
+        for i, value in enumerate(saved.get("layers") or []):
+            if i < 3 and numbers(value, 4):
+                r, g, b, a = value
+                self.layers[i].r, self.layers[i].g, self.layers[i].b, self.layers[i].a = r / 255, g / 255, b / 255, a / 255
+                self.layer_set[i] = True
+        for i, value in enumerate(saved.get("outline") or []):
+            if i < 2 and numbers(value, 4):
+                r, g, b, a = value
+                self.outline[i].r, self.outline[i].g, self.outline[i].b, self.outline[i].a = r / 255, g / 255, b / 255, a / 255
+                self.outline_set[i] = True
+        for i, value in enumerate(saved.get("outline_width") or []):
+            if i < 2 and isinstance(value, (int, float)):
+                self.outline_width[i].value = float(value)
+        if numbers(saved.get("text"), 3):
+            self.text.r, self.text.g, self.text.b = unit(saved["text"])
+            self.text_set = True
+
+
+looks = [Look(False), Look(True)]
+font_choice = {"ui": Int(0), "terminal": Int(0)}  # the index in installed_fonts(), 0 for the default font
+font_sizes = {"ui": Float(14.0), "terminal": Float(13.0)}
+accent_custom = Bool(False)  # the accent is the color of the picker, not one of ACCENTS
+accent_rgb = RGB(*unit((0x3B, 0x82, 0xF6)))
 term_opacity = Float(0.2)  # how opaque the background of the terminals is, 1 is opaque
-bg_fit = Int(0)  # the index of BACKGROUND_FITS
-bg_open = Bool(False)  # the window of the settings of the picture
-bg_applied = [None]  # what was given to pyegui last, it is given again when it changes
+bg_open = Bool(False)  # the panel of the look
+look_applied = {"style": None, "background": None, "fonts": None}  # what was given to pyegui last
+
+
+def current_look():
+    return looks[1 if context[0].is_dark_theme else 0]
+
+
+def accent_value():
+    """the accent: the color of the picker, or one of the four first"""
+    return "#%02x%02x%02x" % rgb_of(accent_rgb) if accent_custom.value else ACCENTS[accent_name.value]
 show_hidden = Bool(False)  # the hidden items (a name with a dot, a hidden flag), faded when shown
 path_editing = Bool(False)  # the path bar is a text field holding the full path
 path_text = Str("")
@@ -2351,7 +2471,9 @@ shell_folder = {"path": start}  # where the shell was sent last
 
 def cd_command(folder):
     if sys.platform == "win32":
-        return f'cd /d "{folder}"'
+        # PowerShell, the shell of the terminal on Windows (`cd /d` is the syntax of cmd.exe): the quotes of the
+        # path are doubled and nothing in it is read as a wildcard
+        return "Set-Location -LiteralPath '" + str(folder).replace("'", "''") + "'"
     return f" cd {shlex.quote(str(folder))}"  # the leading space keeps it out of the history
 
 
@@ -2517,7 +2639,6 @@ def popup_open():
         palette_open.value
         or renaming.value
         or tag_picker_open.value
-        or tag_manager_open.value
         or meta_open["manager"]
         or meta_open["rules"]
         or delete_ask["paths"]
@@ -2607,134 +2728,317 @@ def apply_style():
     else:
         ctx.set_system_theme()
     ctx.reset_style()
+    accent = accent_value()
     if glass.value != NO_GLASS:
         ctx.set_glass_style(
-            accent=ACCENTS[accent_name.value],
+            accent=accent,
             mode="full" if glass.value == FULL else "partial",
             opacity=GLASS_OPACITY,
             **GLASS_LEVELS,
         )
     else:
-        ctx.set_accent(ACCENTS[accent_name.value])
-    dock.set_style(tab_style="pill" if pill_tabs.value else "classic")
+        ctx.set_accent(accent)
+    look = current_look()
+    changes = {}
+    if look.text_set:
+        changes["text_color"] = rgb_of(look.text)
+    if abs(font_sizes["ui"].value - 14.0) > 0.05:
+        changes["body_size"] = font_sizes["ui"].value
+    if changes:
+        ctx.set_style(**changes)
+    ui_font = font_path("ui")
+    if ui_font:
+        try:
+            ctx.set_font(ui_font)
+        except OSError:
+            pass
+    for terminal_state in (shell, python):
+        terminal_state.font = font_path("terminal") or nerd_font()
+        terminal_state.font_size = font_sizes["terminal"].value
+    apply_dock_style()
     apply_gaps()
     ctx.set_backdrop_blur(BACKDROP_BLUR)  # macOS only, added to the blur of the backdrop
 
 
+def apply_dock_style():
+    """the dock: its tabs and its outlines take the glasses and the outlines chosen in the look"""
+    look = current_look()
+    dock.reset_style()
+    dock.set_style(
+        tab_style="pill" if pill_tabs.value else "classic",
+        tab_bar_height=26,
+        pane_margin=DOCK_PANE_MARGIN,
+        gap_width=GAP,
+        resize_stroke=(1, (0, 0, 0, 0)),
+    )
+    for key, k in (("active_tab_stroke", 0), ("pane_stroke", 0), ("inactive_tab_stroke", 1)):
+        color = look.outline[k].to_tuple() if look.outline_set[k] else EDGE[1]
+        dock.set_style(**{key: (look.outline_width[k].value, color)})
+    inactive, active = layer_fill(1), layer_fill(2)
+    if inactive:
+        dock.set_style(tab_bar_color=inactive, inactive_tab_fill=inactive)
+    if active:
+        dock.set_style(active_tab_fill=active)
+
+
+def installed_fonts():
+    """the font files installed (.ttf and .otf) by name, sorted: the choices of the fonts of the app"""
+    if "list" not in font_cache:
+        folders = [Path("/Library/Fonts"), Path("/System/Library/Fonts"), Path("/System/Library/Fonts/Supplemental"), Path("/usr/share/fonts")]
+        folders += [Path(r"C:\Windows\Fonts"), HOME / "Library" / "Fonts", HOME / ".local" / "share" / "fonts"]
+        if os.environ.get("LOCALAPPDATA"):
+            folders.append(Path(os.environ["LOCALAPPDATA"]) / "Microsoft" / "Windows" / "Fonts")
+        found = {}
+        for folder in folders:
+            if not folder.is_dir():
+                continue
+            try:
+                for path in folder.rglob("*"):
+                    if path.suffix.lower() in (".ttf", ".otf") and path.stem not in found:
+                        found[path.stem] = str(path)
+            except OSError:
+                pass
+        font_cache["list"] = sorted(found.items(), key=lambda item: item[0].lower())
+    return font_cache["list"]
+
+
+font_cache = {}
+
+
+def font_path(which):
+    """the file of the font chosen for the interface or the terminals, None for the default one"""
+    index = font_choice[which].value
+    fonts = installed_fonts()
+    return fonts[index - 1][1] if 0 < index <= len(fonts) else None
+
+
+def layer_fill(index):
+    """the fill chosen for a glass, None while it has the one of the style"""
+    look = current_look()
+    return look.layers[index].to_tuple() if look.layer_set[index] else None
+
+
+def layer_kwargs(index):
+    fill = layer_fill(index)
+    return {"fill": fill} if fill else {}
+
+
+def solid_png(color):
+    """a small picture of one color: the plain background is a picture without filters"""
+    import struct
+    import tempfile
+    import zlib
+
+    path = Path(tempfile.gettempdir()) / ("finder-background-%02x%02x%02x.png" % tuple(color))
+    if not path.exists():
+        size = 4
+        raw = b"".join(b"\x00" + bytes(color) * size for _ in range(size))
+
+        def chunk(kind, data):
+            return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+        png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+        path.write_bytes(png)
+    return str(path)
+
+
 def background_path():
     """the picture of the backdrop if it can be read, else None"""
-    path = bg_image.value.strip().strip("'\"")
+    path = current_look().image.value.strip().strip("'\"")
     return path if path and Path(path).is_file() else None
 
 
 def apply_background():
-    """gives the picture and its filters to pyegui when one of them changed"""
-    wanted = (
-        background_path() if bg_on.value else None,
-        "auto" if bg_auto.value else (bg_luminance["light"].value, bg_luminance["dark"].value),
-        (bg_saturation["light"].value, bg_saturation["dark"].value),
-        bg_blur.value,
-        (bg_contrast["light"].value, bg_contrast["dark"].value),
-        (bg_scrim["light"].value, bg_scrim["dark"].value),
-        bg_opacity.value,
-        BACKGROUND_FITS[bg_fit.value],
+    """gives the picture (or the plain color) and its filters to pyegui when one of them changed"""
+    look = current_look()
+    mode = look.background.value if BACKDROP is not None or look.background.value else 2
+    wanted = (mode, look.dark, background_path() if mode == 1 else None, *look.background_signature()[1:])
+    if wanted == look_applied["background"]:
+        return
+    look_applied["background"] = wanted
+    ctx = context[0]
+    if mode == 0:
+        ctx.set_backdrop_image(None)
+        ctx.set_backdrop_blur(look.blur.value or BACKDROP_BLUR)  # macOS only
+        return
+    ctx.set_backdrop_blur(BACKDROP_BLUR)
+    if mode == 2:
+        ctx.set_backdrop_image(solid_png(rgb_of(look.color)), luminance=1.0, saturation=1.0, blur=0.0, contrast=1.0, scrim=0.0, opacity=1.0, fit="stretch")
+        return
+    ctx.set_backdrop_image(
+        background_path(),
+        luminance=1.0,
+        saturation=look.saturation.value / 100,
+        blur=float(look.blur.value),
+        contrast=look.contrast.value / 100,
+        scrim=0.0,
+        opacity=1.0,
+        fit="cover",
     )
-    if wanted != bg_applied[0]:
-        bg_applied[0] = wanted
-        path, lum, sat, blur, contrast, scrim, opacity, fit = wanted
-        context[0].set_backdrop_image(path, luminance=lum, saturation=sat, blur=blur, contrast=contrast, scrim=scrim, opacity=opacity, fit=fit)
 
 
-def set_mode(index):
-    """flat (no glass), partial glass, full glass, or image (the full glass with the picture behind)"""
-    set_glass(FULL if index == 3 else index)
-    bg_on.value = index == 3
+def apply_look():
+    """the style and the background follow the choices of the panel; run at every frame, it acts when one changed"""
+    look = current_look()
+    fonts = (font_choice["ui"].value, font_choice["terminal"].value, round(font_sizes["ui"].value, 1), round(font_sizes["terminal"].value, 1))
+    wanted = (look.dark, theme.value, glass.value, accent_value(), pill_tabs.value, fonts, look.style_signature())
+    if wanted != look_applied["style"]:
+        look_applied["style"] = wanted
+        apply_style()
+    apply_background()
+
+
+def set_mode_for_background():
+    """a picture or a color behind the app is seen through the full glass only"""
+    if current_look().background.value != 0 and glass.value != FULL:
+        glass.value = FULL
+        apply_style()
+
+
+look_set = PropertySet()  # the look of the panel: by group or by name, the groups folded, the filter
+
+
+def hex_of(color, alpha=False):
+    return "#%02x%02x%02x" % tuple(color[:3]) + ("%02x" % color[3] if alpha else "")
+
+
+def set_holder_color(holder, text, alpha=False):
+    """the holder takes a "#rrggbb[aa]" color"""
+    t = text.lstrip("#")
+    values = [int(t[i : i + 2], 16) / 255 for i in range(0, len(t), 2)]
+    holder.r, holder.g, holder.b = values[:3]
+    if alpha and len(values) > 3:
+        holder.a = values[3]
+
+
+def look_properties():
+    """the rows of the panel of the look: the accent, the fonts, then for the theme shown the background, the glasses,
+    the outlines and the text. A group is a set of properties of one subject: a property is added to its group"""
+    look = current_look()
+    theme_name = "thème sombre" if look.dark else "thème clair"
+    fonts = installed_fonts()
+    font_options = [dict(id="0", label="Par défaut")] + [dict(id=str(i + 1), label=name) for i, (name, _) in enumerate(fonts)]
+    rows = []
+
+    def add(id, name, group, type, value, description="", **more):
+        rows.append(dict(id=id, name=name, group=group, type=type, value=value, description=description, **more))
+
+    general = "Général"
+    add("accent", "Accent", general, "color", hex_of(rgb_of(accent_rgb)), "La couleur de la sélection, des liens et des onglets actifs")
+    add("tabs", "Onglets", general, "choice", "pill" if pill_tabs.value else "classic", options=[dict(id="classic", label="Classiques"), dict(id="pill", label="En pilule")])
+    if not MACOS:
+        add("blue", "Dossiers bleus", general, "bool", blue_folders.value, "Les dossiers de Windows dans le bleu du Finder, pas dans le jaune de l'Explorateur")
+    fonts_group = "Polices"
+    add("font.ui", "Police", fonts_group, "choice", str(font_choice["ui"].value), "La police de l'interface", options=font_options)
+    add("font.ui_size", "Taille", fonts_group, "range", str(round(font_sizes["ui"].value)), "La taille des textes de l'interface", min=9, max=24, integer=True, unit=" pt")
+    add("font.terminal", "Terminal", fonts_group, "choice", str(font_choice["terminal"].value), "La police des terminaux", options=font_options)
+    add("font.terminal_size", "Taille du terminal", fonts_group, "range", str(round(font_sizes["terminal"].value)), min=8, max=30, integer=True, unit=" pt")
+    back = f"Fond ({theme_name})"
+    modes = ([dict(id="0", label="Vitre")] if BACKDROP is not None else []) + [dict(id="1", label="Image"), dict(id="2", label="Couleur")]
+    mode = look.background.value
+    add("bg.mode", "Fond", back, "choice", str(mode), "Ce qu'il y a derrière les vitres : la vitre du système, une image ou une couleur", options=modes)
+    if mode != 2:
+        # the blur of the glass of the system is only set on macOS
+        unavailable = mode == 0 and not MACOS
+        add("bg.blur", "Flou", back, "range", str(look.blur.value), min=0, max=40, integer=True, readonly=unavailable)
+        add("bg.contrast", "Contraste", back, "range", str(look.contrast.value), min=50, max=200, integer=True, unit=" %", readonly=unavailable or mode == 0)
+        add("bg.saturation", "Saturation", back, "range", str(look.saturation.value), min=0, max=200, integer=True, unit=" %", readonly=unavailable or mode == 0)
+    if mode == 1:
+        add("bg.image", "Image", back, "text", look.image.value, "Le chemin d'une image, ou « Utiliser la sélection »", hint="Chemin")
+        chosen = Path(selected.value) if selected.value else None
+        if chosen and chosen.suffix.lower() in BACKGROUND_TYPES:
+            add("bg.pick", "Utiliser la sélection", back, "action", "", f"Prend « {chosen.name} » comme image", label=chosen.name)
+    if mode == 2:
+        add("bg.color", "Couleur", back, "color", hex_of(rgb_of(look.color)))
+    glasses = f"Vitres ({theme_name})"
+    for i, name in enumerate(LAYER_NAMES):
+        add(f"layer.{i}", name, glasses, "color", hex_of(look.layers[i].to_tuple(), True), "La teinte et la transparence de la vitre", alpha=True)
+    outlines = f"Contours ({theme_name})"
+    for k, name in enumerate(("Contour actif", "Contour inactif")):
+        add(f"outline.{k}", name, outlines, "color", hex_of(look.outline[k].to_tuple(), True), alpha=True)
+        add(f"outline_width.{k}", "Épaisseur " + ("active" if k == 0 else "inactive"), outlines, "range", str(look.outline_width[k].value), min=0, max=6, unit=" pt")
+    text = f"Texte ({theme_name})"
+    add("text", "Texte", text, "color", hex_of(rgb_of(look.text)))
+    add("reset", "Par défaut", text, "action", "", "Remet le fond, les vitres, les contours et le texte de ce thème", label="Rétablir ce thème")
+    add("terminal.opacity", "Opacité du terminal", "Terminal", "range", str(round(term_opacity.value * 100)), min=0, max=100, integer=True, unit=" %")
+    return rows
+
+
+def apply_look_change(change):
+    """what the person changed in the panel goes to the holders; the style and the background follow at the next frame"""
+    look = current_look()
+    action, id = change[0], change[1]
+    value = change[2] if action == "set" else None
+    if action == "choose":
+        value = change[2][0] if change[2] else "0"
+    if id == "accent":
+        set_holder_color(accent_rgb, value)
+        accent_custom.value = True
+    elif id == "tabs":
+        set_tab_style(value == "pill")
+    elif id == "blue":
+        set_blue(value == "1")
+    elif id in ("font.ui", "font.terminal"):
+        font_choice[id.split(".")[1]].value = int(value)
+    elif id in ("font.ui_size", "font.terminal_size"):
+        font_sizes[id.split(".")[1].replace("_size", "")].value = float(value)
+    elif id == "bg.mode":
+        look.background.value = int(value)
+    elif id in ("bg.blur", "bg.contrast", "bg.saturation"):
+        getattr(look, id.split(".")[1]).value = int(float(value))
+    elif id == "bg.image":
+        look.image.value = value
+    elif id == "bg.pick":
+        look.image.value = selected.value
+    elif id == "bg.color":
+        set_holder_color(look.color, value)
+        look.color_set = True
+    elif id.startswith("layer."):
+        i = int(id.split(".")[1])
+        set_holder_color(look.layers[i], value, alpha=True)
+        look.layer_set[i] = True
+    elif id.startswith("outline."):
+        k = int(id.split(".")[1])
+        set_holder_color(look.outline[k], value, alpha=True)
+        look.outline_set[k] = True
+    elif id.startswith("outline_width."):
+        look.outline_width[int(id.split(".")[1])].value = float(value)
+    elif id == "text":
+        set_holder_color(look.text, value)
+        look.text_set = True
+    elif id == "reset":
+        look.reset()
+    elif id == "terminal.opacity":
+        term_opacity.value = float(value) / 100
 
 
 def background_window():
-    """the floating window of the look of the app: the mode (flat, partial glass, full glass, image)
-    and, in the mode image, the picture with its filters. The sliders are those of one theme, chosen
-    with the sun and the moon. The changes show at once behind the app"""
-    bg_mode.value = 3 if bg_on.value else glass.value
-    if segmented_control(
-        bg_mode,
-        [(None, "Plat"), (None, "Partielle"), (None, "Complète"), (svg("image"), "Image")],
-        size=14,
-        tint=icon_tint(),
-        tooltips=[
-            "Sans vitre: des surfaces opaques",
-            "Vitre partielle: la barre latérale et les barres sont en verre, le contenu "
-            "(zone centrale et volets du dock) est une feuille presque opaque, "
-            "et les menus et fenêtres sont opaques à environ 93 %",
-            "Vitre complète: toutes les surfaces sont en verre, contenu compris, "
-            "et les menus et fenêtres sont plus translucides (environ 80 %)",
-            "Vitre complète avec une image de fond derrière",
-        ],
-    ):
-        set_mode(bg_mode.value)
-    separator()
+    """the panel of the look of the app, over the gear: a property set (see property_set) with a group for each subject
+    (the accent, the fonts, the background, the glasses, the outlines, the text), the groups of the theme shown being
+    those of the light or of the dark theme. A property is added to a group by adding a row to look_properties()"""
+    set_width(340)
 
-    def choices(title, items, current_value, setter):
-        def row():
-            small(title)
-            for value, text in items:
-                if selectable_label_clicked(current_value == value, text):
-                    setter(value)
+    def rows():
+        for change in property_set(
+            look_set,
+            look_properties(),
+            key="look-dark" if current_look().dark else "look-light",
+            default_group="Général",
+            grouped_label="Par groupe",
+            alphabetical_label="A–Z",
+            filter_hint="Filtrer",
+            empty_text="Aucune propriété",
+            description=False,
+            row_height=28,
+        ):
+            apply_look_change(change)
 
-        horizontal(row)
+    def bounded():
+        set_max_height(560)
+        scroll_area_vertical(rows)
 
-    choices("Accent", [("Blue", "Bleu"), ("Violet", "Violet"), ("Green", "Vert"), ("Orange", "Orange")], accent_name.value, set_accent_name)
-    choices("Onglets", [(False, "Classiques"), (True, "En pilule")], pill_tabs.value, set_tab_style)
-    if not MACOS:
-        before_blue = blue_folders.value
-        toggle_value(blue_folders, "Dossiers bleus")
-        if blue_folders.value != before_blue:
-            set_blue(blue_folders.value)
-    slider_float(term_opacity, 0.0, 1.0, "Opacité du terminal")
-    if not bg_on.value:
-        weak("Le mode Image montre une image de fond derrière la vitre")
-        return
-    separator()
-    text_edit_singleline(bg_image, hint_text="Chemin de l'image")
-    chosen = Path(selected.value) if selected.value else None
-    if chosen and chosen.suffix.lower() in BACKGROUND_TYPES:
-        if button_clicked(f"Utiliser « {chosen.name} »"):
-            bg_image.value = str(chosen)
-    if bg_image.value and not background_path():
-        weak("Fichier introuvable")
-    elif context[0].backdrop_image_error():
-        weak("⚠ " + context[0].backdrop_image_error())
-    separator()
-    # the theme of the whole app: the sliders below are those of the theme chosen
-    if segmented_control(bg_edit, [(svg("sun"), "Clair"), (svg("moon"), "Sombre")], size=14, tint=icon_tint()):
-        set_theme(bg_edit.value)
-    name = "dark" if bg_edit.value else "light"
-    toggle_value(bg_auto, "Luminance automatique")
-    add_enabled(not bg_auto.value, lambda: slider_float(bg_luminance[name], 0.0, 2.0, "Luminance"))
-    slider_float(bg_saturation[name], 0.0, 2.0, "Saturation")
-    slider_float(bg_contrast[name], 0.0, 1.5, "Contraste")
-    slider_float(bg_scrim[name], 0.0, 0.9, "Voile")
-    separator()
-    slider_float(bg_blur, 0.0, 60.0, "Flou")
-    slider_float(bg_opacity, 0.0, 1.0, "Transparence")
-    segmented_control(bg_fit, [(None, text) for text in BACKGROUND_FITS])
-    separator()
-
-    def buttons():
-        if button_clicked("Réinitialiser"):
-            for holder in (*bg_luminance.values(), *bg_saturation.values(), bg_opacity):
-                holder.value = 1.0
-            bg_luminance["dark"].value = 0.6
-            bg_saturation["dark"].value = 0.9
-            bg_scrim["light"].value, bg_scrim["dark"].value = 0.55, 0.3
-            bg_contrast["light"].value, bg_contrast["dark"].value = 0.5, 0.6
-            bg_auto.value = True
-            bg_blur.value = 12.0
-            term_opacity.value = 0.2
-        if button_clicked("Retirer l'image"):
-            bg_image.value = ""
-
-    horizontal(buttons)
+    vertical(bounded)
+    set_mode_for_background()
 
 
 def apply_gaps():
@@ -2760,18 +3064,9 @@ def snapshot():
         "index_ignore": {"hidden": index_ignore_hidden.value, "names": list(index_ignore_names)},
         "meta_columns": list(meta_columns),
         "meta_seen": list(meta_seen),
-        "background": {
-            "on": bg_on.value,
-            "image": bg_image.value,
-            "luminance": {k: v.value for k, v in bg_luminance.items()},
-            "saturation": {k: v.value for k, v in bg_saturation.items()},
-            "auto": bg_auto.value,
-            "scrim": {k: v.value for k, v in bg_scrim.items()},
-            "contrast": {k: v.value for k, v in bg_contrast.items()},
-            "blur": bg_blur.value,
-            "opacity": bg_opacity.value,
-            "fit": bg_fit.value,
-        },
+        "looks": [look.to_dict() for look in looks],
+        "fonts": {"ui": font_choice["ui"].value and font_path("ui"), "terminal": font_choice["terminal"].value and font_path("terminal"), "ui_size": font_sizes["ui"].value, "terminal_size": font_sizes["terminal"].value},
+        "accent_custom": "#%02x%02x%02x" % rgb_of(accent_rgb) if accent_custom.value else None,
         "terminal_opacity": term_opacity.value,
         "tag_tree_folded": tag_tree.folded,
         "folder": str(current()),
@@ -2818,21 +3113,32 @@ def restore(saved):
         meta_columns[:] = [i for i in saved["meta_columns"] if isinstance(i, int)]
     set_hidden(bool(saved.get("show_hidden", show_hidden.value)))
     set_blue(bool(saved.get("blue_folders", blue_folders.value)))
-    background = saved.get("background")
-    if isinstance(background, dict):
-        bg_on.value = bool(background.get("on", False)) and glass.value == FULL
-        bg_image.value = str(background.get("image", ""))
-        bg_auto.value = bool(background.get("auto", bg_auto.value))
-        for holders, key in ((bg_luminance, "luminance"), (bg_saturation, "saturation"), (bg_scrim, "scrim"), (bg_contrast, "contrast")):
-            values = background.get(key)
-            for name, holder in holders.items():
-                if isinstance(values, dict) and isinstance(values.get(name), (int, float)):
-                    holder.value = float(values[name])
-        for holder, key in ((bg_blur, "blur"), (bg_opacity, "opacity")):
-            if isinstance(background.get(key), (int, float)):
-                holder.value = float(background[key])
-        if isinstance(background.get("fit"), int) and 0 <= background["fit"] < len(BACKGROUND_FITS):
-            bg_fit.value = background["fit"]
+    for look, data in zip(looks, saved.get("looks") if isinstance(saved.get("looks"), list) else []):
+        look.load(data)
+    old = saved.get("background")
+    if "looks" not in saved and isinstance(old, dict) and old.get("on") and isinstance(old.get("image"), str) and old["image"]:
+        # a state saved before the looks: the picture and its blur are the ones of both themes
+        for look in looks:
+            look.background.value = 1
+            look.image.value = old["image"]
+            if isinstance(old.get("blur"), (int, float)):
+                look.blur.value = max(0, min(40, round(old["blur"])))
+    fonts = saved.get("fonts")
+    if isinstance(fonts, dict):
+        paths = [path for _, path in installed_fonts()]
+        for which in ("ui", "terminal"):
+            if fonts.get(which) in paths:
+                font_choice[which].value = paths.index(fonts[which]) + 1
+            size = fonts.get(which + "_size")
+            if isinstance(size, (int, float)):
+                font_sizes[which].value = float(size)
+    custom = saved.get("accent_custom")
+    if isinstance(custom, str) and len(custom) == 7 and custom.startswith("#"):
+        try:
+            accent_rgb.r, accent_rgb.g, accent_rgb.b = unit(tuple(int(custom[i : i + 2], 16) for i in (1, 3, 5)))
+            accent_custom.value = True
+        except ValueError:
+            pass
     if isinstance(saved.get("terminal_opacity"), (int, float)):
         term_opacity.value = float(saved["terminal_opacity"])
     tag_tree.folded = [p for p in saved.get("tag_tree_folded", []) if isinstance(p, str)]
@@ -2903,15 +3209,11 @@ def apply_path():
 
 def set_theme(value):
     theme.value = value
-    if value in (LIGHT, DARK):
-        bg_edit.value = value  # the sliders of the picture are those of the theme
     apply_style()
 
 
 def set_glass(value):
     glass.value = value
-    if value != FULL:
-        bg_on.value = False  # the picture is behind the full glass only
     apply_style()
 
 
@@ -2998,9 +3300,26 @@ def tag_header():
         tag_filter.value = 0
         return
 
+    def title():
+        if tag_title["id"] != tag["id"]:
+            if interactive(lambda: strong(tag["name"], selectable=False)).clicked:  # a click on the name edits it
+                tag_title.update(id=tag["id"], fresh=True)
+                tag_title_text.value = tag["name"]
+            return
+        fresh = tag_title["fresh"]
+        tag_title["fresh"] = False
+        field = text_edit_singleline(tag_title_text, desired_width=180, request_focus=fresh, select_all=fresh)
+        if key_pressed("Escape", when_typing=True):
+            tag_title["id"] = 0
+        elif field.lost_focus and not fresh:
+            name = tag_title_text.value.strip().replace("/", "-")  # a slash would make a path of tags
+            if name and name != tag["name"] and key_pressed("Enter", when_typing=True):
+                tags.rename(tag["id"], name)
+            tag_title["id"] = 0
+
     def line():
         dot(hex_color(tag["color"]) + (255,))
-        strong(tag["name"])
+        title()
         weak(f"{len(listing_here())} élément(s) avec ce tag ou ses sous-tags")
         if image_button_clicked(
             svg("close"), size=12, tint=icon_tint()
@@ -3261,7 +3580,7 @@ def tag_picker_ui():
 
     add_space(4)
     owned = [tags.own(p) for p in paths]
-    accent = ACCENTS[accent_name.value]
+    accent = accent_value()
     row_width = (
         available_width() - 14
     )  # measured here, inside the scroll area it is unreliable
@@ -3325,9 +3644,6 @@ def tag_picker_ui():
     add_space(6)
 
     def footer():
-        if button_clicked("Gérer les tags…"):
-            tag_picker_open.value = False
-            tag_manager_open.value = True
         weak("Entrée : ajouter ou retirer · Parent/Enfant crée un chemin")
 
     horizontal(footer)
@@ -3412,9 +3728,6 @@ def tags_panel():
         )
     if creating and button_clicked(f"+ Créer le tag « {' / '.join(parts)} »"):
         create()
-    add_space(8)
-    if button_clicked("Gérer les tags…"):
-        tag_manager_open.value = True
 
 
 def find_root():
@@ -3973,86 +4286,6 @@ def new_tag(parent):
     return tag_edit["id"]
 
 
-def tag_manager_ui():
-    set_width(380)
-    data = tag_data()
-    strong("Tags")
-    weak("Un tag s'applique à un élément et à son contenu, et ajoute ses tags parents.")
-    add_space(4)
-
-    def tree():
-        for tag in data["all"]:
-
-            def row(tag=tag):
-                add_space(14 * tag["depth"])
-                dot(hex_color(tag["color"]) + (255,))
-                if selectable_label_clicked(tag_edit["id"] == tag["id"], tag["name"]):
-                    tag_edit["id"] = tag["id"]
-
-            horizontal(row)
-
-    def bounded():
-        # set_max_height measures from the top of its own ui, so it needs a fresh one here
-        set_max_height(220)
-        scroll_area_vertical(tree)
-
-    vertical(bounded)
-    add_space(4)
-    separator()
-    tag = data["by_id"].get(tag_edit["id"])
-    if tag is None:
-        tag_edit["id"] = 0
-    elif (
-        tag_edit["loaded"] != tag["id"]
-    ):  # the fields take the values of the chosen tag
-        tag_edit["loaded"] = tag["id"]
-        tag_name.value = tag["name"]
-        tag_color.r, tag_color.g, tag_color.b = (
-            c / 255 for c in hex_color(tag["color"])
-        )
-        tag_parent.value = tag["parent"] or 0
-    if tag:
-
-        def edit():
-            text_edit_singleline(tag_name, hint_text="Nom")
-            color_edit_button_rgb(tag_color)
-
-        horizontal(edit)
-        under = [t for t in data["all"] if t["id"] not in tags.subtree(tag["id"])]
-        combo_box(
-            tag_parent,
-            [0] + [t["id"] for t in under],
-            ["(racine)"] + ["  " * t["depth"] + t["name"] for t in under],
-            "Parent",
-        )
-        if tag_name.value.strip() and tag_name.value != tag["name"]:
-            tags.rename(tag["id"], tag_name.value.strip())
-        if to_hex(tag_color) != tag["color"]:
-            tags.recolor(tag["id"], to_hex(tag_color))
-        if (tag_parent.value or None) != tag["parent"]:
-            tags.move(tag["id"], tag_parent.value or None)
-
-    def buttons():
-        if button_clicked("Nouveau tag"):
-            new_tag(0)
-        if tag and button_clicked("Nouveau sous-tag"):
-            new_tag(tag["id"])
-        if tag and button_clicked("Supprimer"):
-            tags.delete(tag["id"])
-            tag_edit["id"] = 0
-            if tag_filter.value == tag["id"]:
-                tag_filter.value = 0
-
-    horizontal(buttons)
-
-
-def tag_manager():
-    if modal(
-        "tag-manager", tag_manager_ui, rounding=12, inner_margin=14, fill=dialog_fill()
-    ):
-        tag_manager_open.value = False
-
-
 fav_cache = {"version": -1, "items": []}
 
 
@@ -4214,8 +4447,6 @@ def theme_control():
         bg_open.value = not bg_open.value
     elif picked_cell is not None:
         theme.value = picked_cell
-        if theme.value in (LIGHT, DARK):
-            bg_edit.value = theme.value  # the sliders of the picture are those of the theme chosen
         apply_style()
 
 
@@ -4275,7 +4506,7 @@ def sidebar_content():
             place(icon_name, name, path)
     add_space(12)
 
-    # the tags are created in the preview, the Tags pane and the tag picker ("Gérer les tags…")
+    # the tags are created in the preview, the Tags pane and the tag picker
     if section_header("Tags"):
         tags_tree()
 
@@ -7162,7 +7393,7 @@ def meta_panel():
 
 # the window that manages the definitions
 
-mm = {"selected": 0, "loaded": 0, "options": {}, "confirm_option": 0, "confirm_frame": False, "grips": {}, "drag": 0, "confirm_property": False}
+mm = {"selected": 0, "loaded": 0, "options": {}, "confirm_option": 0, "confirm_frame": False, "grips": {}, "drag": 0, "confirm_property": False, "adding": False, "fresh": False}
 mm_name, mm_desc, mm_unit, mm_formula, mm_group = Str(""), Str(""), Str(""), Str(""), Str("")
 mm_new_name, mm_new_option = Str(""), Str("")
 mm_new_type = Int(0)
@@ -7256,11 +7487,7 @@ def meta_manager_options(d, draft):
         if not draft["config"]["options"]:
             weak("Aucune option")
 
-    def bounded():
-        set_max_height(170)
-        scroll_area_vertical(rows)
-
-    vertical(bounded)
+    vertical(rows)
 
     def add():
         text_edit_singleline(mm_new_option, hint_text="Ajouter une option")
@@ -7335,7 +7562,6 @@ def meta_manager_fields(d, draft):
 
 
 def meta_manager_right(d):
-    set_width(430)
     if d is None:
         weak("Choisis une propriété ou crées-en une.")
         return
@@ -7367,47 +7593,57 @@ def meta_manager_right(d):
     horizontal(delete)
 
 
-def meta_manager_left(defs):
-    set_width(190)
-
-    def rows():
-        for x in defs:
-            if selectable_label_clicked(mm["selected"] == x["id"], f"{x['name']}  ·  {META_LABELS[x['type']]}"):
-                mm["selected"] = x["id"]
-        if not defs:
-            weak("Aucune propriété")
-
-    def bounded():
-        set_max_height(300)
-        scroll_area_vertical(rows)
-
-    vertical(bounded)
-    if mm["selected"]:
-
-        def arrows():
-            if small_button_clicked("▲"):
-                tags.move_meta(mm["selected"], -1)
-            if small_button_clicked("▼"):
-                tags.move_meta(mm["selected"], 1)
-
-        horizontal(arrows)
-    separator()
-    text_edit_singleline(mm_new_name, hint_text="Nouvelle propriété")
-    combo_box(mm_new_type, list(range(len(META_TYPES))), [name for _, name in META_TYPES], "Type")
-    clicked = []
-    add_enabled(bool(mm_new_name.value.strip()), lambda: clicked.append(button_clicked("Créer")))
-    if clicked and clicked[0]:
-        made = tags.create_meta(mm_new_name.value, META_TYPES[mm_new_type.value][0])
-        if made:
-            mm["selected"] = made
-            mm_new_name.value = ""
+mm_new_group, mm_new_desc = Str(""), Str("")
+mm_win = SettingsWindow()
 
 
-def meta_manager_ui():
-    set_width(660)
-    heading("Propriétés")
-    weak("Un nom, un type et une description. Les valeurs se mettent sur les fichiers et dossiers depuis le panneau Propriétés.")
+def meta_manager_new():
+    """the panel of a new property: its name, type, group and description, then Créer"""
+    strong("Nouvelle propriété")
     add_space(6)
+
+    def form():
+        label("Nom")
+        text_edit_singleline(mm_new_name, request_focus=mm["fresh"], desired_width=280)
+        end_row()
+        label("Type")
+        combo_box(mm_new_type, list(range(len(META_TYPES))), [name for _, name in META_TYPES], "Type")
+        end_row()
+        label("Groupe")
+        text_edit_singleline(mm_new_group, hint_text="Divers", desired_width=280)
+        end_row()
+        label("Description")
+        text_edit_multiline(mm_new_desc)
+        end_row()
+
+    grid("meta-new-fields", form)
+    mm["fresh"] = False
+    name = mm_new_name.value.strip()
+    taken = any(x["name"].lower() == name.lower() for x in tags.meta_defs())
+    if name and taken:
+        colored_label((220, 90, 90), "Une propriété porte déjà ce nom")
+    add_space(8)
+
+    def buttons():
+        clicked = []
+        add_enabled(bool(name) and not taken, lambda: clicked.append(button_clicked("Créer") or key_pressed("Enter", when_typing=True)))
+        if clicked and clicked[0]:
+            made = tags.create_meta(name, META_TYPES[mm_new_type.value][0])
+            if made:
+                d = tags.meta_def(made)
+                d["config"]["group"] = mm_new_group.value.strip()
+                d["description"] = mm_new_desc.value.strip()
+                tags.update_meta(d)
+                mm.update(selected=made, adding=False)
+                mm_new_name.value = mm_new_group.value = mm_new_desc.value = ""
+        if button_clicked("Annuler"):
+            mm["adding"] = False
+
+    horizontal(buttons)
+
+
+def meta_manager():
+    """the window of the properties: the list at the left (drag to reorder), the panel of the one chosen at the right"""
     defs = tags.meta_defs()
     ids = [x["id"] for x in defs]
     if mm["selected"] not in ids:
@@ -7417,27 +7653,49 @@ def meta_manager_ui():
         mm["loaded"] = 0
     elif mm["loaded"] != d["id"]:
         meta_manager_load(d)
-
-    def body():
-        vertical(lambda: meta_manager_left(defs))
-        add_space(12)
-        vertical(lambda: meta_manager_right(d))
-
-    horizontal(body)
-    add_space(8)
-    if button_clicked("Fermer"):
-        meta_open["manager"] = False
-
-
-def meta_manager():
-    if modal("meta-manager", meta_manager_ui, rounding=12, inner_margin=14, fill=dialog_fill()):
-        meta_open["manager"] = False
+    items = [dict(id=str(x["id"]), label=x["name"], hint=META_LABELS[x["type"]]) for x in defs]
+    events = settings_window(
+        mm_win,
+        items,
+        (lambda: meta_manager_new()) if mm["adding"] else (lambda: meta_manager_right(d)),
+        selected=str(mm["selected"]),
+        footer=lambda: weak(f"{len(defs)} propriété(s)"),
+        title="Propriétés",
+        subtitle="Un nom, un type et une description. Les valeurs se mettent sur les fichiers et dossiers depuis le panneau Propriétés.",
+        list_title="Propriétés",
+        add_label="Nouvelle propriété",
+        empty_text="Aucune propriété",
+        width=780,
+        height=430,
+        adding=mm["adding"],
+        id="meta-manager",
+        fill=dialog_fill(),
+        rounding=12,
+        inner_margin=14,
+    )
+    for event in events:
+        if event[0] == "select":
+            mm.update(selected=int(event[1]), adding=False)
+        elif event[0] == "move":
+            tags.move_meta(ids[event[1]], event[2] - event[1])
+        elif event[0] == "add":
+            mm.update(adding=True, fresh=True)
+        elif event[0] == "close":
+            meta_open["manager"] = False
 
 
 # the window of the rules of the indexation: a folder, and the pattern its sub-folders are read with
 
-mr_root, mr_pattern = Str(""), Str("")
+mr_root, mr_pattern, mr_name = Str(""), Str(""), Str("")
 mr_rows = {}
+mr = {"selected": 0, "adding": False, "confirm": False}
+mr_win = SettingsWindow()
+RULES_HELP = (
+    "Sous un dossier, chaque niveau de sous-dossiers remplit une propriété : {project}/{entreprise}/{chapter}. "
+    "Les valeurs se mettent sur les dossiers (leur contenu en hérite) à la fin d'une indexation ou avec « Appliquer ». "
+    "Une valeur tapée à la main n'est jamais remplacée. * ignore un niveau ; un nom de dossier fixe (00 - DOE Livrés) ne s'applique qu'à ce dossier ; "
+    "{nom!a|b} refuse les dossiers a et b ; [Statut=Terminé] après un niveau donne cette valeur à son dossier."
+)
 
 
 def open_meta_rules():
@@ -7445,82 +7703,150 @@ def open_meta_rules():
     meta_open["rules"] = True
 
 
-def meta_rules_ui():
-    set_width(640)
-    heading("Règles d'indexation")
-    weak(
-        "Sous un dossier, chaque niveau de sous-dossiers remplit une propriété : {project}/{entreprise}/{chapter}. "
-        "Les valeurs se mettent sur les dossiers (leur contenu en hérite) à la fin d'une indexation ou avec « Appliquer ». "
-        "Une valeur tapée à la main n'est jamais remplacée. * ignore un niveau ; un nom de dossier fixe (00 - DOE Livrés) ne s'applique qu'à ce dossier ; [Statut=Terminé] après un niveau donne cette valeur à son dossier."
-    )
-    add_space(6)
-    rules = tags.meta_rules()
-    names = [d["name"].lower() for d in tags.meta_defs()]
+def rule_title(rule):
+    return rule["name"].strip() or rule["pattern"]
 
-    def rows():
-        for rule in rules:
-            fields = mr_rows.setdefault(rule["id"], {"enabled": Bool(rule["enabled"]), "root": Str(rule["root"]), "pattern": Str(rule["pattern"])})
 
-            def row(rule=rule, fields=fields):
-                checkbox(fields["enabled"], "")
-                text_edit_singleline(fields["root"])
-                text_edit_singleline(fields["pattern"])
-                if image_button_clicked(svg("close"), size=12, tint=icon_tint(), tooltip="Supprimer la règle et ses valeurs"):
-                    tags.delete_meta_rule(rule["id"])
-                    mr_rows.pop(rule["id"], None)
+def rule_check(pattern, names):
+    levels = parse_pattern(pattern)
+    if levels is None:
+        colored_label((220, 90, 90), "Aucun {nom} dans le motif")
+    else:
+        missing = [n for n in pattern_names(levels) if n.lower() not in names]
+        if missing:
+            colored_label((220, 90, 90), f"Propriété inconnue : {', '.join(missing)}")
 
-            horizontal(row)
-            levels = parse_pattern(fields["pattern"].value)
-            if levels is None:
-                colored_label((220, 90, 90), "Aucun {nom} dans le motif")
-            else:
-                missing = [n for n in pattern_names(levels) if n.lower() not in names]
-                if missing:
-                    colored_label((220, 90, 90), f"Propriété inconnue : {', '.join(missing)}")
-            changed = {"id": rule["id"], "enabled": fields["enabled"].value, "root": fields["root"].value, "pattern": fields["pattern"].value}
-            if rule["id"] in mr_rows and changed != rule:
-                tags.update_meta_rule(changed)
-        if not rules:
-            weak("Aucune règle")
 
-    def bounded():
-        set_max_height(260)
-        scroll_area_vertical(rows)
+def meta_rules_detail(rules, names):
+    if mr["adding"]:
+        strong("Nouvelle règle")
+        add_space(6)
 
-    vertical(bounded)
-    separator()
-    label("Nouvelle règle")
+        def form():
+            label("Nom")
+            text_edit_singleline(mr_name, hint_text="Facultatif", desired_width=380)
+            end_row()
+            label("Dossier")
+            text_edit_singleline(mr_root, desired_width=380)
+            end_row()
+            label("Motif")
+            text_edit_singleline(mr_pattern, hint_text="{project}/{entreprise}", desired_width=380)
+            end_row()
 
-    def fields():
-        text_edit_singleline(mr_root, hint_text="Dossier")
-        text_edit_singleline(mr_pattern, hint_text="{project}/{entreprise}")
-
-    horizontal(fields)
-
-    def buttons():
+        grid("rule-new", form)
         if button_clicked("Dossier affiché"):
             mr_root.value = str(current())
-        ok = bool(mr_root.value.strip()) and parse_pattern(mr_pattern.value) is not None
-        clicked = []
-        add_enabled(ok, lambda: clicked.append(button_clicked("Ajouter")))
-        if clicked and clicked[0] and tags.add_meta_rule(Path(mr_root.value.strip()), mr_pattern.value):
-            mr_pattern.value = ""
+        if mr_pattern.value.strip():
+            rule_check(mr_pattern.value, names)
+        add_space(8)
 
-    horizontal(buttons)
-    add_space(6)
+        def buttons():
+            ok = bool(mr_root.value.strip()) and parse_pattern(mr_pattern.value) is not None
+            clicked = []
+            add_enabled(ok, lambda: clicked.append(button_clicked("Ajouter")))
+            if clicked and clicked[0]:
+                made = tags.add_meta_rule(Path(mr_root.value.strip()), mr_pattern.value)
+                if made:
+                    if mr_name.value.strip():
+                        rule = next(r for r in tags.meta_rules() if r["id"] == made)
+                        tags.update_meta_rule({**rule, "name": mr_name.value.strip()})
+                    mr_name.value = mr_pattern.value = ""
+                    mr.update(selected=made, adding=False)
+            if button_clicked("Annuler"):
+                mr["adding"] = False
 
-    def end():
-        if button_clicked("Appliquer"):  # reads the folders already indexed again
-            apply_meta_rules_notice()
-        if button_clicked("Fermer"):
-            meta_open["rules"] = False
+        horizontal(buttons)
+    else:
+        rule = next((r for r in rules if r["id"] == mr["selected"]), None)
+        if rule is None:
+            weak("Choisis une règle ou crées-en une.")
+        else:
+            fields = mr_rows.setdefault(
+                rule["id"],
+                {"enabled": Bool(rule["enabled"]), "name": Str(rule["name"]), "root": Str(rule["root"]), "pattern": Str(rule["pattern"])},
+            )
+            checkbox(fields["enabled"], "Règle active")
 
-    horizontal(end)
+            def form():
+                label("Nom")
+                text_edit_singleline(fields["name"], hint_text=rule["pattern"], desired_width=380)
+                end_row()
+                label("Dossier")
+                text_edit_singleline(fields["root"], desired_width=380)
+                end_row()
+                label("Motif")
+                text_edit_singleline(fields["pattern"], desired_width=380)
+                end_row()
+
+            grid("rule-edit", form)
+            rule_check(fields["pattern"].value, names)
+            changed = {
+                "id": rule["id"],
+                "enabled": fields["enabled"].value,
+                "name": fields["name"].value,
+                "root": fields["root"].value,
+                "pattern": fields["pattern"].value,
+            }
+            if changed != {**rule, "name": rule["name"]}:
+                tags.update_meta_rule(changed)
+            add_space(8)
+
+            def delete():
+                if mr["confirm"]:
+                    label("Supprimer la règle et les valeurs qu'elle a mises ?")
+                    if button_clicked("Supprimer"):
+                        tags.delete_meta_rule(rule["id"])
+                        mr_rows.pop(rule["id"], None)
+                        mr.update(selected=0, confirm=False)
+                    if button_clicked("Annuler"):
+                        mr["confirm"] = False
+                elif button_clicked("Supprimer la règle"):
+                    mr["confirm"] = True
+
+            horizontal(delete)
+    add_space(10)
+    collapsing("Syntaxe des motifs", lambda: weak(RULES_HELP))
 
 
 def meta_rules_dialog():
-    if modal("meta-rules", meta_rules_ui, rounding=12, inner_margin=14, fill=dialog_fill()):
-        meta_open["rules"] = False
+    rules = tags.meta_rules()
+    names = [d["name"].lower() for d in tags.meta_defs()]
+    ids = [r["id"] for r in rules]
+    if mr["selected"] not in ids and not mr["adding"]:
+        mr["selected"] = ids[0] if ids else 0
+    items = [dict(id=str(r["id"]), label=rule_title(r), hint="" if r["enabled"] else "désactivée") for r in rules]
+
+    def apply_button():
+        if button_clicked("Appliquer"):  # reads the folders already indexed again
+            apply_meta_rules_notice()
+
+    events = settings_window(
+        mr_win,
+        items,
+        lambda: meta_rules_detail(rules, names),
+        selected=str(mr["selected"]),
+        footer=apply_button,
+        title="Règles d'indexation",
+        subtitle="Les dossiers d'une arborescence remplissent des propriétés.",
+        list_title="Règles",
+        add_label="Nouvelle règle",
+        empty_text="Aucune règle",
+        width=780,
+        height=430,
+        reorderable=False,
+        adding=mr["adding"],
+        id="meta-rules",
+        fill=dialog_fill(),
+        rounding=12,
+        inner_margin=14,
+    )
+    for event in events:
+        if event[0] == "select":
+            mr.update(selected=int(event[1]), adding=False, confirm=False)
+        elif event[0] == "add":
+            mr["adding"] = True
+        elif event[0] == "close":
+            meta_open["rules"] = False
 
 
 def apply_meta_rules_notice():
@@ -7609,7 +7935,7 @@ dock.load(default_layout)
 # frame and gives the ones of the main window back. What the windows share: the tags, the theme, the look,
 # the clipboard, the watcher of the disk and its activity.
 PER_WINDOW = [
-    "tag_filter", "tag_manager_open", "tag_picker_open", "tag_edit", "tag_name", "tag_color", "tag_parent",
+    "tag_filter", "tag_title", "tag_title_text", "tag_picker_open", "tag_edit", "tag_name", "tag_color", "tag_parent",
     "tags_query", "tag_query", "tag_index", "tag_picker_state",
     "find_name", "find_ext", "find_scope", "find_folders", "find_pages_min", "find_pages_max", "find_protect",
     "find_pdf_text", "find_auto", "find_state", *FIND_EXTRA,
@@ -7636,7 +7962,7 @@ TAB_VARIABLES = [
 def make_window(folder):
     """the state of a new window, on a folder: the same definitions as the first one, above"""
     state = {
-        "tag_filter": Int(0), "tag_manager_open": Bool(False), "tag_picker_open": Bool(False),
+        "tag_filter": Int(0), "tag_title": {"id": 0, "fresh": False}, "tag_title_text": Str(""), "tag_picker_open": Bool(False),
         "tag_edit": {"id": 0, "loaded": 0}, "tag_name": Str(""), "tag_color": RGB(0.0, 0.0, 0.0),
         "tag_parent": Int(0), "tags_query": Str(""), "tag_query": Str(""), "tag_index": Int(0),
         "tag_picker_state": {"query": "", "pointer": None, "just_opened": False},
@@ -7809,22 +8135,35 @@ def update_func(ctx):
     if not started.value:
         context.append(ctx)
         restore(ctx.load_state())
-        if theme.value in (LIGHT, DARK):
-            bg_edit.value = theme.value
         apply_style()
         started.value = True
     finder_windows[:] = [w for w in finder_windows if w.viewport.is_open]  # the ones the user closed
     if os.environ.get("FINDER_TAB2") and not tab_state.get("tested") and len(dock.titles) > 1 and started.value:
         tab_state["tested"] = True
         new_tab(Path(os.environ["FINDER_TAB2"]))  # for the checks with two tabs of folder
-    if os.environ.get("FINDER_CHECK") and not tab_state.get("checked"):  # for the checks: FINDER_CHECK=pane|manager|rules
+    if os.environ.get("FINDER_CHECK") and not tab_state.get("checked"):  # for the checks: FINDER_CHECK=pane|manager|rules|appearance|look
         tab_state["checked"] = True
         what = os.environ["FINDER_CHECK"]
         if what == "pane":
             show_pane("Propriétés")
         meta_open.update(manager=what == "manager", rules=what == "rules")
+        bg_open.value = what in ("appearance", "look")
+        if what == "look":  # a look that shows in every part, to check that the choices reach the window
+            for look in looks:
+                look.background.value = 2
+                look.color.r, look.color.g, look.color.b = unit((90, 30, 60))
+                look.color_set = True
+                for i, tint in enumerate(((200, 40, 40, 255), (40, 160, 60, 200), (50, 70, 200, 255))):
+                    look.layers[i].r, look.layers[i].g, look.layers[i].b, look.layers[i].a = unit(tint)
+                    look.layer_set[i] = True
+                look.outline[0].r, look.outline[0].g, look.outline[0].b, look.outline[0].a = 1.0, 0.8, 0.0, 1.0
+                look.outline_set[0] = True
+                look.outline_width[0].value = 3.0
+                look.text.r, look.text.g, look.text.b = unit((120, 255, 120))
+                look.text_set = True
+            font_sizes["ui"].value = 17.0
     collect_activity()
-    apply_background()
+    apply_look()
     window_frame(ctx)
     ctx.save_state(snapshot())  # written to disk by pyegui, see persist_id below
 
@@ -7838,7 +8177,17 @@ def window_frame(ctx):
     open_requested_panes()  # before the dock is drawn
     follow_in_shell()
     layout()
-    window("Apparence", background_window, open=bg_open, default_width=300, resizable=False)
+    # the panel of the look, over the gear at the bottom right (the sidebar of the files has no part in it)
+    window(
+        "Apparence",
+        background_window,
+        open=bg_open,
+        anchor="right_bottom",
+        anchor_offset=(-12, -46),
+        default_width=300,
+        resizable=False,
+        collapsible=False,
+    )
     if renaming.value:
         rename_dialog()
     if delete_ask["paths"]:
@@ -7857,8 +8206,6 @@ def window_frame(ctx):
         action_palette()
     if tag_picker_open.value:
         tag_picker()
-    if tag_manager_open.value:
-        tag_manager()
 
 
 def layout():
@@ -7875,9 +8222,10 @@ def layout():
         rounding=0,
         show_separator_line=True,  # the line between the sidebar and the body
         separator_stroke=LINE,
+        **layer_kwargs(0),
     )
-    top_panel("toolbar", toolbar, exact_size=TOP_H, resizable=False, inner_margin=(8, 0, 12, 0), rounding=0, show_separator_line=True, separator_stroke=LINE)
-    bottom_panel("path", path_bar, exact_size=BOTTOM_H, resizable=False, inner_margin=(8, 0, 12, 0), rounding=0, show_separator_line=True, separator_stroke=LINE)
+    top_panel("toolbar", toolbar, exact_size=TOP_H, resizable=False, inner_margin=(8, 0, 12, 0), rounding=0, show_separator_line=True, separator_stroke=LINE, **layer_kwargs(1))
+    bottom_panel("path", path_bar, exact_size=BOTTOM_H, resizable=False, inner_margin=(8, 0, 12, 0), rounding=0, show_separator_line=True, separator_stroke=LINE, **layer_kwargs(1))
     # one gap everywhere: a side of the dock that faces a neighbour without gap (the line of the
     # sidebar, of the bars, the border of the window) gets the whole gap, and the dock puts the same
     # gap between its panes. The central panel adds no margin of its own (set_central_margin)

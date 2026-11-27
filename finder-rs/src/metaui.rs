@@ -12,6 +12,7 @@ use pyegui_core::meta::{resolve_with, rule_value, RuleSet, eval_formula, file_va
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use pyegui_core::settings::{settings_window, SettingsEvent, SettingsItem, SettingsOptions, SettingsState};
 use pyegui_core::property_set::{Change, Kind, PropOption, Property, PropertySetOptions};
 
 use crate::app::FinderApp;
@@ -23,7 +24,7 @@ use crate::tagsui::{parse_color, to_hex};
 pub struct MetaUi {
     pub manager: Option<Manager>,
     /// the window of the rules of the indexation, with the text of the rule being added
-    pub rules: Option<(String, String)>,
+    pub rules: Option<RulesUi>,
     /// the item whose values the pane shows, and the text being typed for each property
     path: Option<PathBuf>,
     /// the look of the property set: by group or by name, the groups folded, the filter
@@ -35,6 +36,12 @@ pub struct Manager {
     selected: Option<i64>,
     /// the property being edited, as read when it was chosen
     draft: Option<MetaDef>,
+    win: SettingsState,
+    /// the panel shows a new property to create
+    adding: bool,
+    new_fresh: bool,
+    new_group: String,
+    new_description: String,
     new_name: String,
     new_type: usize,
     new_option: String,
@@ -446,7 +453,7 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
             app.meta.manager = Some(Manager::default());
         }
         if ui.button("Règles d'indexation…").clicked() {
-            app.meta.rules = Some((app.folder().to_string_lossy().into_owned(), String::new()));
+            app.meta.rules = Some(RulesUi::new(app.folder().to_string_lossy().into_owned()));
         }
     });
     ui.separator();
@@ -547,257 +554,257 @@ pub fn modal(app: &mut FinderApp, ctx: &egui::Context) {
     }
     let mut close = false;
     let mut save = false;
-    crate::glyphs::modal(ctx, "meta-manager").show(ctx, |ui| {
-        // a fixed size: nothing inside may ask for more, or the window grows at every frame
-        ui.set_width(660.0);
-        ui.set_max_width(660.0);
-        ui.set_max_height(560.0);
-        if crate::glyphs::modal_title(ui, "Propriétés") {
-            close = true;
-        }
-        ui.weak("Un nom, un type et une description. Les valeurs se mettent sur les fichiers et dossiers depuis le panneau Propriétés.");
-        ui.add_space(6.0);
-        ui.horizontal_top(|ui| {
-            ui.vertical(|ui| {
-                ui.set_width(190.0);
-                egui::ScrollArea::vertical().id_salt("meta-list").max_height(300.0).auto_shrink([false, true]).show(ui, |ui| {
-                    for def in &defs {
-                        if ui.selectable_label(manager.selected == Some(def.id), format!("{}  ·  {}", def.name, def.ty.label())).clicked() {
-                            manager.selected = Some(def.id);
-                        }
+    let mut created: Option<i64> = None;
+    let items: Vec<SettingsItem> = defs.iter().map(|d| SettingsItem { id: d.id.to_string(), label: d.name.clone(), hint: d.ty.label().to_owned() }).collect();
+    let selected = manager.selected.map(|id| id.to_string());
+    let adding = manager.adding;
+    let mut options = SettingsOptions::new(egui::Id::unique("meta-manager"));
+    options.title = "Propriétés".into();
+    options.subtitle = "Un nom, un type et une description. Les valeurs se mettent sur les fichiers et dossiers depuis le panneau Propriétés.".into();
+    options.list_title = "Propriétés".into();
+    options.add_label = "Nouvelle propriété".into();
+    options.empty_text = "Aucune propriété".into();
+    options.width = 780.0;
+    options.height = 430.0;
+    options.adding = adding;
+    options.frame = Some(crate::glyphs::popup_frame(ctx));
+    // the state of the list is taken out while the panel borrows the rest of the manager
+    let mut win = std::mem::take(&mut manager.win);
+    let events = settings_window(
+        ctx,
+        &mut win,
+        &options,
+        &items,
+        selected.as_deref(),
+        |ui| {
+            crate::glyphs::modal_visuals(ui);
+            if adding {
+                new_property_form(ui, &mut manager, store, &mut created);
+                return;
+            }
+        let Some(draft) = manager.draft.as_mut() else {
+            ui.weak("Choisis une propriété ou crées-en une.");
+            return;
+        };
+        let usage = store.meta_usage(draft.id);
+        egui::Grid::new("meta-fields").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+            ui.label("Nom");
+            let name = ui.add(egui::TextEdit::singleline(&mut draft.name).desired_width(280.0));
+            if name.lost_focus() {
+                save = true;
+            }
+            ui.end_row();
+            ui.label("Type");
+            ui.label(draft.ty.label());
+            ui.end_row();
+            ui.label("Groupe");
+            if ui.add(egui::TextEdit::singleline(&mut draft.config.group).hint_text("Divers").desired_width(280.0)).lost_focus() {
+                save = true;
+            }
+            ui.end_row();
+            ui.label("Description");
+            let description = ui.add(egui::TextEdit::multiline(&mut draft.description).desired_rows(2).desired_width(280.0));
+            if description.lost_focus() {
+                save = true;
+            }
+            ui.end_row();
+            if draft.ty == MetaType::Number {
+                ui.label("Unité");
+                if ui.add(egui::TextEdit::singleline(&mut draft.config.unit).desired_width(80.0)).lost_focus() {
+                    save = true;
+                }
+                ui.end_row();
+            }
+            if draft.ty == MetaType::Formula {
+                ui.label("Formule");
+                ui.vertical(|ui| {
+                    let edit = ui.add(egui::TextEdit::multiline(&mut draft.config.formula).desired_rows(2).desired_width(280.0).hint_text("{filename} {Statut}"));
+                    if edit.lost_focus() {
+                        save = true;
                     }
-                    if defs.is_empty() {
-                        ui.weak("Aucune propriété");
+                    ui.weak("{nom} : filename, stem, ext, parent, path, size, modified, ou une autre propriété. {nom:upper}, :lower, :title, :.2f, :03d.");
+                });
+                ui.end_row();
+            }
+            if draft.ty == MetaType::Choice {
+                ui.label("Liste");
+                ui.vertical(|ui| {
+                    if ui.radio_value(&mut draft.config.mode, ListMode::Closed, "Fermée : seules les options ci-dessous").changed() {
+                        save = true;
+                    }
+                    if ui.radio_value(&mut draft.config.mode, ListMode::Open, "Ouverte : une nouvelle valeur s'ajoute à la liste").changed() {
+                        save = true;
+                    }
+                    if ui.checkbox(&mut draft.config.multiple, "Plusieurs valeurs à la fois").changed() {
+                        save = true;
                     }
                 });
-                if let Some(id) = manager.selected {
-                    ui.horizontal(|ui| {
-                        if ui.small_button("▲").clicked() {
-                            store.move_meta(id, -1);
+                ui.end_row();
+            }
+        });
+        if draft.ty == MetaType::Choice {
+            ui.add_space(6.0);
+            ui.label(RichText::new("Options").strong());
+            let ids: Vec<i64> = draft.config.options.iter().map(|o| o.id).collect();
+            let mut remove: Option<i64> = None;
+            let mut merge: Option<(i64, i64)> = None;
+            let mut rows: Vec<(i64, egui::Rect)> = vec![];
+            ui.scope(|ui| {
+                let labels: Vec<(i64, String)> = draft.config.options.iter().map(|o| (o.id, o.label.clone())).collect();
+                for id in &ids {
+                    let used = store.choice_usage(draft.id, *id);
+                    let Some(at) = draft.config.options.iter().position(|o| o.id == *id) else { continue };
+                    let row = ui.horizontal(|ui| {
+                        // the grip: drag the option to another place
+                        let (grip, grip_response) = ui.allocate_exact_size(egui::vec2(14.0, 22.0), egui::Sense::drag());
+                        if grip_response.drag_started() {
+                            manager.drag_option = Some(*id);
                         }
-                        if ui.small_button("▼").clicked() {
-                            store.move_meta(id, 1);
+                        if grip_response.hovered() || manager.drag_option == Some(*id) {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
                         }
-                    });
-                }
-                ui.separator();
-                ui.add(egui::TextEdit::singleline(&mut manager.new_name).hint_text("Nouvelle propriété").desired_width(180.0));
-                egui::ComboBox::from_id_salt("meta-new-type").selected_text(MetaType::ALL[manager.new_type].label()).width(180.0).show_ui(ui, |ui| {
-                    for (i, ty) in MetaType::ALL.iter().enumerate() {
-                        ui.selectable_value(&mut manager.new_type, i, ty.label());
-                    }
-                });
-                if ui.add_enabled(!manager.new_name.trim().is_empty(), egui::Button::new("Créer")).clicked() {
-                    if let Some(id) = store.create_meta(&manager.new_name, MetaType::ALL[manager.new_type]) {
-                        manager.selected = Some(id);
-                        manager.new_name.clear();
-                    }
-                }
-            });
-            // not `ui.separator()`: in a row it takes all the height it is given, and the window grows at every frame
-            ui.add_space(12.0);
-            ui.vertical(|ui| {
-                ui.set_width(430.0);
-                let Some(draft) = manager.draft.as_mut() else {
-                    ui.weak("Choisis une propriété ou crées-en une.");
-                    return;
-                };
-                let usage = store.meta_usage(draft.id);
-                egui::Grid::new("meta-fields").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-                    ui.label("Nom");
-                    let name = ui.add(egui::TextEdit::singleline(&mut draft.name).desired_width(280.0));
-                    if name.lost_focus() {
-                        save = true;
-                    }
-                    ui.end_row();
-                    ui.label("Type");
-                    ui.label(draft.ty.label());
-                    ui.end_row();
-                    ui.label("Groupe");
-                    if ui.add(egui::TextEdit::singleline(&mut draft.config.group).hint_text("Divers").desired_width(280.0)).lost_focus() {
-                        save = true;
-                    }
-                    ui.end_row();
-                    ui.label("Description");
-                    let description = ui.add(egui::TextEdit::multiline(&mut draft.description).desired_rows(2).desired_width(280.0));
-                    if description.lost_focus() {
-                        save = true;
-                    }
-                    ui.end_row();
-                    if draft.ty == MetaType::Number {
-                        ui.label("Unité");
-                        if ui.add(egui::TextEdit::singleline(&mut draft.config.unit).desired_width(80.0)).lost_focus() {
+                        let dots = ui.visuals().text_color().gamma_multiply(0.5);
+                        for dx in [-2.5f32, 2.5] {
+                            for dy in [-4.0f32, 0.0, 4.0] {
+                                ui.painter().circle_filled(grip.center() + egui::vec2(dx, dy), 1.2, dots);
+                            }
+                        }
+                        let option = &mut draft.config.options[at];
+                        let mut color = if option.color.is_empty() { Color32::from_gray(150) } else { parse_color(&option.color) };
+                        if ui.color_edit_button_srgba(&mut color).changed() {
+                            option.color = to_hex(color);
                             save = true;
                         }
-                        ui.end_row();
-                    }
-                    if draft.ty == MetaType::Formula {
-                        ui.label("Formule");
-                        ui.vertical(|ui| {
-                            let edit = ui.add(egui::TextEdit::multiline(&mut draft.config.formula).desired_rows(2).desired_width(280.0).hint_text("{filename} {Statut}"));
-                            if edit.lost_focus() {
+                        let mut label = option.label.clone();
+                        let edit = ui.add(egui::TextEdit::singleline(&mut label).desired_width(160.0));
+                        if edit.changed() {
+                            // refused when empty or taken: the text comes back
+                            if draft.config.rename_option(*id, &label) {
                                 save = true;
                             }
-                            ui.weak("{nom} : filename, stem, ext, parent, path, size, modified, ou une autre propriété. {nom:upper}, :lower, :title, :.2f, :03d.");
-                        });
-                        ui.end_row();
-                    }
-                    if draft.ty == MetaType::Choice {
-                        ui.label("Liste");
-                        ui.vertical(|ui| {
-                            if ui.radio_value(&mut draft.config.mode, ListMode::Closed, "Fermée : seules les options ci-dessous").changed() {
-                                save = true;
-                            }
-                            if ui.radio_value(&mut draft.config.mode, ListMode::Open, "Ouverte : une nouvelle valeur s'ajoute à la liste").changed() {
-                                save = true;
-                            }
-                            if ui.checkbox(&mut draft.config.multiple, "Plusieurs valeurs à la fois").changed() {
-                                save = true;
-                            }
-                        });
-                        ui.end_row();
-                    }
-                });
-                if draft.ty == MetaType::Choice {
-                    ui.add_space(6.0);
-                    ui.label(RichText::new("Options").strong());
-                    let ids: Vec<i64> = draft.config.options.iter().map(|o| o.id).collect();
-                    let mut remove: Option<i64> = None;
-                    let mut merge: Option<(i64, i64)> = None;
-                    let mut rows: Vec<(i64, egui::Rect)> = vec![];
-                    egui::ScrollArea::vertical().id_salt("meta-options").max_height(170.0).auto_shrink([false, true]).show(ui, |ui| {
-                        let labels: Vec<(i64, String)> = draft.config.options.iter().map(|o| (o.id, o.label.clone())).collect();
-                        for id in &ids {
-                            let used = store.choice_usage(draft.id, *id);
-                            let Some(at) = draft.config.options.iter().position(|o| o.id == *id) else { continue };
-                            let row = ui.horizontal(|ui| {
-                                // the grip: drag the option to another place
-                                let (grip, grip_response) = ui.allocate_exact_size(egui::vec2(14.0, 22.0), egui::Sense::drag());
-                                if grip_response.drag_started() {
-                                    manager.drag_option = Some(*id);
-                                }
-                                if grip_response.hovered() || manager.drag_option == Some(*id) {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-                                }
-                                let dots = ui.visuals().text_color().gamma_multiply(0.5);
-                                for dx in [-2.5f32, 2.5] {
-                                    for dy in [-4.0f32, 0.0, 4.0] {
-                                        ui.painter().circle_filled(grip.center() + egui::vec2(dx, dy), 1.2, dots);
+                        }
+                        ui.weak(format!("{used}"));
+                        // the trash: a first click asks, a second one deletes
+                        let armed = manager.confirm_option == Some(*id);
+                        // no text: it would move the icon, the tip says what a second click does
+                        let tip = if armed { if used > 0 { format!("Cliquer encore pour retirer de {used} élément(s) et supprimer") } else { "Cliquer encore pour supprimer".to_owned() } } else { "Supprimer l'option".to_owned() };
+                        let trash = glyphs::button(ui, glyphs::TRASH, 13.0, armed, &tip);
+                        if trash.clicked() {
+                            if armed { remove = Some(*id) } else { manager.confirm_option = Some(*id); manager.confirm_fresh = true; }
+                        }
+                        if !armed && labels.len() > 1 {
+                            ui.menu_button("Fusionner dans…", |ui| {
+                                for (other, name) in &labels {
+                                    if other != id && ui.button(name).clicked() {
+                                        merge = Some((*id, *other));
+                                        ui.close();
                                     }
-                                }
-                                let option = &mut draft.config.options[at];
-                                let mut color = if option.color.is_empty() { Color32::from_gray(150) } else { parse_color(&option.color) };
-                                if ui.color_edit_button_srgba(&mut color).changed() {
-                                    option.color = to_hex(color);
-                                    save = true;
-                                }
-                                let mut label = option.label.clone();
-                                let edit = ui.add(egui::TextEdit::singleline(&mut label).desired_width(160.0));
-                                if edit.changed() {
-                                    // refused when empty or taken: the text comes back
-                                    if draft.config.rename_option(*id, &label) {
-                                        save = true;
-                                    }
-                                }
-                                ui.weak(format!("{used}"));
-                                // the trash: a first click asks, a second one deletes
-                                let armed = manager.confirm_option == Some(*id);
-                                // no text: it would move the icon, the tip says what a second click does
-                                let tip = if armed { if used > 0 { format!("Cliquer encore pour retirer de {used} élément(s) et supprimer") } else { "Cliquer encore pour supprimer".to_owned() } } else { "Supprimer l'option".to_owned() };
-                                let trash = glyphs::button(ui, glyphs::TRASH, 13.0, armed, &tip);
-                                if trash.clicked() {
-                                    if armed { remove = Some(*id) } else { manager.confirm_option = Some(*id); manager.confirm_fresh = true; }
-                                }
-                                if !armed && labels.len() > 1 {
-                                    ui.menu_button("Fusionner dans…", |ui| {
-                                        for (other, name) in &labels {
-                                            if other != id && ui.button(name).clicked() {
-                                                merge = Some((*id, *other));
-                                                ui.close();
-                                            }
-                                        }
-                                    });
-                                }
-                                if armed && !manager.confirm_fresh && !trash.hovered() && ui.input(|i| i.pointer.any_pressed() || i.key_pressed(egui::Key::Escape)) {
-                                    manager.confirm_option = None;
                                 }
                             });
-                            rows.push((*id, row.response.rect));
                         }
-                        if ids.is_empty() {
-                            ui.weak("Aucune option");
-                        }
-                    });
-                    // the drag: the option follows the row under the mouse
-                    if let Some(moving) = manager.drag_option {
-                        if ui.input(|i| i.pointer.any_down()) {
-                            if let Some(p) = ui.input(|i| i.pointer.interact_pos()) {
-                                let to = if p.y < rows.first().map_or(0.0, |r| r.1.top()) {
-                                    rows.first().map(|r| r.0)
-                                } else if p.y > rows.last().map_or(0.0, |r| r.1.bottom()) {
-                                    rows.last().map(|r| r.0)
-                                } else {
-                                    rows.iter().find(|r| r.1.y_range().contains(p.y)).map(|r| r.0)
-                                };
-                                if let (Some(to), Some(from)) = (to.and_then(|t| ids.iter().position(|i| *i == t)), ids.iter().position(|i| *i == moving)) {
-                                    if to != from {
-                                        draft.config.move_option(moving, to as isize - from as isize);
-                                        save = true;
-                                    }
-                                }
-                            }
-                            ui.ctx().request_repaint();
-                        } else {
-                            manager.drag_option = None;
-                        }
-                    }
-                    manager.confirm_fresh = false;
-                    ui.horizontal(|ui| {
-                        let edit = ui.add(egui::TextEdit::singleline(&mut manager.new_option).hint_text("Ajouter une option").desired_width(200.0));
-                        let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if (ui.button("Ajouter").clicked() || enter) && draft.config.add_option(&manager.new_option).is_some() {
-                            manager.new_option.clear();
-                            save = true;
-                            edit.request_focus();
+                        if armed && !manager.confirm_fresh && !trash.hovered() && ui.input(|i| i.pointer.any_pressed() || i.key_pressed(egui::Key::Escape)) {
+                            manager.confirm_option = None;
                         }
                     });
-                    // what changes the values goes to the base at once, then the draft is read again
-                    if let Some(id) = remove {
-                        store.update_meta(draft);
-                        store.remove_choice_option(draft.id, id);
-                        manager.confirm_option = None;
-                        manager.draft = None;
-                    } else if let Some((from, into)) = merge {
-                        store.update_meta(draft);
-                        store.merge_choice_option(draft.id, from, into);
-                        manager.draft = None;
-                    }
+                    rows.push((*id, row.response.rect));
                 }
-                let Some((draft_id, draft_name)) = manager.draft.as_ref().map(|d| (d.id, d.name.clone())) else { return };
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if manager.confirm_property {
-                        ui.label(format!("Supprimer « {draft_name} » et ses {usage} valeur(s) ?"));
-                        if ui.button("Supprimer").clicked() {
-                            store.delete_meta(draft_id);
-                            manager.confirm_property = false;
-                            manager.selected = None;
-                            manager.draft = None;
-                        }
-                        if ui.button("Annuler").clicked() {
-                            manager.confirm_property = false;
-                        }
-                    } else if ui.button("Supprimer la propriété").clicked() {
-                        manager.confirm_property = true;
-                    }
-                });
+                if ids.is_empty() {
+                    ui.weak("Aucune option");
+                }
             });
-        });
-        ui.add_space(8.0);
-        if ui.button("Fermer").clicked() {
-            close = true;
+            // the drag: the option follows the row under the mouse
+            if let Some(moving) = manager.drag_option {
+                if ui.input(|i| i.pointer.any_down()) {
+                    if let Some(p) = ui.input(|i| i.pointer.interact_pos()) {
+                        let to = if p.y < rows.first().map_or(0.0, |r| r.1.top()) {
+                            rows.first().map(|r| r.0)
+                        } else if p.y > rows.last().map_or(0.0, |r| r.1.bottom()) {
+                            rows.last().map(|r| r.0)
+                        } else {
+                            rows.iter().find(|r| r.1.y_range().contains(p.y)).map(|r| r.0)
+                        };
+                        if let (Some(to), Some(from)) = (to.and_then(|t| ids.iter().position(|i| *i == t)), ids.iter().position(|i| *i == moving)) {
+                            if to != from {
+                                draft.config.move_option(moving, to as isize - from as isize);
+                                save = true;
+                            }
+                        }
+                    }
+                    ui.ctx().request_repaint();
+                } else {
+                    manager.drag_option = None;
+                }
+            }
+            manager.confirm_fresh = false;
+            ui.horizontal(|ui| {
+                let edit = ui.add(egui::TextEdit::singleline(&mut manager.new_option).hint_text("Ajouter une option").desired_width(200.0));
+                let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (ui.button("Ajouter").clicked() || enter) && draft.config.add_option(&manager.new_option).is_some() {
+                    manager.new_option.clear();
+                    save = true;
+                    edit.request_focus();
+                }
+            });
+            // what changes the values goes to the base at once, then the draft is read again
+            if let Some(id) = remove {
+                store.update_meta(draft);
+                store.remove_choice_option(draft.id, id);
+                manager.confirm_option = None;
+                manager.draft = None;
+            } else if let Some((from, into)) = merge {
+                store.update_meta(draft);
+                store.merge_choice_option(draft.id, from, into);
+                manager.draft = None;
+            }
         }
-    });
+        let Some((draft_id, draft_name)) = manager.draft.as_ref().map(|d| (d.id, d.name.clone())) else { return };
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if manager.confirm_property {
+                ui.label(format!("Supprimer « {draft_name} » et ses {usage} valeur(s) ?"));
+                if ui.button("Supprimer").clicked() {
+                    store.delete_meta(draft_id);
+                    manager.confirm_property = false;
+                    manager.selected = None;
+                    manager.draft = None;
+                }
+                if ui.button("Annuler").clicked() {
+                    manager.confirm_property = false;
+                }
+            } else if ui.button("Supprimer la propriété").clicked() {
+                manager.confirm_property = true;
+            }
+        });
+        },
+        |ui| {
+            crate::glyphs::modal_visuals(ui);
+            ui.weak(format!("{} propriété(s)", items.len()));
+        },
+    );
+    manager.win = win;
+    for event in events {
+        match event {
+            SettingsEvent::Select(id) => {
+                manager.selected = id.parse().ok();
+                manager.adding = false;
+            }
+            SettingsEvent::Move { from, to } => {
+                if let Some(d) = defs.get(from) {
+                    store.move_meta(d.id, to as isize - from as isize);
+                }
+            }
+            SettingsEvent::Add => {
+                manager.adding = true;
+                manager.new_fresh = true;
+            }
+            SettingsEvent::Close => close = true,
+        }
+    }
+    if let Some(id) = created {
+        manager.selected = Some(id);
+        manager.adding = false;
+        manager.draft = None;
+    }
     if save {
         if let Some(draft) = manager.draft.as_ref() {
             if !store.update_meta(draft) {
@@ -814,94 +821,260 @@ pub fn modal(app: &mut FinderApp, ctx: &egui::Context) {
     }
 }
 
+
+/// The panel of a new property: its name, type, group and description, then "Créer"
+fn new_property_form(ui: &mut egui::Ui, manager: &mut Manager, store: &mut crate::tagstore::TagStore, created: &mut Option<i64>) {
+    ui.label(RichText::new("Nouvelle propriété").strong().size(15.0));
+    ui.add_space(6.0);
+    egui::Grid::new("meta-new-fields").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+        ui.label("Nom");
+        let name = ui.add(egui::TextEdit::singleline(&mut manager.new_name).desired_width(280.0));
+        if manager.new_fresh {
+            name.request_focus();
+            manager.new_fresh = false;
+        }
+        ui.end_row();
+        ui.label("Type");
+        egui::ComboBox::from_id_salt("meta-new-type").selected_text(MetaType::ALL[manager.new_type].label()).width(280.0).show_ui(ui, |ui| {
+            for (i, ty) in MetaType::ALL.iter().enumerate() {
+                ui.selectable_value(&mut manager.new_type, i, ty.label());
+            }
+        });
+        ui.end_row();
+        ui.label("Groupe");
+        ui.add(egui::TextEdit::singleline(&mut manager.new_group).hint_text("Divers").desired_width(280.0));
+        ui.end_row();
+        ui.label("Description");
+        ui.add(egui::TextEdit::multiline(&mut manager.new_description).desired_rows(2).desired_width(280.0));
+        ui.end_row();
+    });
+    ui.add_space(8.0);
+    let taken = store.meta_defs().iter().any(|d| d.name.to_lowercase() == manager.new_name.trim().to_lowercase());
+    if taken && !manager.new_name.trim().is_empty() {
+        ui.colored_label(Color32::from_rgb(220, 90, 90), "Une propriété porte déjà ce nom");
+    }
+    ui.horizontal(|ui| {
+        let ok = !manager.new_name.trim().is_empty() && !taken;
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter)) && ok;
+        if ui.add_enabled(ok, egui::Button::new("Créer").min_size(egui::vec2(88.0, 26.0))).clicked() || enter {
+            if let Some(id) = store.create_meta(&manager.new_name, MetaType::ALL[manager.new_type]) {
+                if let Some(mut def) = store.meta_def(id) {
+                    def.config.group = manager.new_group.trim().to_owned();
+                    def.description = manager.new_description.trim().to_owned();
+                    store.update_meta(&def);
+                }
+                manager.new_name.clear();
+                manager.new_group.clear();
+                manager.new_description.clear();
+                *created = Some(id);
+            }
+        }
+        if ui.button("Annuler").clicked() {
+            manager.adding = false;
+        }
+    });
+}
+
+/// What the window of the rules keeps between two frames
+#[derive(Default)]
+pub struct RulesUi {
+    /// the folder and the pattern of the rule being added
+    root: String,
+    pattern: String,
+    name: String,
+    selected: Option<i64>,
+    adding: bool,
+    confirm_delete: bool,
+    win: SettingsState,
+}
+
+impl RulesUi {
+    pub fn new(folder: String) -> Self {
+        RulesUi { root: folder, ..Default::default() }
+    }
+}
+
+const RULES_HELP: &str = "Sous un dossier, chaque niveau de sous-dossiers remplit une propriété : {project}/{entreprise}/{chapter}. Les valeurs se mettent sur les dossiers (leur contenu en hérite) à la fin d'une indexation ou avec « Appliquer ». Une valeur tapée à la main n'est jamais remplacée. * ignore un niveau ; un nom de dossier fixe (00 - DOE Livrés) ne s'applique qu'à ce dossier ; {nom!a|b} refuse les dossiers a et b ; [Statut=Terminé] après un niveau donne cette valeur à son dossier.";
+
+fn rule_check(ui: &mut egui::Ui, pattern: &str, names: &[String]) {
+    match pyegui_core::meta::Pattern::parse(pattern) {
+        None => {
+            ui.colored_label(Color32::from_rgb(220, 90, 90), "Aucun {nom} dans le motif");
+        }
+        Some(p) => {
+            let missing: Vec<&str> = p.names().into_iter().filter(|n| !names.contains(&n.to_lowercase())).collect();
+            if !missing.is_empty() {
+                ui.colored_label(Color32::from_rgb(220, 90, 90), format!("Propriété inconnue : {}", missing.join(", ")));
+            }
+        }
+    }
+}
+
 /// The window of the rules of the indexation: a folder, and the pattern its sub-folders are read with
 pub fn rules_modal(app: &mut FinderApp, ctx: &egui::Context) {
-    let Some((mut root, mut pattern)) = app.meta.rules.take() else { return };
+    let Some(mut ui_state) = app.meta.rules.take() else { return };
     let folder = app.folder().to_string_lossy().into_owned();
     let Some(store) = app.tags.as_mut() else { return };
     let rules = store.meta_rules();
     let names: Vec<String> = store.meta_defs().iter().map(|d| d.name.to_lowercase()).collect();
-    let (mut close, mut apply, mut add) = (false, false, false);
-    let mut delete: Option<i64> = None;
+    if ui_state.selected.is_some_and(|id| !rules.iter().any(|r| r.id == id)) {
+        ui_state.selected = None;
+    }
+    if ui_state.selected.is_none() && !ui_state.adding {
+        ui_state.selected = rules.first().map(|r| r.id);
+    }
+    let (mut close, mut apply) = (false, false);
     let mut change: Option<crate::metastore::Rule> = None;
-    crate::glyphs::modal(ctx, "meta-rules").show(ctx, |ui| {
-        // a fixed size: nothing inside may ask for more, or the window grows at every frame
-        ui.set_width(640.0);
-        ui.set_max_width(640.0);
-        ui.set_max_height(520.0);
-        if crate::glyphs::modal_title(ui, "Règles d'indexation") {
-            close = true;
-        }
-        ui.weak("Sous un dossier, chaque niveau de sous-dossiers remplit une propriété : {project}/{entreprise}/{chapter}. Les valeurs se mettent sur les dossiers (leur contenu en hérite) à la fin d'une indexation ou avec « Appliquer ». Une valeur tapée à la main n'est jamais remplacée. * ignore un niveau ; un nom de dossier fixe (00 - DOE Livrés) ne s'applique qu'à ce dossier ; [Statut=Terminé] après un niveau donne cette valeur à son dossier.");
-        ui.add_space(6.0);
-        egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
-            for rule in &rules {
-                let mut r = rule.clone();
+    let mut delete: Option<i64> = None;
+    let mut add = false;
+    let items: Vec<SettingsItem> = rules
+        .iter()
+        .map(|r| SettingsItem {
+            id: r.id.to_string(),
+            label: r.title().to_owned(),
+            hint: if r.enabled { String::new() } else { "désactivée".to_owned() },
+        })
+        .collect();
+    let selected = ui_state.selected.map(|id| id.to_string());
+    let adding = ui_state.adding;
+    let mut options = SettingsOptions::new(egui::Id::unique("meta-rules"));
+    options.title = "Règles d'indexation".into();
+    options.subtitle = "Les dossiers d'une arborescence remplissent des propriétés.".into();
+    options.list_title = "Règles".into();
+    options.add_label = "Nouvelle règle".into();
+    options.empty_text = "Aucune règle".into();
+    options.width = 780.0;
+    options.height = 430.0;
+    options.reorderable = false;
+    options.adding = adding;
+    options.frame = Some(crate::glyphs::popup_frame(ctx));
+    let mut win = std::mem::take(&mut ui_state.win);
+    let events = settings_window(
+        ctx,
+        &mut win,
+        &options,
+        &items,
+        selected.as_deref(),
+        |ui| {
+            crate::glyphs::modal_visuals(ui);
+            if adding {
+                ui.label(RichText::new("Nouvelle règle").strong().size(15.0));
+                ui.add_space(6.0);
+                egui::Grid::new("rule-new").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+                    ui.label("Nom");
+                    ui.add(egui::TextEdit::singleline(&mut ui_state.name).hint_text("Facultatif").desired_width(380.0));
+                    ui.end_row();
+                    ui.label("Dossier");
+                    ui.vertical(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut ui_state.root).desired_width(380.0));
+                        if ui.small_button("Dossier affiché").clicked() {
+                            ui_state.root = folder.clone();
+                        }
+                    });
+                    ui.end_row();
+                    ui.label("Motif");
+                    ui.add(egui::TextEdit::singleline(&mut ui_state.pattern).hint_text("{project}/{entreprise}").desired_width(380.0));
+                    ui.end_row();
+                });
+                if !ui_state.pattern.trim().is_empty() {
+                    rule_check(ui, &ui_state.pattern, &names);
+                }
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut r.enabled, "");
-                    ui.add(egui::TextEdit::singleline(&mut r.root).desired_width(250.0));
-                    ui.add(egui::TextEdit::singleline(&mut r.pattern).desired_width(250.0));
-                    if glyphs::button(ui, glyphs::CLOSE, 12.0, false, "Supprimer la règle et ses valeurs").clicked() {
-                        delete = Some(r.id);
+                    let ok = !ui_state.root.trim().is_empty() && pyegui_core::meta::Pattern::parse(&ui_state.pattern).is_some();
+                    if ui.add_enabled(ok, egui::Button::new("Ajouter").min_size(egui::vec2(88.0, 26.0))).clicked() {
+                        add = true;
+                    }
+                    if ui.button("Annuler").clicked() {
+                        ui_state.adding = false;
                     }
                 });
-                match pyegui_core::meta::Pattern::parse(&r.pattern) {
-                    None => {
-                        ui.colored_label(Color32::from_rgb(220, 90, 90), "Aucun {nom} dans le motif");
-                    }
-                    Some(p) => {
-                        let missing: Vec<&str> = p.names().into_iter().filter(|n| !names.contains(&n.to_lowercase())).collect();
-                        if !missing.is_empty() {
-                            ui.colored_label(Color32::from_rgb(220, 90, 90), format!("Propriété inconnue : {}", missing.join(", ")));
-                        }
-                    }
-                }
+            } else if let Some(rule) = rules.iter().find(|r| Some(r.id) == ui_state.selected) {
+                let mut r = rule.clone();
+                ui.checkbox(&mut r.enabled, "Règle active");
+                ui.add_space(4.0);
+                egui::Grid::new("rule-edit").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+                    ui.label("Nom");
+                    ui.add(egui::TextEdit::singleline(&mut r.name).hint_text(r.pattern.as_str()).desired_width(380.0));
+                    ui.end_row();
+                    ui.label("Dossier");
+                    ui.add(egui::TextEdit::singleline(&mut r.root).desired_width(380.0));
+                    ui.end_row();
+                    ui.label("Motif");
+                    ui.add(egui::TextEdit::singleline(&mut r.pattern).desired_width(380.0));
+                    ui.end_row();
+                });
+                rule_check(ui, &r.pattern, &names);
                 if r != *rule {
                     change = Some(r);
                 }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui_state.confirm_delete {
+                        ui.label("Supprimer la règle et les valeurs qu'elle a mises ?");
+                        if ui.button("Supprimer").clicked() {
+                            delete = Some(rule.id);
+                            ui_state.confirm_delete = false;
+                        }
+                        if ui.button("Annuler").clicked() {
+                            ui_state.confirm_delete = false;
+                        }
+                    } else if ui.button("Supprimer la règle").clicked() {
+                        ui_state.confirm_delete = true;
+                    }
+                });
+            } else {
+                ui.weak("Choisis une règle ou crées-en une.");
             }
-            if rules.is_empty() {
-                ui.weak("Aucune règle");
-            }
-        });
-        ui.separator();
-        ui.label("Nouvelle règle");
-        ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut root).hint_text("Dossier").desired_width(250.0));
-            ui.add(egui::TextEdit::singleline(&mut pattern).hint_text("{project}/{entreprise}").desired_width(250.0));
-        });
-        ui.horizontal(|ui| {
-            if ui.button("Dossier affiché").clicked() {
-                root = folder.clone();
-            }
-            let ok = !root.trim().is_empty() && pyegui_core::meta::Pattern::parse(&pattern).is_some();
-            if ui.add_enabled(ok, egui::Button::new("Ajouter")).clicked() {
-                add = true;
-            }
-        });
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
+            ui.add_space(10.0);
+            egui::CollapsingHeader::new("Syntaxe des motifs").default_open(rules.is_empty()).show(ui, |ui| {
+                ui.add(egui::Label::new(RichText::new(RULES_HELP).weak().small()).wrap());
+            });
+        },
+        |ui| {
+            crate::glyphs::modal_visuals(ui);
             if ui.button("Appliquer").on_hover_text("Relit les dossiers déjà indexés").clicked() {
                 apply = true;
             }
-            if ui.button("Fermer").clicked() {
-                close = true;
+        },
+    );
+    ui_state.win = win;
+    for event in events {
+        match event {
+            SettingsEvent::Select(id) => {
+                ui_state.selected = id.parse().ok();
+                ui_state.adding = false;
+                ui_state.confirm_delete = false;
             }
-        });
-    });
+            SettingsEvent::Move { .. } => {}
+            SettingsEvent::Add => ui_state.adding = true,
+            SettingsEvent::Close => close = true,
+        }
+    }
     if let Some(r) = change {
         store.update_meta_rule(&r);
     }
     if let Some(id) = delete {
         store.delete_meta_rule(id);
     }
-    if add && store.add_meta_rule(std::path::Path::new(root.trim()), &pattern).is_some() {
-        pattern.clear();
+    if add {
+        if let Some(id) = store.add_meta_rule(std::path::Path::new(ui_state.root.trim()), &ui_state.pattern) {
+            if !ui_state.name.trim().is_empty() {
+                if let Some(mut rule) = store.meta_rules().into_iter().find(|r| r.id == id) {
+                    rule.name = ui_state.name.trim().to_owned();
+                    store.update_meta_rule(&rule);
+                }
+            }
+            ui_state.name.clear();
+            ui_state.pattern.clear();
+            ui_state.adding = false;
+            ui_state.selected = Some(id);
+        }
     }
     if apply {
         app.apply_meta_rules_notice();
     }
-    if !close && !ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        app.meta.rules = Some((root, pattern));
+    if !close {
+        app.meta.rules = Some(ui_state);
     }
 }

@@ -30,6 +30,7 @@ pub mod files;
 pub mod terminal;
 pub mod tags;
 pub mod property_set;
+pub mod settings;
 pub mod dock_draw;
 pub mod segmented;
 pub mod markdown;

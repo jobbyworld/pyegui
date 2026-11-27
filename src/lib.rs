@@ -40,6 +40,7 @@ mod table;
 mod table_view;
 mod tags;
 mod property_set;
+mod settings;
 mod terminal;
 mod titlebar;
 mod viewport;
@@ -1850,12 +1851,21 @@ unsafe fn small(text: &str) -> PyResult<()> {
 /// Example::
 ///
 ///     strong("hello")
+///
+/// Keyword args:
+///     selectable (bool): whether the user can select the text to copy it. Default is True. A text that is
+///         a clickable area (see interactive) has to be not selectable, or the text takes the click
 #[pyfunction]
-unsafe fn strong(text: &str) -> PyResult<()> {
+#[pyo3(signature = (text, selectable=None))]
+unsafe fn strong(text: &str, selectable: Option<bool>) -> PyResult<()> {
     let ui = current_ui(&UI)?;
 
     // semibold with the modern theme, the "bold" family is the regular font otherwise
-    ui.label(egui::RichText::new(text).strong().family(style::bold_family()));
+    let mut label = egui::Label::new(egui::RichText::new(text).strong().family(style::bold_family()));
+    if let Some(selectable) = selectable {
+        label = label.selectable(selectable);
+    }
+    ui.add(label);
     Ok(())
 }
 
@@ -3015,6 +3025,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pdf_view::register(m)?;
     tags::register(m)?;
     property_set::register(m)?;
+    settings::register(m)?;
     debuglog::register(m)?;
     Ok(())
 }

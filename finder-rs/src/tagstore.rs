@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS meta_rules (
     id INTEGER PRIMARY KEY,
     root TEXT NOT NULL,
     pattern TEXT NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1
+    enabled INTEGER NOT NULL DEFAULT 1,
+    name TEXT NOT NULL DEFAULT ''
 );
 ";
 
@@ -189,6 +190,14 @@ const INDEX_COLUMNS: [(&str, &str); 7] = [
 ];
 
 pub(crate) fn add_index_columns(db: &Connection) {
+    // bases made before the rules had a name
+    let rule_columns: HashSet<String> = db
+        .prepare("PRAGMA table_info(meta_rules)")
+        .and_then(|mut s| s.query_map([], |r| r.get::<_, String>(1)).map(|rows| rows.flatten().collect()))
+        .unwrap_or_default();
+    if !rule_columns.is_empty() && !rule_columns.contains("name") {
+        let _ = db.execute_batch("ALTER TABLE meta_rules ADD COLUMN name TEXT NOT NULL DEFAULT ''");
+    }
     let have: HashSet<String> = db
         .prepare("PRAGMA table_info(files)")
         .and_then(|mut s| s.query_map([], |r| r.get::<_, String>(1)).map(|rows| rows.flatten().collect()))

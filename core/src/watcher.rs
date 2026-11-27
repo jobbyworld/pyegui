@@ -336,6 +336,21 @@ impl Core {
         paths
     }
 
+    /// The paths watched now with their pinned state, sorted by path
+    pub fn watched_list(&self) -> Vec<(PathBuf, bool)> {
+        let mut paths: Vec<(PathBuf, bool)> = self.watched.iter().map(|(p, w)| (p.clone(), w.pinned)).collect();
+        paths.sort();
+        paths
+    }
+
+    /// Pins (kept until `unwatch`) or unpins a watched path, given in the canonical form of `watched_list`
+    pub fn pin(&mut self, canonical: &Path, pinned: bool) {
+        if let Some(w) = self.watched.get_mut(canonical) {
+            w.pinned = pinned;
+            w.last_used = Instant::now();
+        }
+    }
+
     /// The events of the system since the last call, oldest first (the last 1000 are kept)
     pub fn take_events(&self) -> Vec<Event> {
         let events: Vec<Logged> = self.changes().log.drain(..).collect();

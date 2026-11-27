@@ -1092,6 +1092,10 @@ unsafe fn key_pressed(shortcut: &str, when_typing: bool) -> PyResult<bool> {
     if !when_typing && (ctx.text_edit_focused() || crate::terminal::terminal_focused(&ctx)) {
         return Ok(false);
     }
+    // copy, cut and paste reach egui as events, not as keys
+    if modifiers == egui::Modifiers::COMMAND && matches!(key, egui::Key::C | egui::Key::X | egui::Key::V) && ctx.input_mut(|i| pyegui_core::clipboard::take_shortcut(i, key)) {
+        return Ok(true);
+    }
     Ok(ctx.input(|i| {
         // Windows: egui-winit turns Shift+Delete into a Cut event and the key itself is not seen
         let shift_delete = cfg!(windows)

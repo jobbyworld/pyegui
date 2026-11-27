@@ -171,7 +171,14 @@ fn read_property(d: &Bound<'_, PyDict>) -> PyResult<Property> {
             open: item::<bool>(d, "open")?.unwrap_or(false),
         },
         "readonly" | "label" => Kind::Readonly,
-        other => return Err(PyValueError::new_err(format!("unknown property type {other:?}: text, longtext, number, bool, date, choice or readonly"))),
+        "color" => Kind::Color { alpha: item::<bool>(d, "alpha")?.unwrap_or(false) },
+        "range" | "slider" => Kind::Range {
+            min: item::<f64>(d, "min")?.unwrap_or(0.0),
+            max: item::<f64>(d, "max")?.unwrap_or(1.0),
+            integer: item::<bool>(d, "integer")?.unwrap_or(false),
+        },
+        "action" | "button" => Kind::Action { label: item::<String>(d, "label")?.unwrap_or_else(|| name.clone()) },
+        other => return Err(PyValueError::new_err(format!("unknown property type {other:?}: text, longtext, number, bool, date, choice, readonly, color, range or action"))),
     };
     let mut p = Property::new(&id, &name, kind);
     p.group = item::<String>(d, "group")?.unwrap_or_default();
@@ -216,7 +223,10 @@ fn read_property(d: &Bound<'_, PyDict>) -> PyResult<Property> {
 ///         - ``id`` (str): what a change names (default: ``name``)
 ///         - ``name`` (str): the text of the name column
 ///         - ``type`` (str): ``"text"`` (default), ``"longtext"``, ``"number"``, ``"bool"``, ``"date"``,
-///           ``"choice"`` or ``"readonly"``
+///           ``"choice"``, ``"readonly"``, ``"color"`` (a color button, the value is ``"#rrggbb"``, or
+///           ``"#rrggbbaa"`` with ``alpha=True``; a field beside it shows the color as HTML and takes a pasted one), ``"range"`` (a slider between ``min`` and ``max``, whole
+///           numbers with ``integer=True``, the ``unit`` after the number) or ``"action"`` (a button labelled
+///           ``label``: a click is a ``("set", id, "1")`` change)
 ///         - ``value``: a str for a text, number or date (what is typed), a bool for a bool, the id (or a list
 ///           of ids) of the options chosen for a choice; None for no value
 ///         - ``group`` (str): its group (category)

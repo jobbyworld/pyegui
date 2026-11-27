@@ -171,17 +171,21 @@ pub fn action_button(ui: &egui::Ui, icon: &str, label: &str) -> egui::Button<'st
 }
 
 /// A popup. In the light theme its window is darker than the glass of the bars, so that it stands out
-pub fn modal(ctx: &egui::Context, id: &'static str) -> egui::Modal {
+pub fn popup_frame(ctx: &egui::Context) -> egui::Frame {
     let style = ctx.global_style();
     let mut frame = egui::Frame::popup(&style);
     if !style.visuals.dark_mode {
         frame = frame.fill(Color32::from_rgb(222, 224, 233)).stroke(egui::Stroke::new(1.0, Color32::from_rgb(140, 143, 160)));
     }
-    egui::Modal::new(egui::Id::unique(id)).frame(frame)
+    frame
+}
+
+pub fn modal(ctx: &egui::Context, id: &'static str) -> egui::Modal {
+    egui::Modal::new(egui::Id::unique(id)).frame(popup_frame(ctx))
 }
 
 /// In the light theme the fields and buttons of a popup get opaque fills and marked outlines
-fn modal_visuals(ui: &mut egui::Ui) {
+pub fn modal_visuals(ui: &mut egui::Ui) {
     if ui.visuals().dark_mode {
         return;
     }

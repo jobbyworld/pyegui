@@ -63,7 +63,8 @@ and attached to the GitHub Release of a `v*` tag.
 Things that bite:
 
 - `key_pressed` returns False while a text field has the focus unless `when_typing=True`. Cmd+C,
-  Cmd+X and Cmd+V are turned into egui copy/cut/paste events and may not reach `key_pressed`.
+  Cmd+X and Cmd+V are turned into egui copy/cut/paste events by egui-winit (no key event): `key_pressed("Cmd+C")` reads those events
+  (`pyegui_core::clipboard::take_shortcut`), and on Windows reads Ctrl+V from the keyboard, since a paste of files sends no event.
 - `path_breadcrumb(max_width=...)` takes exactly what it is given: reserve what follows it in the row with
   its measured width and the row spacing (the "…" button of the Finder is 36.9 wide with its spacing). An
   under-estimate pushes the right side out of the row; a row that learns its widths from what fits then

@@ -151,6 +151,7 @@ property (`pyegui_core::meta::Pattern`).
 | `root` | TEXT NOT NULL | the folder the pattern starts from (stored path) |
 | `pattern` | TEXT NOT NULL | `{project}/{entreprise}/*/{chapter}`: the first level under `root` fills `project`, the second `entreprise`, `*` (or any text) is a level that gives nothing |
 | `enabled` | INTEGER NOT NULL DEFAULT 1 | |
+| `name` | TEXT NOT NULL DEFAULT `''` | what the list of the rules shows; the pattern when empty (added by `ALTER TABLE` to the bases made before) |
 
 A rule writes its values on the **folders** (the items below inherit them) into `meta_values` with the source
 `auto:<id of the rule>`, at the end of an indexation or when asked (`TagStore::apply_meta_rules`). It first removes the

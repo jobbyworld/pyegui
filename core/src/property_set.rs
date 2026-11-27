@@ -36,6 +36,29 @@ pub enum Kind {
     Choice { options: Vec<PropOption>, multiple: bool, open: bool },
     /// shown, never edited (a computed value)
     Readonly,
+    /// a color button with its picker: the value is "#rrggbb", or "#rrggbbaa" when the transparency is edited
+    Color { alpha: bool },
+    /// a slider: the value is the number (a whole one when `integer`)
+    Range { min: f64, max: f64, integer: bool },
+    /// a button: a click is a `Change::Set` with the value "1"
+    Action { label: String },
+}
+
+/// "#rrggbb" or "#rrggbbaa" as a color (not premultiplied)
+pub fn parse_hex(text: &str) -> Option<Color32> {
+    let t = text.trim().strip_prefix('#')?;
+    let byte = |i: usize| u8::from_str_radix(t.get(i..i + 2)?, 16).ok();
+    match t.len() {
+        6 => Some(Color32::from_rgb(byte(0)?, byte(2)?, byte(4)?)),
+        8 => Some(Color32::from_rgba_unmultiplied(byte(0)?, byte(2)?, byte(4)?, byte(6)?)),
+        _ => None,
+    }
+}
+
+/// A color as the value of a property
+pub fn to_hex(color: Color32, alpha: bool) -> String {
+    let [r, g, b, a] = color.to_srgba_unmultiplied();
+    if alpha { format!("#{r:02x}{g:02x}{b:02x}{a:02x}") } else { format!("#{r:02x}{g:02x}{b:02x}") }
 }
 
 /// One row
@@ -90,6 +113,11 @@ impl Property {
     fn editable(&self) -> bool {
         !self.readonly && self.kind != Kind::Readonly
     }
+
+    /// a value that can be cleared (a color, a number on a slider or a button cannot)
+    fn clearable(&self) -> bool {
+        self.editable() && self.has_value() && !matches!(self.kind, Kind::Color { .. } | Kind::Range { .. } | Kind::Action { .. } | Kind::Bool)
+    }
 }
 
 /// What the person changed
@@ -115,6 +143,9 @@ pub struct PropertySetState {
     /// the width of the name column, as a fraction of the width
     pub split: f32,
     buffers: HashMap<String, String>,
+    /// the colors being edited: the value last given or sent, and the color in hue, saturation, value and alpha
+    /// (a color changed through its transparency would lose its hue in the bytes of a color with alpha)
+    colors: HashMap<String, (String, egui::ecolor::Hsva)>,
     new_option: HashMap<String, String>,
     key: String,
 }
@@ -127,7 +158,7 @@ impl PropertySetState {
 
 impl Default for PropertySetState {
     fn default() -> Self {
-        PropertySetState { grouped: true, collapsed: HashSet::new(), filter: String::new(), selected: None, split: 0.42, buffers: HashMap::new(), new_option: HashMap::new(), key: String::new() }
+        PropertySetState { grouped: true, collapsed: HashSet::new(), filter: String::new(), selected: None, split: 0.42, buffers: HashMap::new(), colors: HashMap::new(), new_option: HashMap::new(), key: String::new() }
     }
 }
 
@@ -240,6 +271,7 @@ pub fn property_set(ui: &mut Ui, state: &mut PropertySetState, props: &[Property
     if state.key != o.key {
         state.key = o.key.clone();
         state.buffers.clear();
+        state.colors.clear();
         state.new_option.clear();
         state.selected = None;
     }
@@ -350,7 +382,7 @@ fn row(ui: &mut Ui, state: &mut PropertySetState, p: &Property, o: &PropertySetO
     }
 
     // the value
-    let clear_room = if p.editable() && p.has_value() { 22.0 } else { 0.0 };
+    let clear_room = if p.clearable() { 22.0 } else { 0.0 };
     let value_rect = Rect::from_min_max(egui::pos2(split_x + 6.0, rect.top() + 2.0), egui::pos2(rect.right() - 6.0 - clear_room, rect.bottom() - 2.0));
     let align = if p.kind == Kind::LongText { Align::Min } else { Align::Center };
     let mut vui = ui.new_child(UiBuilder::new().max_rect(value_rect).layout(Layout::left_to_right(align)));
@@ -366,6 +398,70 @@ fn row(ui: &mut Ui, state: &mut PropertySetState, p: &Property, o: &PropertySetO
             state.buffers.remove(&p.id);
             changes.push(Change::Clear { id: p.id.clone() });
         }
+    }
+}
+
+/// What is typed as a color: "#rrggbbaa", "rrggbb", "#rgb", "#rgba", the # being optional
+pub fn parse_hex_loose(text: &str) -> Option<[u8; 4]> {
+    let t = text.trim().trim_start_matches('#');
+    if !t.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let expanded: String = match t.len() {
+        3 | 4 => t.chars().flat_map(|c| [c, c]).collect(),
+        6 | 8 => t.to_owned(),
+        _ => return None,
+    };
+    let byte = |i: usize| u8::from_str_radix(&expanded[i..i + 2], 16).ok();
+    Some([byte(0)?, byte(2)?, byte(4)?, if expanded.len() == 8 { byte(6)? } else { 255 }])
+}
+
+fn hex_of_bytes([r, g, b, a]: [u8; 4], alpha: bool) -> String {
+    if alpha { format!("#{r:02x}{g:02x}{b:02x}{a:02x}") } else { format!("#{r:02x}{g:02x}{b:02x}") }
+}
+
+/// A color button with its picker and a field with the color as HTML (#rrggbbaa) that can be copied and pasted.
+/// The picker works on its own hue, saturation and value, kept here: it is not recomputed from the bytes at each
+/// frame, or the tint would drift when the transparency is dragged.
+fn color_editor(ui: &mut Ui, state: &mut PropertySetState, p: &Property, alpha: bool, changes: &mut Vec<Change>) {
+    use egui::ecolor::Hsva;
+    let bytes = |text: &str| parse_hex_loose(text).unwrap_or([128, 128, 128, 255]);
+    let entry = state.colors.entry(p.id.clone()).or_insert_with(|| (p.value.clone(), Hsva::from_srgba_unmultiplied(bytes(&p.value))));
+    if entry.0 != p.value {
+        // changed by the caller: the color is read again
+        *entry = (p.value.clone(), Hsva::from_srgba_unmultiplied(bytes(&p.value)));
+    }
+    let mut hsva = entry.1;
+    let mode = if alpha { egui::color_picker::Alpha::OnlyBlend } else { egui::color_picker::Alpha::Opaque };
+    let mut sent: Option<String> = None;
+    ui.add_enabled_ui(p.editable(), |ui| {
+        if egui::color_picker::color_edit_button_hsva(ui, &mut hsva, mode).changed() {
+            sent = Some(hex_of_bytes(hsva.to_srgba_unmultiplied(), alpha));
+        }
+    });
+    // the field: what is typed is read when it loses the focus
+    let key = format!("{}#html", p.id);
+    let shown = hex_of_bytes(hsva.to_srgba_unmultiplied(), alpha);
+    let buffer = state.buffers.entry(key.clone()).or_insert_with(|| shown.clone());
+    let width = (ui.available_width() - 4.0).clamp(60.0, 96.0);
+    let edit = ui.add_enabled(p.editable(), egui::TextEdit::singleline(buffer).desired_width(width).font(TextStyle::Monospace).hint_text(if alpha { "#rrggbbaa" } else { "#rrggbb" }));
+    if edit.lost_focus() {
+        if let Some(b) = parse_hex_loose(buffer) {
+            hsva = Hsva::from_srgba_unmultiplied(b);
+            sent = Some(hex_of_bytes(b, alpha));
+        }
+    }
+    if !edit.has_focus() {
+        *buffer = sent.clone().unwrap_or(shown);
+    }
+    if let Some(value) = sent {
+        changes.push(Change::Set { id: p.id.clone(), value: value.clone() });
+        state.colors.insert(p.id.clone(), (value, hsva));
+    } else if let Some(entry) = state.colors.get_mut(&p.id) {
+        entry.1 = hsva;
+    }
+    if !p.note.is_empty() {
+        ui.label(weak_note(ui, &p.note));
     }
 }
 
@@ -390,6 +486,27 @@ fn editor(ui: &mut Ui, state: &mut PropertySetState, p: &Property, o: &PropertyS
             }
             if p.value.is_empty() && !p.note.is_empty() {
                 ui.label(weak_note(ui, &p.note));
+            }
+        }
+        Kind::Color { alpha } => color_editor(ui, state, p, *alpha, changes),
+        Kind::Range { min, max, integer } => {
+            let mut v: f64 = p.value.trim().parse().unwrap_or(*min);
+            ui.spacing_mut().slider_width = (width - 74.0).max(60.0);
+            let mut slider = egui::Slider::new(&mut v, *min..=*max);
+            if *integer {
+                slider = slider.integer();
+            }
+            if !p.unit.is_empty() {
+                slider = slider.suffix(p.unit.clone());
+            }
+            if ui.add_enabled(p.editable(), slider).changed() {
+                let text = if *integer { format!("{}", v.round() as i64) } else { format!("{v}") };
+                changes.push(Change::Set { id: p.id.clone(), value: text });
+            }
+        }
+        Kind::Action { label } => {
+            if ui.add_enabled(p.editable(), egui::Button::new(label)).clicked() {
+                changes.push(Change::Set { id: p.id.clone(), value: "1".to_owned() });
             }
         }
         Kind::Choice { options, multiple, open } => choice(ui, state, p, options, *multiple, *open, width, o, changes),

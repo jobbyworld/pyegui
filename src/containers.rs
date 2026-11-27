@@ -185,6 +185,13 @@ unsafe fn bottom_panel(
 ///
 ///     fixed_pos (tuple[float, float]): the window cannot be moved from this position
 ///
+///     anchor (str): the window is anchored to a corner or a side of the screen and cannot be moved: one of
+///         "left_top", "center_top", "right_top", "left_center", "center_center", "right_center",
+///         "left_bottom", "center_bottom", "right_bottom"
+///
+///     anchor_offset (tuple[float, float]): the distance from the anchor, e.g. (-8, -40) from "right_bottom"
+///         puts the window 8 points from the right edge and 40 above the bottom one
+///
 ///     fill, stroke, rounding, inner_margin, outer_margin, shadow: look of the window, see the frame function
 ///
 /// Example::
@@ -241,6 +248,22 @@ unsafe fn window(
     }
     if let Some(pos) = kwarg::<(f32, f32)>(kwargs, "fixed_pos")? {
         w = w.fixed_pos(pos);
+    }
+    if let Some(anchor) = kwarg::<String>(kwargs, "anchor")? {
+        let align = match anchor.as_str() {
+            "left_top" => egui::Align2::LEFT_TOP,
+            "center_top" => egui::Align2::CENTER_TOP,
+            "right_top" => egui::Align2::RIGHT_TOP,
+            "left_center" => egui::Align2::LEFT_CENTER,
+            "center_center" => egui::Align2::CENTER_CENTER,
+            "right_center" => egui::Align2::RIGHT_CENTER,
+            "left_bottom" => egui::Align2::LEFT_BOTTOM,
+            "center_bottom" => egui::Align2::CENTER_BOTTOM,
+            "right_bottom" => egui::Align2::RIGHT_BOTTOM,
+            other => return Err(pyo3::exceptions::PyValueError::new_err(format!("Unknown anchor '{other}'"))),
+        };
+        let (x, y) = kwarg::<(f32, f32)>(kwargs, "anchor_offset")?.unwrap_or((0.0, 0.0));
+        w = w.anchor(align, [x, y]);
     }
     if has_frame_kwargs(kwargs)? {
         w = w.frame(apply_frame_kwargs(egui::Frame::window(&ctx.global_style()), kwargs)?);

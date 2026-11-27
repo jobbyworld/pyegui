@@ -44,7 +44,7 @@ small("hello")
 ```
 
 
-## `strong(text)`
+## `strong(text, selectable=None)`
 
 Show text that stand out a bit (e.g. slightly brighter).
 
@@ -53,6 +53,10 @@ Show text that stand out a bit (e.g. slightly brighter).
 ```python
 strong("hello")
 ```
+
+**Keyword args**
+
+- `selectable` (bool): whether the user can select the text to copy it. Default is True. A text that is a clickable area (see interactive) has to be not selectable, or the text takes the click
 
 
 ## `weak(text)`

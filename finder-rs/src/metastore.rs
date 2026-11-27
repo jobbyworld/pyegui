@@ -173,6 +173,15 @@ pub struct Rule {
     pub root: String,
     pub pattern: String,
     pub enabled: bool,
+    /// what the list shows (the pattern when empty)
+    pub name: String,
+}
+
+impl Rule {
+    /// The name of the rule, or its pattern when it has none
+    pub fn title(&self) -> &str {
+        if self.name.trim().is_empty() { &self.pattern } else { &self.name }
+    }
 }
 
 impl TagStore {
@@ -190,9 +199,9 @@ impl TagStore {
     }
 
     pub fn meta_rules(&self) -> Vec<Rule> {
-        let Ok(mut statement) = self.db.prepare("SELECT id, root, pattern, enabled FROM meta_rules ORDER BY id") else { return vec![] };
+        let Ok(mut statement) = self.db.prepare("SELECT id, root, pattern, enabled, name FROM meta_rules ORDER BY id") else { return vec![] };
         statement
-            .query_map([], |r| Ok(Rule { id: r.get(0)?, root: r.get(1)?, pattern: r.get(2)?, enabled: r.get::<_, i64>(3)? != 0 }))
+            .query_map([], |r| Ok(Rule { id: r.get(0)?, root: r.get(1)?, pattern: r.get(2)?, enabled: r.get::<_, i64>(3)? != 0, name: r.get(4)? }))
             .map(|rows| rows.flatten().collect())
             .unwrap_or_default()
     }
@@ -206,7 +215,7 @@ impl TagStore {
     }
 
     pub fn update_meta_rule(&mut self, rule: &Rule) {
-        let _ = self.db.execute("UPDATE meta_rules SET root = ?, pattern = ?, enabled = ? WHERE id = ?", params![rule.root, rule.pattern.trim(), rule.enabled as i64, rule.id]);
+        let _ = self.db.execute("UPDATE meta_rules SET root = ?, pattern = ?, enabled = ?, name = ? WHERE id = ?", params![rule.root, rule.pattern.trim(), rule.enabled as i64, rule.name.trim(), rule.id]);
         self.changed();
     }
 

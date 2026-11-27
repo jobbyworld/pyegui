@@ -22,12 +22,39 @@ pub fn has_files() -> bool {
     imp::has()
 }
 
+/// Ctrl+C, Ctrl+X and Ctrl+V (Cmd on macOS) are not keys for egui: egui-winit turns them into `Copy`, `Cut` and
+/// `Paste` events and does not send the key. And a paste of files (nothing as text in the clipboard) sends no
+/// event at all. This tells whether the shortcut of `key` (C, X or V, with the command key only) was pressed in
+/// this frame, and takes the event so that nothing else acts on it. Shift+Delete is a `Cut` too (on Windows):
+/// it is not the shortcut of X.
+pub fn take_shortcut(input: &mut egui::InputState, key: egui::Key) -> bool {
+    fn take(events: &mut Vec<egui::Event>, found: impl Fn(&egui::Event) -> bool) -> bool {
+        let before = events.len();
+        events.retain(|e| !found(e));
+        events.len() != before
+    }
+    match key {
+        egui::Key::C => take(&mut input.events, |e| matches!(e, egui::Event::Copy)),
+        egui::Key::X => !input.modifiers.shift && take(&mut input.events, |e| matches!(e, egui::Event::Cut)),
+        egui::Key::V => {
+            let event = take(&mut input.events, |e| matches!(e, egui::Event::Paste(_) | egui::Event::PasteImage(_)));
+            event | imp::paste_key(input.time, input.focused)
+        }
+        _ => false,
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod imp {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicIsize, Ordering};
 
     use objc2::rc::Retained;
+
+    /// no event is lost on macOS for a paste of text; a paste of files is not seen (the key is not read)
+    pub fn paste_key(_time: f64, _focused: bool) -> bool {
+        false
+    }
     use objc2::runtime::{AnyObject, ProtocolObject};
     use objc2::ClassType;
     use objc2_app_kit::{NSPasteboard, NSPasteboardWriting};
@@ -76,6 +103,23 @@ mod imp {
 
 #[cfg(target_os = "windows")]
 mod imp {
+    use std::sync::Mutex;
+
+    /// Ctrl+V pressed in the frame that has the time `time`: read from the keyboard (the key does not reach
+    /// egui), once per frame and only on the press, not while it is held
+    pub fn paste_key(time: f64, focused: bool) -> bool {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
+        // (time of the last frame read, the answer of that frame, was the shortcut down at that frame)
+        static LAST: Mutex<(f64, bool, bool)> = Mutex::new((-1.0, false, false));
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if last.0 == time {
+            return last.1;
+        }
+        let down = focused && unsafe { (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0 && (GetAsyncKeyState(0x56) as u16 & 0x8000) != 0 };
+        let pressed = down && !last.2;
+        *last = (time, pressed, down);
+        pressed
+    }
     use std::os::windows::ffi::OsStrExt;
     use std::path::PathBuf;
 
@@ -195,6 +239,9 @@ mod imp {
 mod imp {
     use std::path::PathBuf;
 
+    pub fn paste_key(_time: f64, _focused: bool) -> bool {
+        false
+    }
     pub fn write(_paths: &[PathBuf], _cut: bool) -> bool {
         false
     }

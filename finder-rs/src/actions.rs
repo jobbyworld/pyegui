@@ -158,6 +158,10 @@ pub fn enabled_flags(app: &FinderApp) -> Vec<bool> {
 /// The shortcut pressed: by the key it types, or by its place on the keyboard (on an AZERTY keyboard the
 /// key of the 8 types "!", so ⌘8 only has the physical key of the 8)
 fn consume(input: &mut egui::InputState, shortcut: &KeyboardShortcut) -> bool {
+    // copy, cut and paste reach egui as events, not as keys
+    if shortcut.modifiers == Modifiers::COMMAND && matches!(shortcut.logical_key, Key::C | Key::X | Key::V) && pyegui_core::clipboard::take_shortcut(input, shortcut.logical_key) {
+        return true;
+    }
     if input.consume_shortcut(shortcut) {
         return true;
     }

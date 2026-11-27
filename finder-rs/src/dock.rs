@@ -15,6 +15,7 @@ pub enum Pane {
     Central(u64),
     Preview,
     Actions,
+    /// removed (the appearance is in the popup of the gear): kept to read the layouts saved before, then dropped
     Appearance,
     Activity,
     /// the rows of the database, read only
@@ -31,9 +32,9 @@ pub enum Pane {
     Properties,
 }
 
-pub const PANES: [Pane; 12] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::Properties, Pane::Recent, Pane::Search, Pane::Index, Pane::Appearance, Pane::Activity, Pane::Sql, Pane::Shell, Pane::Python];
+pub const PANES: [Pane; 11] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::Properties, Pane::Recent, Pane::Search, Pane::Index, Pane::Activity, Pane::Sql, Pane::Shell, Pane::Python];
 /// the panes of the first dock at the right of the folder, and those of the terminals below
-const SIDE: [Pane; 9] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::Properties, Pane::Recent, Pane::Search, Pane::Index, Pane::Appearance, Pane::Activity];
+const SIDE: [Pane; 8] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::Properties, Pane::Recent, Pane::Search, Pane::Index, Pane::Activity];
 const TERMINALS: [Pane; 2] = [Pane::Shell, Pane::Python];
 
 /// The size of the icon in a tab, and the space after it
@@ -104,7 +105,7 @@ fn default_tree() -> Tree<Pane> {
 pub fn restore(saved: Option<&str>) -> Tree<Pane> {
     let mut tree = saved.and_then(|s| serde_json::from_str::<Tree<Pane>>(s).ok()).filter(|t| t.root().is_some() && t.tiles.find_pane(&Pane::Central(0)).is_some() && (t.tiles.find_pane(&Pane::Shell).is_some() || t.tiles.find_pane(&Pane::Python).is_some())).unwrap_or_else(default_tree);
     // the other tabs of folders are not kept between runs: their state is not
-    let others: Vec<TileId> = tree.tiles.iter().filter_map(|(id, t)| matches!(t, Tile::Pane(Pane::Central(n)) if *n != 0).then_some(*id)).collect();
+    let others: Vec<TileId> = tree.tiles.iter().filter_map(|(id, t)| (matches!(t, Tile::Pane(Pane::Central(n)) if *n != 0) || matches!(t, Tile::Pane(Pane::Appearance))).then_some(*id)).collect();
     for id in others {
         tree.remove_recursively(id);
     }
@@ -444,7 +445,7 @@ impl Behavior<'_> {
         egui::Frame::NONE.inner_margin(egui::Margin::same(8)).show(ui, |ui| egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match pane {
             Pane::Preview => self.app.preview(ui),
             Pane::Actions => actions_pane(self.app, ui),
-            Pane::Appearance => self.app.appearance_menu(ui),
+            Pane::Appearance => {}
             Pane::Activity => activity_pane(self.app, ui),
             Pane::Sql => crate::sqlpane::pane(&mut self.app.sql, ui),
             Pane::Tags => crate::tagsui::pane(self.app, ui),
@@ -631,8 +632,36 @@ fn activity_pane(app: &mut FinderApp, ui: &mut egui::Ui) {
     if cancel {
         app.cancel_indexing();
     }
+    let watched = app.watched_folders();
+    let mut pin: Option<(std::path::PathBuf, bool)> = None;
+    let mut remove: Option<std::path::PathBuf> = None;
+    egui::CollapsingHeader::new(format!("Dossiers surveillés ({})", watched.len())).id_salt("watched-folders").default_open(true).show(ui, |ui| {
+        for (path, pinned) in &watched {
+            ui.horizontal(|ui| {
+                let label = if *pinned { "Désépingler" } else { "Épingler" };
+                if ui.small_button(label).on_hover_text("Un dossier épinglé reste surveillé même quand aucune vue ne l'affiche").clicked() {
+                    pin = Some((path.clone(), !pinned));
+                }
+                if ui.small_button("Retirer").on_hover_text("Arrête de surveiller (une vue qui l'affiche le surveille de nouveau)").clicked() {
+                    remove = Some(path.clone());
+                }
+                let text = RichText::new(format!("{}{}", if *pinned { "📌 " } else { "" }, path.display())).monospace().small();
+                ui.add(egui::Label::new(text).truncate());
+            });
+        }
+        if watched.is_empty() {
+            ui.weak("Aucun dossier surveillé");
+        }
+    });
+    if let Some((path, pinned)) = pin {
+        app.set_pinned_folder(&path, pinned);
+    }
+    if let Some(path) = remove {
+        app.unwatch_folder(&path);
+    }
+    ui.separator();
     ui.horizontal(|ui| {
-        ui.weak("Dossiers surveillés");
+        ui.weak("Journal");
         if ui.small_button("Vider le journal").clicked() {
             app.activity.clear();
         }

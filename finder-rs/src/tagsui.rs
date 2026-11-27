@@ -3,10 +3,10 @@
 
 use std::path::PathBuf;
 
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, Color32};
 
 use crate::app::FinderApp;
-use crate::tagstore::{How, Tag, TagStore, NEW_TAG_COLORS};
+use crate::tagstore::{How, Tag, TagStore};
 
 pub fn parse_color(hex: &str) -> Color32 {
     let t = hex.trim_start_matches('#');
@@ -18,17 +18,6 @@ pub fn parse_color(hex: &str) -> Color32 {
 
 pub fn to_hex(c: Color32) -> String {
     format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b())
-}
-
-/// The window that manages the tags: the tree, and the name, color and parent of the tag chosen
-#[derive(Default)]
-pub struct TagManager {
-    selected: Option<i64>,
-    /// the tag whose values are in the fields
-    loaded: Option<i64>,
-    name: String,
-    color: Color32,
-    parent: Option<i64>,
 }
 
 /// The tags of the store as paths ("Work/Invoice"), with the colors of the levels: what the widget of the
@@ -217,10 +206,6 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
     if creating && ui.button(format!("+ Créer le tag « {} »", parts.join(" / "))).clicked() {
         create = true;
     }
-    ui.add_space(8.0);
-    if ui.button("Gérer les tags…").clicked() {
-        app.tag_manager = Some(TagManager::default());
-    }
 
     if let Some(id) = toggle {
         let all_have = !selection.is_empty() && own.iter().all(|set| set.contains(&id));
@@ -239,107 +224,6 @@ pub fn pane(app: &mut FinderApp, ui: &mut egui::Ui) {
             }
         }
         app.tags_query.clear();
-    }
-}
-
-/// Draws the windows asked for (manager)
-pub fn modal(app: &mut FinderApp, ctx: &egui::Context) {
-    manager_modal(app, ctx);
-}
-
-fn manager_modal(app: &mut FinderApp, ctx: &egui::Context) {
-    let Some(mut m) = app.tag_manager.take() else { return };
-    let Some(store) = app.tags.as_mut() else { return };
-    let mut close = false;
-    let mut deleted: Option<i64> = None;
-    crate::glyphs::modal(ctx, "tag-manager").show(ctx, |ui| {
-        ui.set_width(380.0);
-        if crate::glyphs::modal_title(ui, "Étiquettes") {
-            close = true;
-        }
-        ui.weak("Une étiquette s'applique à un élément et à son contenu, et ajoute ses étiquettes parentes.");
-        ui.add_space(4.0);
-        let all = store.all();
-        egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
-            for tag in &all {
-                ui.horizontal(|ui| {
-                    ui.add_space(tag.depth as f32 * 14.0);
-                    ui.label(RichText::new("●").color(parse_color(&tag.color)));
-                    if ui.selectable_label(m.selected == Some(tag.id), &tag.name).clicked() {
-                        m.selected = Some(tag.id);
-                    }
-                });
-            }
-        });
-        ui.separator();
-        let tag = m.selected.and_then(|id| all.iter().find(|t| t.id == id)).cloned();
-        if tag.is_none() {
-            m.selected = None;
-        }
-        if let Some(tag) = &tag {
-            if m.loaded != Some(tag.id) {
-                m.loaded = Some(tag.id);
-                m.name = tag.name.clone();
-                m.color = parse_color(&tag.color);
-                m.parent = tag.parent;
-            }
-            ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut m.name).hint_text("Nom").desired_width(220.0));
-                egui::color_picker::color_edit_button_srgba(ui, &mut m.color, egui::color_picker::Alpha::Opaque);
-                for hex in NEW_TAG_COLORS {
-                    if ui.add(egui::Button::new(RichText::new("●").color(parse_color(hex))).frame(false)).clicked() {
-                        m.color = parse_color(hex);
-                    }
-                }
-            });
-            let under = store.subtree(tag.id);
-            let label = |id: Option<i64>| id.and_then(|i| all.iter().find(|t| t.id == i)).map_or("(racine)".to_string(), |t| t.name.clone());
-            egui::ComboBox::from_label("Parent").selected_text(label(m.parent)).show_ui(ui, |ui| {
-                ui.selectable_value(&mut m.parent, None, "(racine)");
-                for t in all.iter().filter(|t| !under.contains(&t.id)) {
-                    ui.selectable_value(&mut m.parent, Some(t.id), format!("{}{}", "  ".repeat(t.depth), t.name));
-                }
-            });
-            // the fields are written at once, like finder.py
-            let name = m.name.trim();
-            if !name.is_empty() && name != tag.name {
-                store.rename(tag.id, name);
-            }
-            if to_hex(m.color) != tag.color.to_lowercase() {
-                store.recolor(tag.id, &to_hex(m.color));
-            }
-            if m.parent != tag.parent {
-                store.move_tag(tag.id, m.parent);
-            }
-        }
-        ui.horizontal(|ui| {
-            if ui.button("Nouvelle étiquette").clicked() {
-                let color = NEW_TAG_COLORS[all.len() % NEW_TAG_COLORS.len()];
-                m.selected = store.create("Nouvelle étiquette", color, None);
-            }
-            if let Some(tag) = &tag {
-                if ui.button("Nouvelle sous-étiquette").clicked() {
-                    let color = NEW_TAG_COLORS[all.len() % NEW_TAG_COLORS.len()];
-                    m.selected = store.create("Nouvelle étiquette", color, Some(tag.id));
-                }
-                if ui.button("Supprimer").clicked() {
-                    store.delete(tag.id);
-                    deleted = Some(tag.id);
-                    m.selected = None;
-                }
-            }
-            if ui.button("Fermer").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                close = true;
-            }
-        });
-    });
-    if let Some(id) = deleted {
-        if app.tag_filter == Some(id) {
-            app.set_tag_filter(None);
-        }
-    }
-    if !close {
-        app.tag_manager = Some(m);
     }
 }
 
