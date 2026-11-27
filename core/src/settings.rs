@@ -107,6 +107,7 @@ pub fn settings_window(
     let style = ctx.global_style();
     let frame = o.frame.unwrap_or_else(|| Frame::popup(&style));
     let modal = egui::Modal::new(o.id).frame(frame).show(ctx, |ui| {
+        crate::context_style::apply_ui(ui, crate::context_style::Context::Window);
         ui.set_width(o.width);
         ui.set_max_width(o.width);
         // the head: the title and its cross
@@ -114,7 +115,7 @@ pub fn settings_window(
             ui.horizontal(|ui| {
                 ui.heading(&o.title);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let cross = ui.add(egui::Button::new(RichText::new("✕").size(15.0)).frame(false).min_size(vec2(26.0, 26.0)));
+                    let cross = ui.add(egui::Button::new(RichText::new("×").size(15.0)).frame(false).min_size(vec2(26.0, 26.0)));
                     if cross.on_hover_cursor(CursorIcon::PointingHand).on_hover_text("Fermer (Échap)").clicked() {
                         events.push(SettingsEvent::Close);
                     }
@@ -274,7 +275,7 @@ fn list_ui(ui: &mut Ui, state: &mut SettingsState, o: &SettingsOptions, items: &
     }
     ui.painter().rect_stroke(rect, crate::style::fit_radius(ui.visuals(), 7.0), Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color), StrokeKind::Inside);
     let color: Color32 = if o.adding { visuals.strong_text_color() } else { visuals.text_color() };
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, format!("＋  {}", o.add_label), FontId::proportional(14.0), color);
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, format!("+  {}", o.add_label), FontId::proportional(14.0), color);
     if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
         events.push(SettingsEvent::Add);
     }

@@ -184,12 +184,21 @@ pub fn modal(ctx: &egui::Context, id: &'static str) -> egui::Modal {
     egui::Modal::new(egui::Id::unique(id)).frame(popup_frame(ctx))
 }
 
-/// In the light theme the fields and buttons of a popup get opaque fills and marked outlines
-pub fn modal_visuals(ui: &mut egui::Ui) {
-    if ui.visuals().dark_mode {
+/// The fields and buttons of a popup get visible fills and outlines (the glass style makes them transparent).
+/// Light: opaque fills and marked outlines. Dark: white at 10 % (14 % outline), 18 % / 24 % when hovered.
+pub fn modal_style(v: &mut egui::Visuals) {
+    if v.dark_mode {
+        let white = |a: u8| Color32::from_white_alpha(a);
+        v.extreme_bg_color = Color32::from_white_alpha(12);
+        v.text_edit_bg_color = Some(Color32::from_black_alpha(70));
+        v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, white(28));
+        for (w, fill, stroke) in [(&mut v.widgets.inactive, 26, 36), (&mut v.widgets.hovered, 46, 61), (&mut v.widgets.active, 60, 80)] {
+            w.bg_fill = white(fill);
+            w.weak_bg_fill = white(fill);
+            w.bg_stroke = egui::Stroke::new(1.0, white(stroke));
+        }
         return;
     }
-    let v = ui.visuals_mut();
     let field = Color32::WHITE;
     v.extreme_bg_color = field;
     v.text_edit_bg_color = Some(field);
@@ -202,6 +211,21 @@ pub fn modal_visuals(ui: &mut egui::Ui) {
         w.weak_bg_fill = fill;
         w.bg_stroke = egui::Stroke::new(1.0, stroke);
     }
+}
+
+/// `modal_style` on the `Ui` of a popup
+pub fn modal_visuals(ui: &mut egui::Ui) {
+    modal_style(ui.visuals_mut());
+}
+
+/// Runs `f` with the style of the popups on the whole context (for the parts a library draws itself, such as
+/// the buttons of `settings_window`), then puts the style back
+pub fn with_modal_style<R>(ctx: &egui::Context, f: impl FnOnce() -> R) -> R {
+    let saved = ctx.global_style();
+    ctx.global_style_mut(|s| modal_style(&mut s.visuals));
+    let r = f();
+    ctx.set_global_style(saved);
+    r
 }
 
 /// The title of a popup, with a cross (the SVG `close`) at the top left to close it: true when the cross is clicked

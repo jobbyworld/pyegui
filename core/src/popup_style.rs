@@ -75,6 +75,13 @@ pub fn modifier(kind: Kind) -> StyleModifier {
     (move |style: &mut Style| apply(style, kind)).into()
 }
 
+/// The frame of a popup drawn by hand (an area): the popup frame with the fill of the menus
+pub fn menu_frame(ui: &egui::Ui) -> egui::Frame {
+    let mut style = (**ui.style()).clone();
+    apply(&mut style, Kind::Menu);
+    egui::Frame::popup(&style)
+}
+
 /// Shows a tooltip with the fill of the tooltips: the style of the context is changed during the call
 pub fn with_tooltip_fill<R>(ctx: &egui::Context, show: impl FnOnce() -> R) -> R {
     let style = ctx.global_style();

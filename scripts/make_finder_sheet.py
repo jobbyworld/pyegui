@@ -16,14 +16,18 @@ CONTRAST = {
     # opaque windows and popups, a little lighter than the glass, so that they stand out from the sheet behind them
     "light": {"spacing.button_padding_radius": 0.8, "menu.button_padding_radius": 0.8, "colors.text": "#1c1c1eff",
               "popups.window_fill": "#ffffffff", "popups.menu_fill": "#fdfdffff", "popups.dropdown_fill": "#fdfdffff",
-              "popups.tooltip_fill": "#ffffffff"},
+              "popups.tooltip_fill": "#ffffffff",
+              # the sheet of the sidebar (RGBA): white glass
+              "layout.sidebar.sheet": "#ffffff66"},
     # dark: the striped rows are lighter than the glass
     "dark": {"spacing.button_padding_radius": 0.8, "menu.button_padding_radius": 0.8, "colors.text": "#f2f2f7ff",
              "colors.striped_bg": "#ffffff14", "colors.window": "#13151d70", "popups.window_fill": "#232326ff", "popups.menu_fill": "#2a2a2eff",
              "popups.dropdown_fill": "#2a2a2eff", "popups.tooltip_fill": "#303035ff",
+             # the sheet of the sidebar (RGBA): a dark tint, more transparent than the other boxes
+             "layout.sidebar.sheet": "#0b0d1480",
              # the buttons of the windows and modals have a fill of their own on the opaque gray (the glass gives them none)
              "window.inactive.weak_fill": "#ffffff1a", "window.hovered.weak_fill": "#ffffff2e", "window.active.weak_fill": "#ffffff3d",
-             "window.inactive.stroke": [1.0, "#ffffff24"], "window.hovered.stroke": [1.0, "#ffffff3d"]},
+             "window.noninteractive.stroke": [1.0, "#ffffff2e"], "window.inactive.stroke": [1.0, "#ffffff24"], "window.hovered.stroke": [1.0, "#ffffff3d"]},
 }
 
 

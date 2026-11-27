@@ -74,7 +74,8 @@
     "window.menu_rounding": 12,
     "spacing.button_padding_radius": 0.8,
     "menu.button_padding_radius": 0.8,
-    "colors.text": "#1c1c1eff"
+    "colors.text": "#1c1c1eff",
+    "layout.sidebar.sheet": "#ffffff66"
   },
   "dark": {
     "colors.panel": "#06070a54",
@@ -149,9 +150,14 @@
     "spacing.button_padding_radius": 0.8,
     "menu.button_padding_radius": 0.8,
     "colors.text": "#f2f2f7ff",
+    "layout.sidebar.sheet": "#0b0d1480",
     "window.inactive.weak_fill": "#ffffff1a",
     "window.hovered.weak_fill": "#ffffff2e",
     "window.active.weak_fill": "#ffffff3d",
+    "window.noninteractive.stroke": [
+      1.0,
+      "#ffffff2e"
+    ],
     "window.inactive.stroke": [
       1.0,
       "#ffffff24"

@@ -655,6 +655,7 @@ fn flat_choice(ui: &mut Ui, spec: &ChoiceSpec<'_>, new_option: &mut String, beha
         ui.painter().add(egui::Shape::convex_polygon(points, ui.visuals().widgets.inactive.fg_stroke.color, egui::Stroke::NONE));
     }
     egui::Popup::menu(&response)
+        .style(crate::style::menu_style())
         .id(spec.salt.with("popup"))
         .close_behavior(behavior)
         .show(|ui| choice_rows(ui, spec, new_option, change));

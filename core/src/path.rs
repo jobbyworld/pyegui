@@ -292,7 +292,7 @@ pub fn combo(ui: &mut egui::Ui, path: &Path, options: &ComboOptions) -> Elements
     let mut out = Elements::default();
     out.hits.push((path.to_string_lossy().into_owned(), response.clone()));
 
-    let popup = egui::Popup::menu(&response).id(id.with("menu"));
+    let popup = egui::Popup::menu(&response).style(crate::style::menu_style()).id(id.with("menu"));
     let open = egui::Popup::is_id_open(ui.ctx(), id.with("menu"));
     let painter = ui.painter();
     let text_y = rect.center().y - title.size().y / 2.0;

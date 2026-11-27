@@ -570,7 +570,7 @@ pub fn modal(app: &mut FinderApp, ctx: &egui::Context) {
     options.frame = Some(crate::glyphs::popup_frame(ctx));
     // the state of the list is taken out while the panel borrows the rest of the manager
     let mut win = std::mem::take(&mut manager.win);
-    let events = settings_window(
+    let events = crate::glyphs::with_modal_style(ctx, || settings_window(
         ctx,
         &mut win,
         &options,
@@ -587,9 +587,10 @@ pub fn modal(app: &mut FinderApp, ctx: &egui::Context) {
             return;
         };
         let usage = store.meta_usage(draft.id);
+        let field_w = (ui.available_width() - 110.0).max(180.0);
         egui::Grid::new("meta-fields").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
             ui.label("Nom");
-            let name = ui.add(egui::TextEdit::singleline(&mut draft.name).desired_width(280.0));
+            let name = ui.add(egui::TextEdit::singleline(&mut draft.name).desired_width(field_w));
             if name.lost_focus() {
                 save = true;
             }
@@ -598,12 +599,12 @@ pub fn modal(app: &mut FinderApp, ctx: &egui::Context) {
             ui.label(draft.ty.label());
             ui.end_row();
             ui.label("Groupe");
-            if ui.add(egui::TextEdit::singleline(&mut draft.config.group).hint_text("Divers").desired_width(280.0)).lost_focus() {
+            if ui.add(egui::TextEdit::singleline(&mut draft.config.group).hint_text("Divers").desired_width(field_w)).lost_focus() {
                 save = true;
             }
             ui.end_row();
             ui.label("Description");
-            let description = ui.add(egui::TextEdit::multiline(&mut draft.description).desired_rows(2).desired_width(280.0));
+            let description = ui.add(egui::TextEdit::multiline(&mut draft.description).desired_rows(2).desired_width(field_w));
             if description.lost_focus() {
                 save = true;
             }
@@ -618,7 +619,7 @@ pub fn modal(app: &mut FinderApp, ctx: &egui::Context) {
             if draft.ty == MetaType::Formula {
                 ui.label("Formule");
                 ui.vertical(|ui| {
-                    let edit = ui.add(egui::TextEdit::multiline(&mut draft.config.formula).desired_rows(2).desired_width(280.0).hint_text("{filename} {Statut}"));
+                    let edit = ui.add(egui::TextEdit::multiline(&mut draft.config.formula).desired_rows(2).desired_width(field_w).hint_text("{filename} {Statut}"));
                     if edit.lost_focus() {
                         save = true;
                     }
@@ -780,7 +781,7 @@ pub fn modal(app: &mut FinderApp, ctx: &egui::Context) {
             crate::glyphs::modal_visuals(ui);
             ui.weak(format!("{} propriété(s)", items.len()));
         },
-    );
+    ));
     manager.win = win;
     for event in events {
         match event {
@@ -826,26 +827,27 @@ pub fn modal(app: &mut FinderApp, ctx: &egui::Context) {
 fn new_property_form(ui: &mut egui::Ui, manager: &mut Manager, store: &mut crate::tagstore::TagStore, created: &mut Option<i64>) {
     ui.label(RichText::new("Nouvelle propriété").strong().size(15.0));
     ui.add_space(6.0);
+    let field_w = (ui.available_width() - 110.0).max(180.0);
     egui::Grid::new("meta-new-fields").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
         ui.label("Nom");
-        let name = ui.add(egui::TextEdit::singleline(&mut manager.new_name).desired_width(280.0));
+        let name = ui.add(egui::TextEdit::singleline(&mut manager.new_name).desired_width(field_w));
         if manager.new_fresh {
             name.request_focus();
             manager.new_fresh = false;
         }
         ui.end_row();
         ui.label("Type");
-        egui::ComboBox::from_id_salt("meta-new-type").selected_text(MetaType::ALL[manager.new_type].label()).width(280.0).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("meta-new-type").selected_text(MetaType::ALL[manager.new_type].label()).width(field_w).show_ui(ui, |ui| {
             for (i, ty) in MetaType::ALL.iter().enumerate() {
                 ui.selectable_value(&mut manager.new_type, i, ty.label());
             }
         });
         ui.end_row();
         ui.label("Groupe");
-        ui.add(egui::TextEdit::singleline(&mut manager.new_group).hint_text("Divers").desired_width(280.0));
+        ui.add(egui::TextEdit::singleline(&mut manager.new_group).hint_text("Divers").desired_width(field_w));
         ui.end_row();
         ui.label("Description");
-        ui.add(egui::TextEdit::multiline(&mut manager.new_description).desired_rows(2).desired_width(280.0));
+        ui.add(egui::TextEdit::multiline(&mut manager.new_description).desired_rows(2).desired_width(field_w));
         ui.end_row();
     });
     ui.add_space(8.0);
@@ -949,7 +951,7 @@ pub fn rules_modal(app: &mut FinderApp, ctx: &egui::Context) {
     options.adding = adding;
     options.frame = Some(crate::glyphs::popup_frame(ctx));
     let mut win = std::mem::take(&mut ui_state.win);
-    let events = settings_window(
+    let events = crate::glyphs::with_modal_style(ctx, || settings_window(
         ctx,
         &mut win,
         &options,
@@ -960,20 +962,21 @@ pub fn rules_modal(app: &mut FinderApp, ctx: &egui::Context) {
             if adding {
                 ui.label(RichText::new("Nouvelle règle").strong().size(15.0));
                 ui.add_space(6.0);
+                let field_w = (ui.available_width() - 110.0).max(180.0);
                 egui::Grid::new("rule-new").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                     ui.label("Nom");
-                    ui.add(egui::TextEdit::singleline(&mut ui_state.name).hint_text("Facultatif").desired_width(380.0));
+                    ui.add(egui::TextEdit::singleline(&mut ui_state.name).hint_text("Facultatif").desired_width(field_w));
                     ui.end_row();
                     ui.label("Dossier");
                     ui.vertical(|ui| {
-                        ui.add(egui::TextEdit::singleline(&mut ui_state.root).desired_width(380.0));
+                        ui.add(egui::TextEdit::singleline(&mut ui_state.root).desired_width(field_w));
                         if ui.small_button("Dossier affiché").clicked() {
                             ui_state.root = folder.clone();
                         }
                     });
                     ui.end_row();
                     ui.label("Motif");
-                    ui.add(egui::TextEdit::singleline(&mut ui_state.pattern).hint_text("{project}/{entreprise}").desired_width(380.0));
+                    ui.add(egui::TextEdit::singleline(&mut ui_state.pattern).hint_text("{project}/{entreprise}").desired_width(field_w));
                     ui.end_row();
                 });
                 if !ui_state.pattern.trim().is_empty() {
@@ -993,15 +996,16 @@ pub fn rules_modal(app: &mut FinderApp, ctx: &egui::Context) {
                 let mut r = rule.clone();
                 ui.checkbox(&mut r.enabled, "Règle active");
                 ui.add_space(4.0);
+                let field_w = (ui.available_width() - 110.0).max(180.0);
                 egui::Grid::new("rule-edit").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                     ui.label("Nom");
-                    ui.add(egui::TextEdit::singleline(&mut r.name).hint_text(r.pattern.as_str()).desired_width(380.0));
+                    ui.add(egui::TextEdit::singleline(&mut r.name).hint_text(r.pattern.as_str()).desired_width(field_w));
                     ui.end_row();
                     ui.label("Dossier");
-                    ui.add(egui::TextEdit::singleline(&mut r.root).desired_width(380.0));
+                    ui.add(egui::TextEdit::singleline(&mut r.root).desired_width(field_w));
                     ui.end_row();
                     ui.label("Motif");
-                    ui.add(egui::TextEdit::singleline(&mut r.pattern).desired_width(380.0));
+                    ui.add(egui::TextEdit::singleline(&mut r.pattern).desired_width(field_w));
                     ui.end_row();
                 });
                 rule_check(ui, &r.pattern, &names);
@@ -1037,7 +1041,7 @@ pub fn rules_modal(app: &mut FinderApp, ctx: &egui::Context) {
                 apply = true;
             }
         },
-    );
+    ));
     ui_state.win = win;
     for event in events {
         match event {

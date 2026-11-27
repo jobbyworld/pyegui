@@ -7658,7 +7658,7 @@ def meta_manager_fields(d, draft):
             vertical(modes)
             end_row()
 
-    grid("meta-fields", form)
+    grid("meta-fields", form, num_columns=2)
     draft["name"], draft["description"] = mm_name.value.strip(), mm_desc.value
     config = draft["config"]
     config["unit"], config["formula"] = mm_unit.value, mm_formula.value
@@ -7706,22 +7706,23 @@ def meta_manager_new():
     """the panel of a new property: its name, type, group and description, then Créer"""
     strong("Nouvelle propriété")
     add_space(6)
+    field_w = max(180, available_width() - 110)
 
     def form():
         label("Nom")
-        text_edit_singleline(mm_new_name, request_focus=mm["fresh"], desired_width=280)
+        text_edit_singleline(mm_new_name, request_focus=mm["fresh"], desired_width=field_w)
         end_row()
         label("Type")
         combo_box(mm_new_type, list(range(len(META_TYPES))), [name for _, name in META_TYPES], "Type")
         end_row()
         label("Groupe")
-        text_edit_singleline(mm_new_group, hint_text="Divers", desired_width=280)
+        text_edit_singleline(mm_new_group, hint_text="Divers", desired_width=field_w)
         end_row()
         label("Description")
         text_edit_multiline(mm_new_desc)
         end_row()
 
-    grid("meta-new-fields", form)
+    grid("meta-new-fields", form, num_columns=2)
     mm["fresh"] = False
     name = mm_new_name.value.strip()
     taken = any(x["name"].lower() == name.lower() for x in tags.meta_defs())
@@ -7826,19 +7827,20 @@ def meta_rules_detail(rules, names):
     if mr["adding"]:
         strong("Nouvelle règle")
         add_space(6)
+        field_w = max(180, available_width() - 110)
 
         def form():
             label("Nom")
-            text_edit_singleline(mr_name, hint_text="Facultatif", desired_width=380)
+            text_edit_singleline(mr_name, hint_text="Facultatif", desired_width=field_w)
             end_row()
             label("Dossier")
-            text_edit_singleline(mr_root, desired_width=380)
+            text_edit_singleline(mr_root, desired_width=field_w)
             end_row()
             label("Motif")
-            text_edit_singleline(mr_pattern, hint_text="{project}/{entreprise}", desired_width=380)
+            text_edit_singleline(mr_pattern, hint_text="{project}/{entreprise}", desired_width=field_w)
             end_row()
 
-        grid("rule-new", form)
+        grid("rule-new", form, num_columns=2)
         if button_clicked("Dossier affiché"):
             mr_root.value = str(current())
         if mr_pattern.value.strip():
@@ -7872,18 +7874,20 @@ def meta_rules_detail(rules, names):
             )
             checkbox(fields["enabled"], "Règle active")
 
+            field_w = max(180, available_width() - 110)
+
             def form():
                 label("Nom")
-                text_edit_singleline(fields["name"], hint_text=rule["pattern"], desired_width=380)
+                text_edit_singleline(fields["name"], hint_text=rule["pattern"], desired_width=field_w)
                 end_row()
                 label("Dossier")
-                text_edit_singleline(fields["root"], desired_width=380)
+                text_edit_singleline(fields["root"], desired_width=field_w)
                 end_row()
                 label("Motif")
-                text_edit_singleline(fields["pattern"], desired_width=380)
+                text_edit_singleline(fields["pattern"], desired_width=field_w)
                 end_row()
 
-            grid("rule-edit", form)
+            grid("rule-edit", form, num_columns=2)
             rule_check(fields["pattern"].value, names)
             changed = {
                 "id": rule["id"],

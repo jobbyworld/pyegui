@@ -762,7 +762,7 @@ pub fn tags_pick(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
         ui.ctx().data_mut(|d| d.remove_temp::<bool>(focus_id));
     }
     let mut changed = false;
-    egui::Popup::menu(&response).id(popup_id).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+    egui::Popup::menu(&response).style(crate::style::menu_style()).id(popup_id).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_min_width(240.0);
         let mut input: String = ui.ctx().data(|d| d.get_temp(input_id)).unwrap_or_default();
         let field = ui.add(egui::TextEdit::singleline(&mut input).hint_text(&o.hint_text).desired_width(f32::INFINITY));

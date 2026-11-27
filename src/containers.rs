@@ -11,6 +11,7 @@ use crate::{
 
 unsafe fn show_panel(
     mut panel: egui::Panel,
+    side: char,
     surface: style::Surface,
     update_fun: Bound<'_, PyAny>,
     kwargs: Option<&Bound<'_, PyDict>>,
@@ -37,7 +38,14 @@ unsafe fn show_panel(
     let ui = panel_parent_ui(&UI)?;
 
     // a level of glass given to set_glass_style for this side, unless the call gives a fill
-    let glass = style::surface_fill(&ui.style().visuals, surface);
+    // the style token of the sidebar (`layout.sidebar.sheet`) comes before the glass
+    let token = (surface == style::Surface::Sidebar)
+        .then(|| crate::layout::token_sheet("sidebar", ui.style().visuals.dark_mode))
+        .flatten();
+    let glass = token.or_else(|| style::surface_fill(&ui.style().visuals, surface));
+    // the color under the separator line: the line takes a strip of the outer margin that the fill of
+    // the frame does not cover, and a line that is not opaque would show the window behind it
+    let strip_fill = if kwarg_color(kwargs, "fill")?.is_some() { kwarg_color(kwargs, "fill")? } else { glass };
     if has_frame_kwargs(kwargs)? || glass.is_some() {
         let mut frame = egui::Frame::side_top_panel(ui.style());
         if let Some(fill) = glass {
@@ -53,18 +61,44 @@ unsafe fn show_panel(
     if let Some(stroke) = separator {
         ui.visuals_mut().widgets.noninteractive.bg_stroke = stroke;
     }
+    let mut rect = None;
     let result = match kwarg::<Py<Bool>>(kwargs, "expanded")? {
         Some(expanded) => with_bool_copy(update_fun.py(), &expanded, |is_expanded| {
             panel
                 .show_collapsible(ui, is_expanded, |ui| run_nested_update_func(ui, update_fun))
-                .map_or(Ok(()), |r| r.inner)
+                .map_or(Ok(()), |r| {
+                    rect = Some(r.response.rect);
+                    r.inner
+                })
         }),
         None => {
-            panel
-                .show(ui, |ui| run_nested_update_func(ui, update_fun))
-                .inner
+            let response = panel.show(ui, |ui| run_nested_update_func(ui, update_fun));
+            rect = Some(response.response.rect);
+            response.inner
         }
     };
+    if let (Some(rect), Some(fill)) = (rect, strip_fill) {
+        let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+        let shows_line = kwarg::<bool>(kwargs, "show_separator_line")?.unwrap_or(true);
+        if shows_line && stroke.width > 0.0 && fill.a() < 255 {
+            // the strip of the line, at the outer edge of the panel, under the line
+            let w = stroke.width.round().max(1.0);
+            let strip = match side {
+                'l' => egui::Rect::from_min_max(egui::pos2(rect.right() - w, rect.top()), rect.right_bottom()),
+                'r' => egui::Rect::from_min_max(rect.left_top(), egui::pos2(rect.left() + w, rect.bottom())),
+                't' => egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - w), rect.right_bottom()),
+                _ => egui::Rect::from_min_max(rect.left_top(), egui::pos2(rect.right(), rect.top() + w)),
+            };
+            let painter = ui.painter();
+            painter.rect_filled(strip, 0.0, fill);
+            let line = match side {
+                'l' => [strip.center_top(), strip.center_bottom()],
+                'r' => [strip.center_top(), strip.center_bottom()],
+                _ => [strip.left_center(), strip.right_center()],
+            };
+            painter.line_segment(line, stroke);
+        }
+    }
     if separator.is_some() {
         ui.visuals_mut().widgets.noninteractive.bg_stroke = previous;
     }
@@ -108,7 +142,7 @@ unsafe fn left_panel(
     update_fun: Bound<'_, PyAny>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<()> {
-    show_panel(egui::Panel::left(id), style::Surface::Sidebar, update_fun, kwargs)
+    show_panel(egui::Panel::left(id), 'l', style::Surface::Sidebar, update_fun, kwargs)
 }
 
 /// A panel on the right side of the window. Accepts the same keyword args as left_panel.
@@ -125,7 +159,7 @@ unsafe fn right_panel(
     update_fun: Bound<'_, PyAny>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<()> {
-    show_panel(egui::Panel::right(id), style::Surface::Sidebar, update_fun, kwargs)
+    show_panel(egui::Panel::right(id), 'r', style::Surface::Sidebar, update_fun, kwargs)
 }
 
 /// A panel on the top of the window. Accepts the same keyword args as left_panel, sizes being heights.
@@ -142,7 +176,7 @@ unsafe fn top_panel(
     update_fun: Bound<'_, PyAny>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<()> {
-    show_panel(egui::Panel::top(id), style::Surface::Bars, update_fun, kwargs)
+    show_panel(egui::Panel::top(id), 't', style::Surface::Bars, update_fun, kwargs)
 }
 
 /// A panel on the bottom of the window. Accepts the same keyword args as left_panel, sizes being heights.
@@ -159,7 +193,7 @@ unsafe fn bottom_panel(
     update_fun: Bound<'_, PyAny>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<()> {
-    show_panel(egui::Panel::bottom(id), style::Surface::Bars, update_fun, kwargs)
+    show_panel(egui::Panel::bottom(id), 'b', style::Surface::Bars, update_fun, kwargs)
 }
 
 // windows

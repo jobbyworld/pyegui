@@ -100,7 +100,7 @@ pub fn date_range_picker(ui: &mut Ui, id: &str, range: &mut DateRange) -> Respon
             .order(egui::Order::Foreground)
             .fixed_pos(response.rect.left_bottom() + egui::vec2(0.0, 2.0))
             .show(ui.ctx(), |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| calendar(ui, &mut popup, range));
+                crate::popup_style::menu_frame(ui).show(ui, |ui| calendar(ui, &mut popup, range));
             });
         ui.data_mut(|d| d.insert_temp(id, popup));
         if area.response.clicked_elsewhere() && !response.clicked() {

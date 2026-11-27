@@ -450,6 +450,7 @@ pub fn header(
                 paint_funnel(ui, spot.center(), color, filter_active);
             }
             let popup = egui::Popup::menu(&funnel)
+                .style(crate::style::menu_style())
                 .id(popup_id)
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
             popup.show(|ui| {
@@ -739,7 +740,7 @@ fn pin_menu(ui: &mut egui::Ui, id: Id, state: &mut ColumnsState, opts: HeaderOpt
         .order(egui::Order::Foreground)
         .fixed_pos(at)
         .show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
+            crate::popup_style::menu_frame(ui).show(ui, |ui| {
                 ui.set_min_width(140.0);
                 let pinned = state.pinned_left.contains(&key) || state.pinned_right.contains(&key);
                 let unpin = |state: &mut ColumnsState| {
@@ -842,7 +843,7 @@ fn settings_menu(ui: &mut egui::Ui, id: Id, header: Rect, state: &mut ColumnsSta
         .pivot(egui::Align2::RIGHT_TOP)
         .fixed_pos(slot.right_bottom() + vec2(0.0, 4.0))
         .show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
+            crate::popup_style::menu_frame(ui).show(ui, |ui| {
                 ui.set_width(width);
                 ui.label(egui::RichText::new("Colonnes").small().strong().weak());
                 ui.add_space(2.0);

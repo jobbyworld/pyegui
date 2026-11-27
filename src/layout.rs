@@ -77,13 +77,52 @@ pub(crate) struct Resolved {
     pub outline: Stroke,
     pub opacity: f32,
     pub inner_margin: f32,
+    /// the sheet given by the call or by the rules of the region
     sheet: Option<Color32>,
+    /// the sheet of the global rules, used after the style tokens
+    global_sheet: Option<Color32>,
+    /// index of the region in REGIONS, to find its style token
+    region: usize,
+}
+
+/// The sheet colors given by the style tokens `layout.sheet` and `layout.<region>.sheet`, per theme
+/// (`[theme]`: 0 is light, 1 dark) and per region (the last one is for the whole window)
+static SHEET_TOKENS: Mutex<[[Option<Color32>; REGIONS.len() + 1]; 2]> = Mutex::new([[None; REGIONS.len() + 1]; 2]);
+
+/// Sets a style token of the layout: `layout.sheet` (region None) or `layout.<region>.sheet`.
+/// Returns false if the region is unknown.
+pub(crate) fn set_sheet_token(dark: bool, region: Option<&str>, color: Option<Color32>) -> bool {
+    let index = match region {
+        None => REGIONS.len(),
+        Some(name) => match REGIONS.iter().position(|r| *r == name) {
+            Some(i) => i,
+            None => return false,
+        },
+    };
+    SHEET_TOKENS.lock().unwrap_or_else(|e| e.into_inner())[usize::from(dark)][index] = color;
+    true
+}
+
+/// The sheet given by the style tokens for a region, if any: `layout.<region>.sheet`, then `layout.sheet`
+pub(crate) fn token_sheet(region: &str, dark: bool) -> Option<Color32> {
+    let tokens = SHEET_TOKENS.lock().unwrap_or_else(|e| e.into_inner())[usize::from(dark)];
+    let own = REGIONS.iter().position(|r| *r == region).and_then(|i| tokens[i]);
+    own.or(tokens[REGIONS.len()])
+}
+
+/// Forgets the style tokens of the layout
+pub(crate) fn reset_sheet_tokens() {
+    *SHEET_TOKENS.lock().unwrap_or_else(|e| e.into_inner()) = [[None; REGIONS.len() + 1]; 2];
 }
 
 impl Resolved {
-    /// The fill of the boxes of the region: the sheet color (the panel color by default) with the opacity
+    /// The fill of the boxes of the region: the sheet color (the panel color by default) with the opacity.
+    /// The order is: the call and the rules of the region, the style token of the region, the style
+    /// token of the whole window, the global rules, the panel color.
     pub(crate) fn sheet_fill(&self, visuals: &egui::Visuals) -> Color32 {
-        self.sheet.unwrap_or(visuals.panel_fill).gamma_multiply(self.opacity)
+        let tokens = SHEET_TOKENS.lock().unwrap_or_else(|e| e.into_inner())[usize::from(visuals.dark_mode)];
+        let token = tokens.get(self.region).copied().flatten().or(tokens[REGIONS.len()]);
+        self.sheet.or(token).or(self.global_sheet).unwrap_or(visuals.panel_fill).gamma_multiply(self.opacity)
     }
 }
 
@@ -114,6 +153,7 @@ pub(crate) fn resolve(region: &str, call: &Tokens) -> Resolved {
     if let Some(of_region) = rules.regions.get(region) {
         tokens = tokens.or(of_region);
     }
+    let own_sheet = tokens.sheet;
     tokens = tokens.or(&rules.global);
     Resolved {
         gap: tokens.gap.unwrap_or(DEFAULT_GAP),
@@ -121,7 +161,9 @@ pub(crate) fn resolve(region: &str, call: &Tokens) -> Resolved {
         outline: tokens.outline.unwrap_or_else(default_outline),
         opacity: tokens.opacity.unwrap_or(1.0).clamp(0.0, 1.0),
         inner_margin: tokens.inner_margin.unwrap_or_else(|| default_inner_margin(region)),
-        sheet: tokens.sheet,
+        sheet: own_sheet,
+        global_sheet: rules.global.sheet,
+        region: REGIONS.iter().position(|r| *r == region).unwrap_or(usize::MAX),
     }
 }
 
