@@ -170,6 +170,12 @@ fn native_icon_png(_path: &str, _pixels: u32) -> Option<Vec<u8>> {
     None
 }
 
+/// The path made absolute: the system gives the generic icon of a document to a path it cannot find, and a relative
+/// path (a tree rooted at ".") is not found from the process it runs in
+fn absolute(path: &str) -> String {
+    std::path::absolute(path).map_or_else(|_| path.to_string(), |p| p.to_string_lossy().into_owned())
+}
+
 /// The uri of the native icon of a file, made once per path and size, None if the platform has none
 pub fn icon_uri(ctx: &egui::Context, path: &str, size: f32) -> Option<String> {
     let pixels = (size * ctx.pixels_per_point()).round().clamp(8.0, 1024.0) as u32;
@@ -180,7 +186,7 @@ pub fn icon_uri(ctx: &egui::Context, path: &str, size: f32) -> Option<String> {
         icons
             .entry(key)
             .or_insert_with(|| {
-                let png = native_icon_png(path, pixels)?;
+                let png = native_icon_png(&absolute(path), pixels)?;
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 (path, pixels, blue).hash(&mut hasher);
                 let uri = format!("bytes://file-icon-{:016x}.png", hasher.finish());
