@@ -51,7 +51,13 @@
     "grid.chevron": "triangle",
     "grid.chevron_color": "#2c3e5599",
     "grid.chevron_hover_color": "#0b1a2cff",
-    "grid.chevron_size": 4.0
+    "grid.chevron_size": 4.0,
+    "popups.dropdown_fill": "#eaf4ffa0",
+    "popups.menu_fill": "#eaf4ffd0",
+    "popups.tooltip_fill": "#eaf4ffe0",
+    "menu.hovered.weak_fill": "#2f8fd8c0",
+    "menu.inactive.rounding": 8,
+    "sidebar.inactive.weak_fill": "#2f8fd822"
   },
   "dark": {
     "colors.panel": "#14202eff",
@@ -102,6 +108,12 @@
     "grid.chevron": "triangle",
     "grid.chevron_color": "#c5d6ea99",
     "grid.chevron_hover_color": "#f2f8ffff",
-    "grid.chevron_size": 4.0
+    "grid.chevron_size": 4.0,
+    "popups.dropdown_fill": "#0b2540a0",
+    "popups.menu_fill": "#0b2540d0",
+    "popups.tooltip_fill": "#0b2540e0",
+    "menu.hovered.weak_fill": "#2f8fd8c0",
+    "menu.inactive.rounding": 8,
+    "sidebar.inactive.weak_fill": "#2f8fd833"
   }
 }

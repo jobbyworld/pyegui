@@ -299,6 +299,10 @@ for _w in WIDGETS:
             if _w["name"] not in USED_BY.setdefault(_token, []):
                 USED_BY[_token].append(_w["name"])
 
+# the popups are not drawn by a widget of the pages above
+USED_BY.update({"popups.dropdown_fill": ["ComboBox (the list)"], "popups.menu_fill": ["Menu / Popup (menus, context menus)"],
+                "popups.tooltip_fill": ["Menu / Popup / Tooltip (tooltips)"]})
+
 # ---------------------------------------------------------------------------------------------------------
 # the style sheet: tokens of both themes, edits on top of the defaults, a global transparency
 # ---------------------------------------------------------------------------------------------------------
@@ -308,7 +312,7 @@ FILLS = {"colors.panel", "colors.window", "colors.text_edit_bg", "colors.striped
 
 base = {}        # theme -> {path: value}, the defaults
 edits = {"light": {}, "dark": {}}  # theme -> {path: value}, what the user changed
-extras = {"light": {}, "dark": {}}  # tokens of a chosen sheet that the editors do not show (the symbol of the grids), given as they are
+extras = {"light": {}, "dark": {}}  # tokens of a chosen sheet that the editors do not show (the symbol of the grids, the tokens of the contexts `menu.*`, `sidebar.*`...), given as they are
 view = {}        # theme -> {path: value}, base + edits + transparency: what is drawn and applied
 holders = {}     # (theme, path) -> RGBA / Float holders of the editors
 opacity = Float(1.0)
@@ -333,6 +337,8 @@ def flatten(snap):
     for name, value in snap["grid"].items():
         if name != "chevron":  # a name of symbol, not a color: kept as it is by `extras`
             out[f"grid.{name}"] = value
+    for name, value in snap["popups"].items():  # the fill of the dropdowns, menus and tooltips, in RGBA
+        out[f"popups.{name}"] = value
     for name, value in snap["window"].items():
         if "shadow" not in name:  # a shadow has five values: not edited here
             out[f"window.{name}"] = value
