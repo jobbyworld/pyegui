@@ -1,7 +1,7 @@
 //! The look of the widgets in a context: a button in a menu is not drawn like a button of the page.
 //! A token has the path `<context>.<state>.<field>`, for instance `menu.hovered.weak_fill`, with the
-//! contexts `menu` (menus and context menus), `dropdown` (the list of a combo box), `sidebar`, `topbar`
-//! and `bottombar`, the states `noninteractive`, `inactive`, `hovered`, `active` and `open`, and the fields
+//! contexts `menu` (menus and context menus), `dropdown` (the list of a combo box), `sidebar`, `topbar`,
+//! `bottombar` and `window` (the windows and the modals), the states `noninteractive`, `inactive`, `hovered`, `active` and `open`, and the fields
 //! of `widgets.<state>.*`: `fill`, `weak_fill`, `stroke`, `fg_stroke`, `rounding`, `expansion`.
 //!
 //! The order of lookup is: the token of the context, then `widgets.<state>.<field>`, then the default.
@@ -20,14 +20,17 @@ pub enum Context {
     Sidebar,
     Topbar,
     Bottombar,
+    /// the windows and the modals
+    Window,
 }
 
-pub const CONTEXTS: [(&str, Context); 5] = [
+pub const CONTEXTS: [(&str, Context); 6] = [
     ("menu", Context::Menu),
     ("dropdown", Context::Dropdown),
     ("sidebar", Context::Sidebar),
     ("topbar", Context::Topbar),
     ("bottombar", Context::Bottombar),
+    ("window", Context::Window),
 ];
 
 pub const STATES: [&str; 5] = ["noninteractive", "inactive", "hovered", "active", "open"];
@@ -44,7 +47,7 @@ pub struct WidgetSet {
 }
 
 /// `[theme][context][state]`
-type Table = [[[WidgetSet; 5]; 5]; 2];
+type Table = [[[WidgetSet; 5]; 6]; 2];
 
 static TOKENS: RwLock<Table> = RwLock::new([[[WidgetSet {
     fill: None,
@@ -53,7 +56,7 @@ static TOKENS: RwLock<Table> = RwLock::new([[[WidgetSet {
     fg_stroke: None,
     rounding: None,
     expansion: None,
-}; 5]; 5]; 2]);
+}; 5]; 6]; 2]);
 
 fn context_index(context: Context) -> usize {
     CONTEXTS.iter().position(|(_, c)| *c == context).unwrap_or(0)
@@ -87,16 +90,16 @@ pub struct Padding {
 }
 
 /// `[theme][context]`, the page is the last one
-static PADDINGS: RwLock<[[Padding; 6]; 2]> = RwLock::new([[Padding { padding: None, radius_factor: None }; 6]; 2]);
+static PADDINGS: RwLock<[[Padding; 7]; 2]> = RwLock::new([[Padding { padding: None, radius_factor: None }; 7]; 2]);
 
 /// The padding tokens of a context (None is the page) in a theme
 pub fn padding(dark: bool, context: Option<Context>) -> Padding {
-    let i = context.map_or(5, context_index);
+    let i = context.map_or(6, context_index);
     PADDINGS.read().unwrap_or_else(|e| e.into_inner())[usize::from(dark)][i]
 }
 
 pub fn update_padding(dark: bool, context: Option<Context>, change: impl FnOnce(&mut Padding)) {
-    let i = context.map_or(5, context_index);
+    let i = context.map_or(6, context_index);
     change(&mut PADDINGS.write().unwrap_or_else(|e| e.into_inner())[usize::from(dark)][i]);
 }
 

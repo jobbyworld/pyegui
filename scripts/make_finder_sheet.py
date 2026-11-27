@@ -20,7 +20,10 @@ CONTRAST = {
     # dark: the striped rows are lighter than the glass
     "dark": {"spacing.button_padding_radius": 0.8, "menu.button_padding_radius": 0.8, "colors.text": "#f2f2f7ff",
              "colors.striped_bg": "#ffffff14", "colors.window": "#13151d70", "popups.window_fill": "#232326ff", "popups.menu_fill": "#2a2a2eff",
-             "popups.dropdown_fill": "#2a2a2eff", "popups.tooltip_fill": "#303035ff"},
+             "popups.dropdown_fill": "#2a2a2eff", "popups.tooltip_fill": "#303035ff",
+             # the buttons of the windows and modals have a fill of their own on the opaque gray (the glass gives them none)
+             "window.inactive.weak_fill": "#ffffff1a", "window.hovered.weak_fill": "#ffffff2e", "window.active.weak_fill": "#ffffff3d",
+             "window.inactive.stroke": [1.0, "#ffffff24"], "window.hovered.stroke": [1.0, "#ffffff3d"]},
 }
 
 

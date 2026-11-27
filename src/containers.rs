@@ -275,7 +275,10 @@ unsafe fn window(
     }
 
     let show = |w: egui::Window<'_>| {
-        w.show(&ctx, |ui| run_nested_update_func(ui, update_fun))
+        w.show(&ctx, |ui| {
+            pyegui_core::context_style::apply_ui(ui, pyegui_core::context_style::Context::Window);
+            run_nested_update_func(ui, update_fun)
+        })
             .and_then(|r| r.inner)
             .unwrap_or(Ok(()))
     };
@@ -332,7 +335,10 @@ unsafe fn modal(
         m = m.frame(apply_frame_kwargs(base, kwargs)?);
     }
 
-    let response = m.show(&ctx, |ui| run_nested_update_func(ui, update_fun));
+    let response = m.show(&ctx, |ui| {
+        pyegui_core::context_style::apply_ui(ui, pyegui_core::context_style::Context::Window);
+        run_nested_update_func(ui, update_fun)
+    });
 
     let should_close = response.should_close();
     response.inner?;
