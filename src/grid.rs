@@ -108,7 +108,7 @@ fn rows_from_py(rows: &Bound<'_, PyAny>, columns: &[GridColumn]) -> PyResult<Vec
         let parent = d.get_item("parent")?.filter(|v| !v.is_none()).map(|v| v.str().map(|s| s.to_string())).transpose()?;
         let readonly = d.get_item("readonly")?.map(|v| v.extract()).transpose()?.unwrap_or(false);
         let icon = d.get_item("icon")?.filter(|v| !v.is_none()).map(|v| v.extract::<String>()).transpose()?;
-        out.push(GridRow { id, cells, parent, readonly, icon });
+        out.push(GridRow { id, cells, parent, readonly, icon, ..Default::default() });
     }
     Ok(out)
 }

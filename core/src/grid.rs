@@ -47,6 +47,12 @@ pub struct GridRow {
     pub readonly: bool,
     /// an image (an uri) drawn before the text of the first column
     pub icon: Option<String>,
+    /// a branch whose children are not given yet (a folder not read): it has a chevron and opens all the same
+    pub expandable: bool,
+    /// colored dots drawn at the end of the first column (tags)
+    pub badges: Vec<egui::Color32>,
+    /// the row is drawn faded (a hidden file)
+    pub dim: bool,
 }
 
 /// The cell being edited
@@ -110,6 +116,8 @@ pub struct GridOptions {
     pub drag: bool,
     /// the first column is always at the left, with the tree
     pub tree_column: Option<String>,
+    /// the rows come sorted and filtered by the caller: the grid keeps their order and ignores the filters
+    pub keep_order: bool,
 }
 
 impl Default for GridOptions {
@@ -126,6 +134,7 @@ impl Default for GridOptions {
             id: "grid".into(),
             drag: false,
             tree_column: None,
+            keep_order: false,
         }
     }
 }
@@ -184,6 +193,20 @@ fn sort_indexes(indexes: &mut [usize], rows: &[GridRow], columns: &[GridColumn],
 /// The lines to show: the rows kept by the filters, sorted, and for a tree the branches that are open (a row that
 /// is kept brings its ancestors, and with a filter active they are open). Pure, so it is tested.
 pub fn arrange(rows: &[GridRow], columns: &[GridColumn], state: &ColumnsState, tree: bool, expanded: &HashSet<String>) -> Vec<Shown> {
+    arrange_with(rows, columns, state, tree, expanded, false)
+}
+
+/// `keep_order`: the rows are already sorted and filtered, they keep their order
+pub fn arrange_with(rows: &[GridRow], columns: &[GridColumn], state: &ColumnsState, tree: bool, expanded: &HashSet<String>, keep_order: bool) -> Vec<Shown> {
+    let owned;
+    let state = if keep_order {
+        let mut plain = ColumnsState::new("");
+        plain.sort_key = String::new();
+        owned = plain;
+        &owned
+    } else {
+        state
+    };
     let filtered = columns.iter().any(|c| state.filters.get(&c.key).is_some_and(|f| !f.is_empty()));
     if !tree {
         let mut indexes: Vec<usize> = (0..rows.len()).filter(|&i| filters_match(&rows[i], columns, state)).collect();
@@ -227,8 +250,8 @@ pub fn arrange(rows: &[GridRow], columns: &[GridColumn], state: &ColumnsState, t
         sort_indexes(list, rows, columns, state);
         for &i in list.iter() {
             let kids: Vec<usize> = children[i].iter().copied().filter(|&c| keep[c]).collect();
-            let open = !kids.is_empty() && (filtered || expanded.contains(&rows[i].id));
-            out.push(Shown { index: i, depth, has_children: !children[i].is_empty(), open });
+            let open = (!kids.is_empty() || rows[i].expandable) && (filtered || expanded.contains(&rows[i].id));
+            out.push(Shown { index: i, depth, has_children: !children[i].is_empty() || rows[i].expandable, open });
             if open {
                 let mut kids = kids;
                 walk(&mut kids, depth + 1, rows, columns, state, children, keep, expanded, filtered, out);
@@ -416,7 +439,7 @@ pub fn show(
     // the rows
     let zones = zones_for(&state.columns);
     let scroll = state.columns.scroll;
-    let lines = arrange(rows, columns, &state.columns, options.tree, &state.expanded);
+    let lines = arrange_with(rows, columns, &state.columns, options.tree, &state.expanded, options.keep_order);
     let shown_ids: Vec<String> = lines.iter().map(|l| rows[l.index].id.clone()).collect();
     out.shown = shown_ids.clone();
     let existing: HashSet<&str> = rows.iter().map(|r| r.id.as_str()).collect();
@@ -479,6 +502,7 @@ pub fn show(
                 ui.painter().rect_filled(rect, 0.0, text_color.gamma_multiply(0.06));
             }
             let ink = if is_selected { selected_text } else { text_color };
+            let ink = if row.dim { ink.gamma_multiply(0.5) } else { ink };
             let mut cell_hit: Option<String> = None;
             for p in &zones.placed {
                 let c = order[p.index];
@@ -514,7 +538,7 @@ pub fn show(
                     if let Some(uri) = &row.icon {
                         let icon = Rect::from_min_size(pos2(left, cell_rect.center().y - 8.0), vec2(16.0, 16.0));
                         if icon.intersects(clip) {
-                            egui::Image::new(uri.as_str()).fit_to_exact_size(vec2(16.0, 16.0)).paint_at(ui, icon);
+                            egui::Image::new(uri.as_str()).fit_to_exact_size(vec2(16.0, 16.0)).tint(if row.dim { egui::Color32::from_white_alpha(128) } else { egui::Color32::WHITE }).paint_at(ui, icon);
                         }
                         left += 20.0;
                     }
@@ -546,6 +570,10 @@ pub fn show(
                     painter.text(pos2(cell_rect.right() - 8.0, cell_rect.center().y), Align2::RIGHT_CENTER, text, font.clone(), ink);
                 } else {
                     painter.text(pos2(left, cell_rect.center().y), Align2::LEFT_CENTER, text, font.clone(), ink);
+                }
+                if is_first && !row.badges.is_empty() {
+                    let dots = crate::files::dots_width(&row.badges, 9.0);
+                    crate::files::paint_dots(ui, &row.badges, clip.right() - dots - 8.0, cell_rect.center().y, 9.0);
                 }
             }
             if response.clicked() && state.editing.is_none() {
@@ -740,7 +768,7 @@ mod tests {
     use super::*;
 
     fn rows() -> Vec<GridRow> {
-        let r = |id: &str, parent: Option<&str>, name: &str, n: &str| GridRow { id: id.into(), cells: vec![name.into(), n.into()], parent: parent.map(String::from), readonly: false, icon: None };
+        let r = |id: &str, parent: Option<&str>, name: &str, n: &str| GridRow { id: id.into(), cells: vec![name.into(), n.into()], parent: parent.map(String::from), readonly: false, icon: None, expandable: false, badges: vec![], dim: false };
         vec![r("a", None, "Alpha", "3"), r("b", None, "Bravo", "10"), r("a1", Some("a"), "Child 1", "2"), r("a2", Some("a"), "Child 2", "1"), r("b1", Some("b"), "Kid", "5")]
     }
 
@@ -752,6 +780,23 @@ mod tests {
 
     fn ids(shown: &[Shown], rows: &[GridRow]) -> Vec<String> {
         shown.iter().map(|s| rows[s.index].id.clone()).collect()
+    }
+
+    #[test]
+    fn rows_given_in_order_keep_it_and_an_unread_branch_opens() {
+        let mut rows = rows();
+        rows.reverse();
+        let mut state = ColumnsState::new("name");
+        state.ascending = true;
+        let sorted = arrange_with(&rows, &cols(), &state, false, &HashSet::new(), false);
+        let kept = arrange_with(&rows, &cols(), &state, false, &HashSet::new(), true);
+        assert_ne!(ids(&sorted, &rows), ids(&kept, &rows));
+        assert_eq!(ids(&kept, &rows), rows.iter().map(|r| r.id.clone()).collect::<Vec<_>>());
+        let leaf = vec![GridRow { id: "dir".into(), cells: vec!["dir".into(), "1".into()], expandable: true, ..Default::default() }];
+        let shown = arrange(&leaf, &cols(), &ColumnsState::new("name"), true, &HashSet::new());
+        assert!(shown[0].has_children && !shown[0].open);
+        let open: HashSet<String> = ["dir".to_string()].into();
+        assert!(arrange(&leaf, &cols(), &ColumnsState::new("name"), true, &open)[0].open);
     }
 
     #[test]
