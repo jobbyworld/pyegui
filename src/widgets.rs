@@ -748,6 +748,33 @@ unsafe fn pointer_pressed() -> PyResult<bool> {
     Ok(ctx.input(|i| i.pointer.primary_pressed()))
 }
 
+/// True during the frame in which a mouse button went down, wherever the mouse is: "primary", "secondary",
+/// "middle", "back" or "forward" (the two side buttons of a mouse, the ones of the browsers).
+///
+/// Args:
+///     button (str): the button, "primary" by default
+///
+/// Example::
+///
+///     if mouse_button_pressed("back"):
+///         go_back()
+///     if mouse_button_pressed("forward"):
+///         go_forward()
+#[pyfunction]
+#[pyo3(signature = (button="primary"))]
+unsafe fn mouse_button_pressed(button: &str) -> PyResult<bool> {
+    let ctx = panel_parent_ui(&UI)?.ctx().clone(); // no widget: the central panel is not opened
+    let button = match button {
+        "primary" => egui::PointerButton::Primary,
+        "secondary" => egui::PointerButton::Secondary,
+        "middle" => egui::PointerButton::Middle,
+        "back" => egui::PointerButton::Extra1,
+        "forward" => egui::PointerButton::Extra2,
+        other => return Err(PyValueError::new_err(format!("unknown mouse button {other:?}: primary, secondary, middle, back or forward"))),
+    };
+    Ok(ctx.input(|i| i.pointer.button_pressed(button)))
+}
+
 /// The modifier keys held during the frame, as a dict with the keys shift, command and alt.
 /// command is the command key on macOS and ctrl elsewhere.
 ///
@@ -1137,6 +1164,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(text_width, m)?)?;
     m.add_function(wrap_pyfunction!(pointer_pos, m)?)?;
     m.add_function(wrap_pyfunction!(pointer_pressed, m)?)?;
+    m.add_function(wrap_pyfunction!(mouse_button_pressed, m)?)?;
     m.add_function(wrap_pyfunction!(typed_text, m)?)?;
     m.add_function(wrap_pyfunction!(modifiers, m)?)?;
     m.add_function(wrap_pyfunction!(draw_rect, m)?)?;

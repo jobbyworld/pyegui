@@ -179,6 +179,13 @@ fn consume(input: &mut egui::InputState, shortcut: &KeyboardShortcut) -> bool {
 }
 
 pub fn run_shortcuts(app: &mut FinderApp, ctx: &egui::Context) {
+    // the side buttons of a mouse go back and forward, like in a browser
+    let (back, forward) = ctx.input(|i| (i.pointer.button_pressed(egui::PointerButton::Extra1), i.pointer.button_pressed(egui::PointerButton::Extra2)));
+    if back && app.history.can_back() {
+        app.back();
+    } else if forward && app.history.can_forward() {
+        app.forward();
+    }
     if ctx.text_edit_focused() || pyegui_core::terminal::terminal_focused(ctx) {
         return;
     }
