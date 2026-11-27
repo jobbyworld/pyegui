@@ -573,6 +573,23 @@ pub fn show(
     hscroll_bar(ui, id, &mut state.columns, &zones, output.inner_rect);
     state.offset_y = output.state.offset().y;
 
+    // the separators of the columns, in line with the ones of the header
+    {
+        let line = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color.gamma_multiply(0.6));
+        let rows_rect = output.inner_rect;
+        let painter = ui.painter().with_clip_rect(rows_rect);
+        let count = zones.placed.len();
+        for (n, p) in zones.placed.iter().enumerate() {
+            if n + 1 == count {
+                continue;
+            }
+            let visible = zones.visible(rows_rect, p, scroll);
+            if visible.width() > 0.0 {
+                painter.vline(visible.right().round() - 0.5, rows_rect.y_range(), line);
+            }
+        }
+    }
+
     // the lasso
     if options.multi_select {
         let origin = output.inner_rect.min - vec2(0.0, output.state.offset().y);
