@@ -11,6 +11,10 @@ OUT = os.path.join(os.path.dirname(__file__), "..", "examples", "style_sheets", 
 ACCENT, OPACITY, LEVELS = "#3b82f6", 1.2, {"central": 0.3, "dock": 0.3}  # as in finder.py
 
 
+# the text over the glass needs more contrast than the plain style gives (the weak text follows the text)
+CONTRAST = {"light": {"colors.text": "#1c1c1eff"}, "dark": {"colors.text": "#f2f2f7ff"}}
+
+
 def flatten(snap):
     out = {}
     for group in ("colors", "tabs", "pill_tabs", "grid", "popups"):
@@ -34,6 +38,8 @@ def update(ctx):
     for t in ("light", "dark"):
         now = flatten(ctx.style_snapshot(t))
         sheet[t] = {p: (list(v) if isinstance(v, tuple) else v) for p, v in now.items() if v != plain[t].get(p)}
+    for t, tokens in CONTRAST.items():
+        sheet[t].update(tokens)
     with open(OUT, "w") as f:
         json.dump(sheet, f, indent=2, ensure_ascii=False)
     print({t: len(sheet[t]) for t in ("light", "dark")})

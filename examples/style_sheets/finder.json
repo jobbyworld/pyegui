@@ -70,7 +70,8 @@
       "#b4b4b4b4"
     ],
     "window.rounding": 16,
-    "window.menu_rounding": 12
+    "window.menu_rounding": 12,
+    "colors.text": "#1c1c1eff"
   },
   "dark": {
     "colors.panel": "#06070a54",
@@ -140,6 +141,7 @@
       "#2d2d2d2d"
     ],
     "window.rounding": 16,
-    "window.menu_rounding": 12
+    "window.menu_rounding": 12,
+    "colors.text": "#f2f2f7ff"
   }
 }
