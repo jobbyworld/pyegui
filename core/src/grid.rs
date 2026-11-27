@@ -376,8 +376,8 @@ pub fn elbow(x: f32, top: f32, middle: f32, end: f32, radius: f32) -> Vec<egui::
         points.push(pos2(x, middle - radius));
         // a quarter of a circle, from the bottom of the vertical to the start of the horizontal
         let centre = pos2(x + radius, middle - radius);
-        for step in 1..8 {
-            let angle = std::f32::consts::FRAC_PI_2 * step as f32 / 8.0;
+        for step in 1..12 {
+            let angle = std::f32::consts::FRAC_PI_2 * step as f32 / 12.0;
             points.push(pos2(centre.x - radius * angle.cos(), centre.y + radius * angle.sin()));
         }
         points.push(pos2(x + radius, middle));
@@ -608,7 +608,11 @@ pub fn show(
                             } else {
                                 // the last child: an elbow, rounded by the radius of the token
                                 let r = look.guide_radius.min((end - x).max(0.0)).min((middle - rect.top()).max(0.0));
-                                painter.add(egui::Shape::line(elbow(x, rect.top(), middle, end, r), guide));
+                                // the vertical is drawn like the other verticals (the same snapping, so it lines up with the line
+                                // above); only the curve and the horizontal are a path
+                                painter.vline(x, rect.top()..=(middle - r), guide);
+                                let path = elbow(x, middle - r, middle, end, r);
+                                painter.add(egui::Shape::line(path, guide));
                             }
                         } else if continues[position].get(level + 1).copied().unwrap_or(false) {
                             painter.vline(x, rect.y_range(), guide);
