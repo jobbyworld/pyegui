@@ -611,7 +611,9 @@ pub fn show(
                                 // the vertical is drawn like the other verticals (the same snapping, so it lines up with the line
                                 // above); only the curve and the horizontal are a path
                                 painter.vline(x, rect.top()..=(middle - r), guide);
-                                let path = elbow(x, middle - r, middle, end, r);
+                                // one physical pixel to the right: the curve is anti-aliased around its center line, the vertical is snapped
+                                let nudge = 1.0 / ui.ctx().pixels_per_point();
+                                let path = elbow(x + nudge, middle - r, middle, end, r);
                                 painter.add(egui::Shape::line(path, guide));
                             }
                         } else if continues[position].get(level + 1).copied().unwrap_or(false) {
