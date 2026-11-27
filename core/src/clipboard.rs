@@ -38,7 +38,16 @@ pub fn take_shortcut(input: &mut egui::InputState, key: egui::Key) -> bool {
         egui::Key::X => !input.modifiers.shift && take(&mut input.events, |e| matches!(e, egui::Event::Cut)),
         egui::Key::V => {
             let event = take(&mut input.events, |e| matches!(e, egui::Event::Paste(_) | egui::Event::PasteImage(_)));
-            event | imp::paste_key(input.time, input.focused)
+            let key = imp::paste_key(input.time, input.focused);
+            // a paste of text is seen twice: as an event and as the key read from the keyboard, one frame apart
+            static LAST: std::sync::Mutex<f64> = std::sync::Mutex::new(-1.0);
+            let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+            if (event || key) && input.time - *last > 0.3 {
+                *last = input.time;
+                true
+            } else {
+                false
+            }
         }
         _ => false,
     }
@@ -51,9 +60,30 @@ mod imp {
 
     use objc2::rc::Retained;
 
-    /// no event is lost on macOS for a paste of text; a paste of files is not seen (the key is not read)
-    pub fn paste_key(_time: f64, _focused: bool) -> bool {
-        false
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventSourceKeyState(state: i32, key: u16) -> bool;
+        fn CGEventSourceFlagsState(state: i32) -> u64;
+    }
+
+    /// Cmd+V pressed in the frame that has the time `time`: read from the keyboard. egui only sees a paste when
+    /// the pasteboard holds text; files copied by this app (no text) or by some applications send no event.
+    /// Once per frame and only on the press, not while it is held
+    pub fn paste_key(time: f64, focused: bool) -> bool {
+        use std::sync::Mutex;
+        const COMBINED_SESSION: i32 = 0;
+        const KEY_V: u16 = 9;
+        const COMMAND: u64 = 0x0010_0000;
+        // (time of the last frame read, the answer of that frame, was the shortcut down at that frame)
+        static LAST: Mutex<(f64, bool, bool)> = Mutex::new((-1.0, false, false));
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if last.0 == time {
+            return last.1;
+        }
+        let down = focused && unsafe { CGEventSourceFlagsState(COMBINED_SESSION) & COMMAND != 0 && CGEventSourceKeyState(COMBINED_SESSION, KEY_V) };
+        let pressed = down && !last.2;
+        *last = (time, pressed, down);
+        pressed
     }
     use objc2::runtime::{AnyObject, ProtocolObject};
     use objc2::ClassType;
