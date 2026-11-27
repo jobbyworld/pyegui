@@ -77,9 +77,47 @@ pub fn update_tokens(dark: bool, context: Context, state: usize, change: impl Fn
     change(&mut TOKENS.write().unwrap_or_else(|e| e.into_inner())[usize::from(dark)][context_index(context)][state]);
 }
 
+/// The padding of the buttons of a context: `<context>.button_padding` (x, y), and `<context>.button_padding_radius`,
+/// a factor of the rounding of the buttons that the padding at the left and at the right is at least
+/// (a round button needs room for its corners). The context `page` is the whole app: `spacing.button_padding_radius`
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+pub struct Padding {
+    pub padding: Option<(f32, f32)>,
+    pub radius_factor: Option<f32>,
+}
+
+/// `[theme][context]`, the page is the last one
+static PADDINGS: RwLock<[[Padding; 6]; 2]> = RwLock::new([[Padding { padding: None, radius_factor: None }; 6]; 2]);
+
+/// The padding tokens of a context (None is the page) in a theme
+pub fn padding(dark: bool, context: Option<Context>) -> Padding {
+    let i = context.map_or(5, context_index);
+    PADDINGS.read().unwrap_or_else(|e| e.into_inner())[usize::from(dark)][i]
+}
+
+pub fn update_padding(dark: bool, context: Option<Context>, change: impl FnOnce(&mut Padding)) {
+    let i = context.map_or(5, context_index);
+    change(&mut PADDINGS.write().unwrap_or_else(|e| e.into_inner())[usize::from(dark)][i]);
+}
+
+/// The padding of the buttons of a style, from its rounding and the tokens of a context (None is the page)
+pub fn fit_padding(style: &mut Style, context: Option<Context>) {
+    let dark = style.visuals.dark_mode;
+    let here = padding(dark, context);
+    let page = padding(dark, None);
+    if let Some((x, y)) = here.padding {
+        style.spacing.button_padding = egui::vec2(x, y);
+    }
+    if let Some(factor) = here.radius_factor.or(page.radius_factor) {
+        let radius = f32::from(style.visuals.widgets.inactive.corner_radius.nw);
+        style.spacing.button_padding.x = style.spacing.button_padding.x.max(factor * radius);
+    }
+}
+
 /// Forgets every token
 pub fn reset_tokens() {
     *TOKENS.write().unwrap_or_else(|e| e.into_inner()) = Default::default();
+    *PADDINGS.write().unwrap_or_else(|e| e.into_inner()) = Default::default();
 }
 
 fn put(w: &mut WidgetVisuals, set: &WidgetSet) {
@@ -113,6 +151,7 @@ pub fn apply(style: &mut Style, context: Context) {
     {
         put(target, &tokens(dark, context, index));
     }
+    fit_padding(style, Some(context));
 }
 
 /// The same on the style of a ui

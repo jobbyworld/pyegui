@@ -198,6 +198,10 @@ impl Context {
         spacing.set_item("interact_size", (sp.interact_size.x, sp.interact_size.y))?;
         spacing.set_item("slider_width", sp.slider_width)?;
         spacing.set_item("icon_width", sp.icon_width)?;
+        spacing.set_item(
+            "button_padding_radius",
+            pyegui_core::context_style::padding(theme == egui::Theme::Dark, None).radius_factor.unwrap_or(0.0),
+        )?;
         out.set_item("spacing", spacing)?;
 
         // the tabs of a Dock or a TabView: what they are drawn with now (tokens, else defaults)
@@ -270,7 +274,7 @@ impl Context {
 
     /// Changes any value of the style of a theme by its path, the same paths as the dict of `style_snapshot`
     /// (`colors.panel`, `widgets.hovered.weak_fill`, `widgets.active.stroke`, `window.rounding`, `fonts.Body`,
-    /// `spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`, `popups.dropdown_fill`...). The widgets of a context (`menu`, `dropdown`, `sidebar`, `topbar`, `bottombar`) have their own tokens `<context>.<state>.<field>`, e.g. `menu.hovered.weak_fill`, looked up before `widgets.<state>.<field>`. The fill of the popups is an RGBA color whose alpha is the transparency: `popups.dropdown_fill` (the list of a combo box), `popups.menu_fill` (menus and context menus) and `popups.tooltip_fill` (tooltips), e.g. `{"popups.dropdown_fill": "#1e1e2e80"}` for a half transparent dropdown. The tabs of a `Dock` and of a `tab_view` read the
+    /// `spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`, `popups.dropdown_fill`...). The widgets of a context (`menu`, `dropdown`, `sidebar`, `topbar`, `bottombar`) have their own tokens `<context>.<state>.<field>`, e.g. `menu.hovered.weak_fill`, looked up before `widgets.<state>.<field>`; `<context>.button_padding` (x, y) and `<context>.button_padding_radius` give the padding of their buttons, `spacing.button_padding_radius` does it for the whole app: a factor of the rounding of the buttons that the padding at the left and at the right is at least (a round button needs room for its corners). The fill of the popups is an RGBA color whose alpha is the transparency: `popups.dropdown_fill` (the list of a combo box), `popups.menu_fill` (menus and context menus) and `popups.tooltip_fill` (tooltips), e.g. `{"popups.dropdown_fill": "#1e1e2e80"}` for a half transparent dropdown. The tabs of a `Dock` and of a `tab_view` read the
     /// `tabs.*` (classic tabs) and `pill_tabs.*` tokens. Only the given paths are changed. Colors are "#rrggbb[aa]", (r, g, b[, a]);
     /// a stroke is (width, color); a rounding or a size is a float; a font is (size, family) or a size.
     ///
@@ -435,6 +439,19 @@ impl Context {
                     }
                     pyegui_core::context_style::update_tokens(dark, ctx_kind, index, |t| *t = set);
                 }
+                [context @ ("menu" | "dropdown" | "sidebar" | "topbar" | "bottombar"), field @ ("button_padding" | "button_padding_radius")] => {
+                    let Some(kind) = pyegui_core::context_style::context_of(context) else {
+                        continue;
+                    };
+                    let dark = theme == egui::Theme::Dark;
+                    if *field == "button_padding" {
+                        let (x, y) = value.extract::<(f32, f32)>()?;
+                        pyegui_core::context_style::update_padding(dark, Some(kind), |p| p.padding = Some((x, y)));
+                    } else {
+                        let factor: f32 = value.extract()?;
+                        pyegui_core::context_style::update_padding(dark, Some(kind), |p| p.radius_factor = Some(factor));
+                    }
+                }
                 ["popups", field] => {
                     let dark = theme == egui::Theme::Dark;
                     let color = extract_color(&value).ok();
@@ -457,6 +474,10 @@ impl Context {
                     match *name {
                         "item_spacing" => style.spacing.item_spacing = pair(&value)?,
                         "button_padding" => style.spacing.button_padding = pair(&value)?,
+                        "button_padding_radius" => {
+                            let factor: f32 = value.extract()?;
+                            pyegui_core::context_style::update_padding(theme == egui::Theme::Dark, None, |p| p.radius_factor = Some(factor));
+                        }
                         "interact_size" => style.spacing.interact_size = pair(&value)?,
                         "slider_width" => style.spacing.slider_width = value.extract()?,
                         "icon_width" => style.spacing.icon_width = value.extract()?,
@@ -466,6 +487,7 @@ impl Context {
                 _ => unknown.push(path.clone()),
             }
         }
+        pyegui_core::context_style::fit_padding(&mut style, None);
         self.0.set_style_of(theme, style);
         Ok(unknown)
     }

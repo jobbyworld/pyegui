@@ -13,10 +13,10 @@ ACCENT, OPACITY, LEVELS = "#3b82f6", 1.2, {"central": 0.3, "dock": 0.3}  # as in
 
 # what the glass needs on top of the plain style: contrast of the text and of the striped rows, windows and popups half transparent
 CONTRAST = {
-    "light": {"colors.text": "#1c1c1eff", "colors.window": "#f9f9ffd8", "popups.menu_fill": "#f9f9ffd0",
+    "light": {"spacing.button_padding_radius": 0.8, "menu.button_padding_radius": 0.8, "colors.text": "#1c1c1eff", "colors.window": "#f9f9ffd8", "popups.menu_fill": "#f9f9ffd0",
               "popups.dropdown_fill": "#f9f9ffd0", "popups.tooltip_fill": "#f9f9ffe0"},
     # dark: the striped rows are lighter than the glass, the windows and the popups let the backdrop through
-    "dark": {"colors.text": "#f2f2f7ff", "colors.striped_bg": "#ffffff14", "colors.window": "#13151dc8",
+    "dark": {"spacing.button_padding_radius": 0.8, "menu.button_padding_radius": 0.8, "colors.text": "#f2f2f7ff", "colors.striped_bg": "#ffffff14", "colors.window": "#13151dc8",
              "popups.menu_fill": "#13151dc0", "popups.dropdown_fill": "#13151dc0", "popups.tooltip_fill": "#13151dd8"},
 }
 

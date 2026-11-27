@@ -71,6 +71,8 @@
     ],
     "window.rounding": 16,
     "window.menu_rounding": 12,
+    "spacing.button_padding_radius": 0.8,
+    "menu.button_padding_radius": 0.8,
     "colors.text": "#1c1c1eff"
   },
   "dark": {
@@ -142,6 +144,8 @@
     ],
     "window.rounding": 16,
     "window.menu_rounding": 12,
+    "spacing.button_padding_radius": 0.8,
+    "menu.button_padding_radius": 0.8,
     "colors.text": "#f2f2f7ff"
   }
 }
