@@ -2719,6 +2719,44 @@ def keyboard():
 
 # style, as the View menu of app.py
 
+SHEETS_DIR = Path(__file__).resolve().parent / "style_sheets"
+sheet_name = Str("")  # the style sheet (tokens of both themes, see examples/style_sheets); empty is none
+sheet_cache = {}
+
+
+def style_sheet_names():
+    """the names of the style sheets of examples/style_sheets, sorted"""
+    try:
+        return sorted(f[:-5] for f in os.listdir(SHEETS_DIR) if f.endswith(".json"))
+    except OSError:
+        return []
+
+
+def style_sheet(name):
+    """the content of a style sheet (read once), or None when it is missing or not valid"""
+    if not name:
+        return None
+    if name not in sheet_cache:
+        try:
+            with open(SHEETS_DIR / (name + ".json"), encoding="utf-8") as f:
+                data = json.load(f)
+            sheet_cache[name] = data if isinstance(data, dict) else None
+        except (OSError, ValueError):
+            sheet_cache[name] = None
+    return sheet_cache[name]
+
+
+def apply_style_sheet(ctx):
+    """the tokens of the chosen sheet, over the accent and the glass: the colors, the strokes, the roundings, the
+    fill of the popups and the paddings of the buttons"""
+    data = style_sheet(sheet_name.value)
+    if not data:
+        return
+    for which in ("light", "dark"):
+        tokens = data.get(which)
+        if isinstance(tokens, dict):
+            ctx.set_style_tokens(which, {p: tuple(v) if isinstance(v, list) else v for p, v in tokens.items()})
+
 
 def apply_style():
     ctx = context[0]
@@ -2739,6 +2777,7 @@ def apply_style():
         )
     else:
         ctx.set_accent(accent)
+    apply_style_sheet(ctx)
     look = current_look()
     changes = {}
     if look.text_set:
@@ -2882,7 +2921,7 @@ def apply_look():
     """the style and the background follow the choices of the panel; run at every frame, it acts when one changed"""
     look = current_look()
     fonts = (font_choice["ui"].value, font_choice["terminal"].value, round(font_sizes["ui"].value, 1), round(font_sizes["terminal"].value, 1))
-    wanted = (look.dark, theme.value, glass.value, accent_value(), pill_tabs.value, fonts, look.style_signature())
+    wanted = (look.dark, theme.value, glass.value, accent_value(), pill_tabs.value, fonts, look.style_signature(), sheet_name.value)
     if wanted != look_applied["style"]:
         look_applied["style"] = wanted
         apply_style()
@@ -2926,6 +2965,9 @@ def look_properties():
 
     general = "Général"
     add("accent", "Accent", general, "color", hex_of(rgb_of(accent_rgb)), "La couleur de la sélection, des liens et des onglets actifs")
+    sheets = style_sheet_names()
+    if sheets:
+        add("sheet", "Feuille de style", general, "choice", sheet_name.value or "-", "Les jetons de style d'un fichier de examples/style_sheets: couleurs, coins, popups, marges des boutons", options=[dict(id="-", label="Aucune")] + [dict(id=n, label=n) for n in sheets])
     add("tabs", "Onglets", general, "choice", "pill" if pill_tabs.value else "classic", options=[dict(id="classic", label="Classiques"), dict(id="pill", label="En pilule")])
     if not MACOS:
         add("blue", "Dossiers bleus", general, "bool", blue_folders.value, "Les dossiers de Windows dans le bleu du Finder, pas dans le jaune de l'Explorateur")
@@ -2975,6 +3017,8 @@ def apply_look_change(change):
     if id == "accent":
         set_holder_color(accent_rgb, value)
         accent_custom.value = True
+    elif id == "sheet":
+        sheet_name.value = "" if value == "-" else value
     elif id == "tabs":
         set_tab_style(value == "pill")
     elif id == "blue":
@@ -3057,6 +3101,7 @@ def snapshot():
         "glass": glass.value,
         "accent": accent_name.value,
         "pill_tabs": pill_tabs.value,
+        "style_sheet": sheet_name.value,
         "view": view.value,
         "show_sidebar": show_sidebar.value,
         "show_dock": show_dock.value,
@@ -3100,6 +3145,10 @@ def restore(saved):
     if saved.get("accent") in ACCENTS:
         accent_name.value = saved["accent"]
     pill_tabs.value = saved.get("pill_tabs", pill_tabs.value)
+    if isinstance(saved.get("style_sheet"), str):
+        sheet_name.value = saved["style_sheet"]
+    if os.environ.get("FINDER_SHEET") is not None:  # to try a sheet without choosing it in the panel
+        sheet_name.value = os.environ["FINDER_SHEET"]
     view.value = saved.get("view", view.value)
     show_sidebar.value = saved.get("show_sidebar", show_sidebar.value)
     show_dock.value = saved.get("show_dock", show_dock.value)
