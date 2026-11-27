@@ -372,6 +372,7 @@ pub fn menu_style() -> egui::style::StyleModifier {
     (move |style: &mut Style| {
         egui::containers::menu::menu_style(style);
         crate::popup_style::apply(style, crate::popup_style::Kind::Menu);
+        crate::context_style::apply(style, crate::context_style::Context::Menu);
         if modern {
             style.spacing.button_padding = egui::vec2(10.0, 4.0);
         }

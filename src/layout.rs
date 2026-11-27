@@ -319,6 +319,9 @@ unsafe fn show_region_panel(
                     Side::Left | Side::Right => ui.set_min_size(inner),
                     Side::Top | Side::Bottom => ui.set_min_width(inner.x),
                 }
+                if let Some(context) = pyegui_core::context_style::context_of(region) {
+                    pyegui_core::context_style::apply_ui(ui, context);
+                }
                 if title_bar {
                     ui.add_space(26.0); // the window buttons are over the sidebar
                 }

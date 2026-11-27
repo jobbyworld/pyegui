@@ -90,7 +90,7 @@ print(s["widgets"]["hovered"]["weak_fill"], s["colors"]["text_edit_bg"])
 
 Changes any value of the style of a theme by its path, the same paths as the dict of `style_snapshot`
 (`colors.panel`, `widgets.hovered.weak_fill`, `widgets.active.stroke`, `window.rounding`, `fonts.Body`,
-`spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`, `popups.dropdown_fill`...). The fill of the popups is an RGBA color whose alpha is the transparency: `popups.dropdown_fill` (the list of a combo box), `popups.menu_fill` (menus and context menus) and `popups.tooltip_fill` (tooltips), e.g. `{"popups.dropdown_fill": "#1e1e2e80"}` for a half transparent dropdown. The tabs of a `Dock` and of a `tab_view` read the
+`spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`, `popups.dropdown_fill`...). The widgets of a context (`menu`, `dropdown`, `sidebar`, `topbar`, `bottombar`) have their own tokens `<context>.<state>.<field>`, e.g. `menu.hovered.weak_fill`, looked up before `widgets.<state>.<field>`. The fill of the popups is an RGBA color whose alpha is the transparency: `popups.dropdown_fill` (the list of a combo box), `popups.menu_fill` (menus and context menus) and `popups.tooltip_fill` (tooltips), e.g. `{"popups.dropdown_fill": "#1e1e2e80"}` for a half transparent dropdown. The tabs of a `Dock` and of a `tab_view` read the
 `tabs.*` (classic tabs) and `pill_tabs.*` tokens. Only the given paths are changed. Colors are "#rrggbb[aa]", (r, g, b[, a]);
 a stroke is (width, color); a rounding or a size is a float; a font is (size, family) or a size.
 

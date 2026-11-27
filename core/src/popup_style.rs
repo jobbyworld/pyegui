@@ -57,6 +57,9 @@ pub fn fill(style: &Style, kind: Kind) -> Option<Color32> {
 
 /// Puts the fill of the kind in a style (the popups take their fill from the window fill)
 pub fn apply(style: &mut Style, kind: Kind) {
+    if kind == Kind::Dropdown {
+        crate::context_style::apply(style, crate::context_style::Context::Dropdown);
+    }
     if let Some(color) = fill(style, kind) {
         style.visuals.window_fill = color;
     }

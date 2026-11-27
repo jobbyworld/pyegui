@@ -241,12 +241,36 @@ impl Context {
             d.set_item(name, hex(pyegui_core::popup_style::fill(&style, kind).unwrap_or(v.window_fill)))?;
         }
         out.set_item("popups", d)?;
+
+        // the tokens given to a context (only the ones that are set): contexts.<context>.<state>.<field>
+        let contexts = PyDict::new(py);
+        let dark = theme == egui::Theme::Dark;
+        for (name, context) in pyegui_core::context_style::CONTEXTS {
+            let states = PyDict::new(py);
+            for (index, state) in pyegui_core::context_style::STATES.iter().enumerate() {
+                let t = pyegui_core::context_style::tokens(dark, context, index);
+                let f = PyDict::new(py);
+                if let Some(c) = t.fill { f.set_item("fill", hex(c))?; }
+                if let Some(c) = t.weak_fill { f.set_item("weak_fill", hex(c))?; }
+                if let Some(s) = t.stroke { f.set_item("stroke", stroke(s))?; }
+                if let Some(s) = t.fg_stroke { f.set_item("fg_stroke", stroke(s))?; }
+                if let Some(r) = t.rounding { f.set_item("rounding", r.nw)?; }
+                if let Some(e) = t.expansion { f.set_item("expansion", e)?; }
+                if !f.is_empty() {
+                    states.set_item(*state, f)?;
+                }
+            }
+            if !states.is_empty() {
+                contexts.set_item(name, states)?;
+            }
+        }
+        out.set_item("contexts", contexts)?;
         Ok(out)
     }
 
     /// Changes any value of the style of a theme by its path, the same paths as the dict of `style_snapshot`
     /// (`colors.panel`, `widgets.hovered.weak_fill`, `widgets.active.stroke`, `window.rounding`, `fonts.Body`,
-    /// `spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`, `popups.dropdown_fill`...). The fill of the popups is an RGBA color whose alpha is the transparency: `popups.dropdown_fill` (the list of a combo box), `popups.menu_fill` (menus and context menus) and `popups.tooltip_fill` (tooltips), e.g. `{"popups.dropdown_fill": "#1e1e2e80"}` for a half transparent dropdown. The tabs of a `Dock` and of a `tab_view` read the
+    /// `spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`, `popups.dropdown_fill`...). The widgets of a context (`menu`, `dropdown`, `sidebar`, `topbar`, `bottombar`) have their own tokens `<context>.<state>.<field>`, e.g. `menu.hovered.weak_fill`, looked up before `widgets.<state>.<field>`. The fill of the popups is an RGBA color whose alpha is the transparency: `popups.dropdown_fill` (the list of a combo box), `popups.menu_fill` (menus and context menus) and `popups.tooltip_fill` (tooltips), e.g. `{"popups.dropdown_fill": "#1e1e2e80"}` for a half transparent dropdown. The tabs of a `Dock` and of a `tab_view` read the
     /// `tabs.*` (classic tabs) and `pill_tabs.*` tokens. Only the given paths are changed. Colors are "#rrggbb[aa]", (r, g, b[, a]);
     /// a stroke is (width, color); a rounding or a size is a float; a font is (size, family) or a size.
     ///
@@ -389,6 +413,27 @@ impl Context {
                     if bad {
                         unknown.push(path.clone());
                     }
+                }
+                [context @ ("menu" | "dropdown" | "sidebar" | "topbar" | "bottombar"), state, field] => {
+                    let (Some(ctx_kind), Some(index)) = (pyegui_core::context_style::context_of(context), pyegui_core::context_style::state_index(state)) else {
+                        unknown.push(path.clone());
+                        continue;
+                    };
+                    let dark = theme == egui::Theme::Dark;
+                    let mut set = pyegui_core::context_style::tokens(dark, ctx_kind, index);
+                    match *field {
+                        "fill" => set.fill = Some(color(&value)?),
+                        "weak_fill" => set.weak_fill = Some(color(&value)?),
+                        "stroke" => set.stroke = Some(stroke(&value)?),
+                        "fg_stroke" => set.fg_stroke = Some(stroke(&value)?),
+                        "rounding" => set.rounding = Some(radius(&value)?),
+                        "expansion" => set.expansion = Some(value.extract()?),
+                        _ => {
+                            unknown.push(path.clone());
+                            continue;
+                        }
+                    }
+                    pyegui_core::context_style::update_tokens(dark, ctx_kind, index, |t| *t = set);
                 }
                 ["popups", field] => {
                     let dark = theme == egui::Theme::Dark;
@@ -643,6 +688,7 @@ impl Context {
         pyegui_core::tabs::reset_tokens();
         pyegui_core::grid_style::reset_tokens();
         pyegui_core::popup_style::reset_tokens();
+        pyegui_core::context_style::reset_tokens();
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
             self.0.set_style_of(theme, style::default_style(theme));
         }
