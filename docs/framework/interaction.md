@@ -76,6 +76,25 @@ if pointer_pressed() and ui_contains_pointer():
 ```
 
 
+## `mouse_button_pressed(button='primary')`
+
+True during the frame in which a mouse button went down, wherever the mouse is: "primary", "secondary",
+"middle", "back" or "forward" (the two side buttons of a mouse, the ones of the browsers).
+
+**Args**
+
+- `button` (str): the button, "primary" by default
+
+**Example:**
+
+```python
+if mouse_button_pressed("back"):
+    go_back()
+if mouse_button_pressed("forward"):
+    go_forward()
+```
+
+
 ## `ui_contains_pointer()`
 
 True if the mouse is over the current ui, e.g. to show buttons on hover.

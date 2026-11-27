@@ -147,6 +147,7 @@ from pyegui import (
     pdf_view,
     pointer_pos,
     pointer_pressed,
+    mouse_button_pressed,
     PropertySet,
     property_set,
     SettingsWindow,
@@ -6295,6 +6296,8 @@ def export_markdown_pdf():
 
 # category, label, icon, shortcut, enabled, run. "Cmd" is the command key on macOS and ctrl elsewhere
 ACTIONS = [
+    ("Navigation", "Précédent", "chevron-left", "Cmd+OpenBracket", lambda: bool(reading.value) or position.value > 0, lambda: back()),
+    ("Navigation", "Suivant", "chevron-right", "Cmd+CloseBracket", lambda: position.value < len(history) - 1, lambda: forward()),
     ("Ouvrir", "Nouvelle fenêtre", "dock", "Cmd+N", lambda: True, lambda: new_window(new_target())),
     ("Ouvrir", "Nouvel onglet", "dock", "Cmd+Shift+T", lambda: True, lambda: new_tab()),
     ("Ouvrir", "Ouvrir", "open", "Cmd+ArrowDown", has_selection, action_open),
@@ -6630,6 +6633,13 @@ ACTIONS = [
 def action_keys():
     if delete_ask["paths"]:
         return  # the question has its own keys
+    # the side buttons of a mouse go back and forward, like in a browser
+    if mouse_button_pressed("back") and (reading.value or position.value > 0):
+        back()
+        return
+    if mouse_button_pressed("forward") and position.value < len(history) - 1:
+        forward()
+        return
     for _, _, _, shortcut, enabled, run in ACTIONS:
         if shortcut and enabled() and any(key_pressed(k) for k in shortcut.split("|")):  # "A|B": two keys
             run()

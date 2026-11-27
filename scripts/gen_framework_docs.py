@@ -114,7 +114,7 @@ THEMES = [
     ("interaction", "Keyboard, mouse and drag and drop",
      "Shortcuts are read with `key_pressed`; what the user did to a widget is read from its "
      "`Response` or from the value the function returns.",
-     ["key_pressed", "typed_text", "modifiers", "pointer_pos", "pointer_pressed", "ui_contains_pointer", "interactive", "draw_rect",
+     ["key_pressed", "typed_text", "modifiers", "pointer_pos", "pointer_pressed", "mouse_button_pressed", "ui_contains_pointer", "interactive", "draw_rect",
       "dnd_drag_source", "dnd_drop_zone", "dropped_files", "dragged_files", "system_modifiers", "hovered_files", "start_file_drag",
       "set_cursor"]),
     ("styling", "Themes, colors, fonts and glass",
