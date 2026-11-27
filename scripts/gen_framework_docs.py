@@ -72,12 +72,12 @@ THEMES = [
      "Widgets for collections. Tables only draw the visible rows, so they stay fast with many "
      "rows. A `TreeView` keeps the selection and the opened folders, the nodes are rebuilt each "
      "frame.",
-     ["table", "TableView", "table_ui", "tree_view", "TreeView", "TreeNode", "plot", "PlotLine",
+     ["table", "TableView", "table_ui", "DataGrid", "data_grid", "tree_view", "TreeView", "TreeNode", "plot", "PlotLine",
       "PlotPoints", "PlotBars", "PlotRule"]),
     ("docking", "Docking tabs",
      "A `Dock` holds panes shown as tabs that the user can resize, rearrange by dragging and "
      "close. Create it once, add the panes, then show it with `dock_area` every frame.",
-     ["Dock", "DockPane", "DockContainer", "DockTabBar", "dock_area", "dock_menu"]),
+     ["Dock", "DockPane", "DockContainer", "DockTabBar", "dock_area", "dock_menu", "TabView", "tab_view"]),
     ("terminal", "Terminal",
      "A `Terminal` is a shell running in a pseudo terminal, drawn by `terminal`: a real terminal "
      "(colors, cursor, full screen programs, history, selection, copy and paste) to put in a "
@@ -124,7 +124,7 @@ THEMES = [
      "spacing, corners, outline, background, sheet and opacity of the whole window once, and a region "
      "(`sidebar`, `topbar`, `bottombar`, `central`, `dock`) or a call overrides them.",
      ["Context.is_dark_theme", "Context.is_light_theme", "Context.set_dark_theme",
-      "Context.set_light_theme", "Context.set_system_theme", "Context.set_style",
+      "Context.set_light_theme", "Context.set_system_theme", "Context.set_style", "Context.style_snapshot", "Context.set_style_tokens",
       "Context.reset_style", "Context.set_layout", "Context.set_accent", "Context.set_glass_style",
       "Context.set_backdrop", "Context.set_backdrop_blur", "Context.set_backdrop_image", "Context.backdrop_image_error", "Context.set_central_margin", "Context.set_font"]),
 ]

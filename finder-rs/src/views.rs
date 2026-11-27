@@ -311,6 +311,7 @@ pub fn show(app: &mut FinderApp, ui: &mut egui::Ui) {
             date_format: DATE_FORMAT.into(),
             builtin: vec![SortBy::Modified, SortBy::Size, SortBy::Kind],
             header: true,
+            grid: std::env::var_os("FINDER_GRID_TREE").is_some(),
         };
         {
             let hooks = hooks(app);

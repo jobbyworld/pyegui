@@ -63,9 +63,54 @@ def update_func(ctx):
 ```
 
 
+## `Context.style_snapshot(theme=None)`
+
+The style a theme is drawn with now, as plain data: what the widgets take their colors, strokes,
+corners and fonts from. Read it to document or to compare styles; to change it use `set_style`.
+
+**Args**
+
+- `theme` (str): "light" or "dark". Default is the theme shown now
+
+Colors are "#rrggbbaa" strings, a stroke is (width, color), a shadow is (offset_x, offset_y, blur, spread, color).
+The dict has the keys `theme`, `colors` (panel, window, text edit and code backgrounds, links, selection, ...),
+`widgets` (for `noninteractive`, `inactive`, `hovered`, `active` and `open`: `fill`, `weak_fill`, `stroke`,
+`fg_stroke` (the color of the text and icons), `rounding`, `expansion`), `window` (stroke, rounding, shadows),
+`fonts` (the name of a text style to (size, family)) and `spacing`.
+
+**Example:**
+
+```python
+s = ctx.style_snapshot("dark")
+print(s["widgets"]["hovered"]["weak_fill"], s["colors"]["text_edit_bg"])
+```
+
+
+## `Context.set_style_tokens(theme, tokens)`
+
+Changes any value of the style of a theme by its path, the same paths as the dict of `style_snapshot`
+(`colors.panel`, `widgets.hovered.weak_fill`, `widgets.active.stroke`, `window.rounding`, `fonts.Body`,
+`spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`...). The tabs of a `Dock` and of a `tab_view` read the
+`tabs.*` (classic tabs) and `pill_tabs.*` tokens. Only the given paths are changed. Colors are "#rrggbb[aa]", (r, g, b[, a]);
+a stroke is (width, color); a rounding or a size is a float; a font is (size, family) or a size.
+
+**Args**
+
+- `theme` (str): "light" or "dark"
+- `tokens` (dict): path to value
+
+Returns the list of the paths that are not known (nothing is raised for them).
+
+**Example:**
+
+```python
+ctx.set_style_tokens("dark", {"widgets.hovered.weak_fill": "#3a3a4aff", "widgets.inactive.rounding": 8})
+```
+
+
 ## `Context.reset_style()`
 
-Restores the default style of both themes.
+Restores the default style of both themes, and forgets the tokens of the tabs (`tabs.*`, `pill_tabs.*`) and of the grids (`grid.*`).
 
 
 ## `Context.set_layout(**kwargs)`

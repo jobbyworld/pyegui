@@ -64,7 +64,7 @@ fn zones_of(keys: &[String], defaults: &[f32], state: &ColumnsState, available: 
     (Zones::new(&ordered_keys, &widths, state, available, None), order)
 }
 
-fn value_of(text: &str, ty: DataType) -> Value {
+pub fn value_of(text: &str, ty: DataType) -> Value {
     match ty {
         DataType::Text | DataType::Choice => Value::Text(text.to_string()),
         DataType::Number => parse_number(text).map_or(Value::None, Value::Num),

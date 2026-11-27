@@ -1053,6 +1053,7 @@ impl FileTreeView {
 ///
 ///     header (bool): draws the header of the columns above the tree, pinned at the top while the
 ///         tree scrolls. Default is True when there are columns
+///     grid (bool): draw the tree with the generic data grid (`DataGrid`): its header, columns, keyboard and lasso. Default is False
 ///
 ///     resizable (bool): the border of a column can be dragged. Default is True
 ///
@@ -1101,6 +1102,7 @@ unsafe fn file_tree_view(view: &Bound<'_, FileTreeView>, kwargs: Option<&Bound<'
         date_format: kwarg::<String>(kwargs, "date_format")?.unwrap_or_else(|| DATE_FORMAT.into()),
         builtin,
         header: kwarg::<bool>(kwargs, "header")?.unwrap_or(true),
+        grid: kwarg::<bool>(kwargs, "grid")?.unwrap_or(false),
     };
     let ui = current_ui(&UI)?;
     // the view is free while the tree is drawn: the context menu can read and change it

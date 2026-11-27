@@ -110,6 +110,94 @@ def update_func(ctx):
 ```
 
 
+## `DataGrid`
+
+
+A grid of data: rows of cells in columns, flat or as a tree, that is not tied to files. The columns sort, filter,
+move, resize, hide and pin like the ones of the file views, the rows are selected with the mouse and the keyboard,
+a cell can be edited in place, a branch opens and closes. It keeps no data: give the rows at each frame, and apply
+what it tells (`take_edited`, `take_toggled`...). A state object: create it once, outside the update function, and
+draw it with `data_grid`.
+
+**Args**
+
+- `columns` (list[dict]): the columns, each a dict with `key` (what the state and the events name it by), `title` (default the key), `type` ("text", "number", "date" or "choice", default "text"), `width` (default 120) `editable` (a double click on a cell, or F2, edits it) and `custom` (the cells are drawn by the `cell` function of `data_grid`, with widgets)
+- `id` (str): tells apart two grids of a ui. Default is "grid"
+
+**Example:**
+
+```python
+grid = DataGrid([dict(key="name", title="Name", editable=True), dict(key="age", title="Age", type="number")])
+people = {"1": ["Alice", "32"], "2": ["Bob", "27"]}
+
+def update_func(ctx):
+    rows = [dict(id=i, cells=cells) for i, cells in people.items()]
+    data_grid(grid, rows)
+    edit = grid.take_edited()  # (row id, column key, new text)
+    if edit:
+        row, column, text = edit
+        people[row][0 if column == "name" else 1] = text
+```
+
+
+- `DataGrid.ascending` (attribute)
+- `DataGrid.collapse(id)` (method): Closes a branch of the tree
+- `DataGrid.column_order` (attribute): The keys of the columns in the order the user left them (read and write, to keep between runs)
+- `DataGrid.column_widths` (attribute): The widths the user gave to the columns, by key (read and write)
+- `DataGrid.cursor` (attribute): The id of the row the keyboard is on, or None
+- `DataGrid.expand(id)` (method): Opens a branch of the tree
+- `DataGrid.expanded` (attribute): The ids of the branches of the tree that are open (read and write)
+- `DataGrid.hidden_columns` (attribute): The keys of the columns the user hid with the eye of the settings (read and write)
+- `DataGrid.hovered` (attribute): The id of the row the pointer was over during the last frame, or None
+- `DataGrid.scroll_to(id)` (method): Scrolls to a row at the next frame (it must be shown)
+- `DataGrid.selected` (attribute): The ids of the rows selected, in the order of the clicks (read and write)
+- `DataGrid.shown` (attribute): The ids of the rows shown during the last frame, in order: the rows the filters keep, the branches open
+- `DataGrid.sort_by` (attribute): The key of the column the grid is sorted by, and the direction (read and write)
+- `DataGrid.start_edit(row, column)` (method): Starts editing a cell, as a double click does. Nothing happens if the column is not editable
+- `DataGrid.take_activated()` (method): The ids of the rows opened (double click, Enter) since the last call
+- `DataGrid.take_clicked()` (method): The id of the row clicked since the last call, or None
+- `DataGrid.take_drag_started()` (method): The ids of the rows a drag started from (the selection) since the last call, or None. Needs `drag=True`
+- `DataGrid.take_edited()` (method): (row id, column key, new text) of the cell edited since the last call, or None. Apply it to your data: the
+
+  grid shows what it is given
+
+- `DataGrid.take_toggled()` (method): (row id, opened) of the branch opened or closed since the last call, or None
+
+## `data_grid(grid, rows, **kwargs)`
+
+Draws a `DataGrid`: the rows as a list with columns, or as a tree. It takes the room left in the ui and scrolls;
+only the visible rows are drawn.
+
+**Args**
+
+- `grid` (DataGrid): the state
+- `rows` (list[dict]): the rows, each a dict with `id` (unique), `cells` (the texts, in the order of the columns, or a dict by column key), `parent` (the id of the parent row, for a tree), `readonly` and `icon` (an image uri drawn before the text of the first column, e.g. "file://..." or "bytes://...")
+
+**Keyword args**
+
+- `tree` (bool): the rows are a tree (`parent`), with a chevron and an indentation in the first column. Default is False
+- `multi_select` (bool): Cmd and Shift extend the selection. Default is True
+- `striped` (bool): every other row has a different background. Default is True
+- sortable, resizable, pinnable, reorderable, filterable (bool): what a title lets the user do. Default is True
+- `settings` (bool): the icon of the settings at the right of the header, to order, hide and pin the columns
+- `max_height` (float): the most the grid takes in height before it scrolls
+- `row_height` (float): the height of a row. Default is the one of a button
+- `indent` (float): the indentation of a level of the tree. Default is 16
+- `drag` (bool): tell the start of a drag of the selection (`take_drag_started`). Default is False
+- `row_lines` (bool): a thin horizontal line under each row. Default is True
+- `context_menu` (callable): called with the list of ids concerned when a row is right-clicked, inside a menu
+- `cell` (callable): called with the row id and the column key for each cell of a column with `custom=True`, in a ui of the size of the cell: draw a widget there (a chip, a switch, a button)
+
+An empty area under the rows clears the selection on a click, and a drag there draws a lasso that selects the
+rows it touches (Cmd or Shift keeps the selection).
+
+**Example:**
+
+```python
+data_grid(grid, rows, tree=True, settings=True, context_menu=lambda ids: button_clicked(f"{len(ids)} rows"))
+```
+
+
 ## `tree_view(tree, nodes, scroll_to=None, context_menu=None)`
 
 Shows a tree of nodes. Directories can be opened and nodes selected, with keyboard navigation.

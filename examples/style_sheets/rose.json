@@ -1,0 +1,107 @@
+{
+  "name": "rose",
+  "description": "Tons doux rose et prune, coins ronds, coudes arrondis",
+  "opacity": 1.0,
+  "light": {
+    "colors.panel": "#fbf1f4ff",
+    "colors.window": "#fbf1f4ff",
+    "colors.text_edit_bg": "#ffffffff",
+    "colors.striped_bg": "#a0305010",
+    "colors.code_bg": "#f1dfe5ff",
+    "colors.text": "#5a3446ff",
+    "colors.strong_text": "#2a1020ff",
+    "colors.weak_text": "#5a344699",
+    "colors.hyperlink": "#c2185bff",
+    "colors.selection_bg": "#f5b8cfff",
+    "colors.selection_stroke": "#8a1c4eff",
+    "colors.separator": "#e6cad5ff",
+    "widgets.noninteractive.fill": "#fbf1f4ff",
+    "widgets.inactive.fill": "#f1dfe5ff",
+    "widgets.inactive.weak_fill": "#f1dfe5ff",
+    "widgets.hovered.fill": "#ebd0dbff",
+    "widgets.hovered.weak_fill": "#ebd0dbff",
+    "widgets.active.fill": "#e2bccaff",
+    "widgets.active.weak_fill": "#e2bccaff",
+    "widgets.open.fill": "#ebd0dbff",
+    "widgets.open.weak_fill": "#ebd0dbff",
+    "widgets.noninteractive.rounding": 8,
+    "widgets.inactive.rounding": 8,
+    "widgets.hovered.rounding": 8,
+    "widgets.active.rounding": 8,
+    "widgets.open.rounding": 8,
+    "window.rounding": 8,
+    "window.menu_rounding": 8,
+    "window.stroke": [
+      1.0,
+      "#e6cad5ff"
+    ],
+    "grid.row_line": [
+      1.0,
+      "#e6cad5ff99"
+    ],
+    "grid.column_line": [
+      1.0,
+      "#e6cad5ff"
+    ],
+    "grid.guide_line": [
+      1.5,
+      "#d49ab2ff"
+    ],
+    "grid.guide_radius": 8.0,
+    "grid.chevron": "triangle",
+    "grid.chevron_color": "#5a344699",
+    "grid.chevron_hover_color": "#2a1020ff",
+    "grid.chevron_size": 4.0
+  },
+  "dark": {
+    "colors.panel": "#241520ff",
+    "colors.window": "#241520ff",
+    "colors.text_edit_bg": "#190e16ff",
+    "colors.striped_bg": "#ffffff0a",
+    "colors.code_bg": "#150b12ff",
+    "colors.text": "#e8cfdcff",
+    "colors.strong_text": "#fff0f6ff",
+    "colors.weak_text": "#e8cfdc99",
+    "colors.hyperlink": "#ff7eb3ff",
+    "colors.selection_bg": "#6a2a4aff",
+    "colors.selection_stroke": "#ffb3d1ff",
+    "colors.separator": "#43283aff",
+    "widgets.noninteractive.fill": "#241520ff",
+    "widgets.inactive.fill": "#3a2234ff",
+    "widgets.inactive.weak_fill": "#3a2234ff",
+    "widgets.hovered.fill": "#472b40ff",
+    "widgets.hovered.weak_fill": "#472b40ff",
+    "widgets.active.fill": "#55344cff",
+    "widgets.active.weak_fill": "#55344cff",
+    "widgets.open.fill": "#472b40ff",
+    "widgets.open.weak_fill": "#472b40ff",
+    "widgets.noninteractive.rounding": 8,
+    "widgets.inactive.rounding": 8,
+    "widgets.hovered.rounding": 8,
+    "widgets.active.rounding": 8,
+    "widgets.open.rounding": 8,
+    "window.rounding": 8,
+    "window.menu_rounding": 8,
+    "window.stroke": [
+      1.0,
+      "#43283aff"
+    ],
+    "grid.row_line": [
+      1.0,
+      "#43283aff99"
+    ],
+    "grid.column_line": [
+      1.0,
+      "#43283aff"
+    ],
+    "grid.guide_line": [
+      1.5,
+      "#7a4a64ff"
+    ],
+    "grid.guide_radius": 8.0,
+    "grid.chevron": "triangle",
+    "grid.chevron_color": "#e8cfdc99",
+    "grid.chevron_hover_color": "#fff0f6ff",
+    "grid.chevron_size": 4.0
+  }
+}

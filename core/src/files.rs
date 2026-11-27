@@ -1385,6 +1385,8 @@ pub struct TreeState {
     pub activatable_dirs: bool,
     /// the items at the top instead of the items of the root
     pub paths: Option<Vec<PathBuf>>,
+    /// the state of the tree when it is drawn by the generic grid (`TreeParams::grid`)
+    pub grid: crate::grid::GridState,
 }
 
 
@@ -1766,6 +1768,8 @@ pub struct TreeParams {
     pub builtin: Vec<SortBy>,
     /// the pinned header over the rows
     pub header: bool,
+    /// draw the tree with the generic data grid (`grid::show`) instead of `egui_ltreeview`
+    pub grid: bool,
 }
 
 impl Default for TreeParams {
@@ -1776,6 +1780,7 @@ impl Default for TreeParams {
             date_format: DATE_FORMAT.into(),
             builtin: vec![],
             header: true,
+            grid: false,
         }
     }
 }
@@ -1794,7 +1799,10 @@ pub fn draw_tree(
     params: &TreeParams,
     menu: Option<&dyn Fn(&mut egui::Ui, &Vec<String>)>,
 ) {
-    let TreeParams { opts, headers, date_format, builtin, header } = params;
+    if params.grid {
+        return draw_tree_grid(ui, view, hooks, params, menu);
+    }
+    let TreeParams { opts, headers, date_format, builtin, header, .. } = params;
     let opts = *opts;
     let ctx = ui.ctx().clone();
 
@@ -2111,6 +2119,7 @@ impl TreeState {
             typed_at: None,
             activatable_dirs,
             paths: None,
+            grid: crate::grid::GridState::default(),
         }
     }
 
@@ -2162,4 +2171,297 @@ pub fn list_columns(names: &[String], extras: usize) -> Vec<(Column, f32)> {
         }
     }
     columns
+}
+
+
+// -- the tree on the generic grid ----------------------------------------------------------------------------
+
+/// The nodes of a folder, from the listing, the folders open (`open`) read too
+fn grid_children(core: &mut Core, ctx: &egui::Context, dir: &Path, show_hidden: bool, open: &HashSet<String>, known: &mut HashSet<String>) -> Vec<Node> {
+    let all = core.list(Some(ctx), dir);
+    let entries: Vec<Entry> = all.iter().filter(|e| show_hidden || !e.hidden).cloned().collect();
+    entries.into_iter().map(|e| grid_node(core, ctx, e, show_hidden, open, known)).collect()
+}
+
+fn grid_node(core: &mut Core, ctx: &egui::Context, entry: Entry, show_hidden: bool, open: &HashSet<String>, known: &mut HashSet<String>) -> Node {
+    let id = to_str(&entry.path);
+    let children = if entry.is_dir {
+        known.insert(id.clone());
+        open.contains(&id).then(|| grid_children(core, ctx, &entry.path, show_hidden, open, known))
+    } else {
+        None
+    };
+    Node { entry, id, badges: vec![], children }
+}
+
+/// The nodes as flat rows of the grid, the children after their parent
+fn grid_rows(nodes: &[Node], parent: Option<&str>, ctx: &egui::Context, columns: &[(Column, f32)], date_format: &str, out: &mut Vec<crate::grid::GridRow>) {
+    for node in nodes {
+        let e = &node.entry;
+        let uri = crate::icons::entry_icon_uri(ctx, &e.path, e.is_dir, 16.0);
+        let name = if uri.is_some() { e.name.clone() } else { format!("{}  {}", emoji(e), e.name) };
+        let mut cells = vec![name];
+        for (column, _) in columns {
+            cells.push(match column {
+                Column::Extra(_) => String::new(),
+                Column::Sort(SortBy::Modified) => date(e.modified, date_format),
+                Column::Sort(SortBy::Size) if e.is_dir => "--".into(),
+                Column::Sort(SortBy::Size) => human_size(e.size),
+                Column::Sort(_) => kind(e),
+            });
+        }
+        out.push(crate::grid::GridRow {
+            id: node.id.clone(),
+            cells,
+            parent: parent.map(String::from),
+            readonly: true,
+            icon: uri,
+            expandable: e.is_dir,
+            badges: node.badges.clone(),
+            dim: e.hidden,
+        });
+        if let Some(children) = &node.children {
+            grid_rows(children, Some(&node.id), ctx, columns, date_format, out);
+        }
+    }
+}
+
+/// `draw_tree` on the generic grid: the same state, the same hooks, the same output (`selected`, `open`, `shown`,
+/// `activated`, `middle_clicked`, `drop_target`), with the columns, the keyboard and the lasso of the grid
+pub fn draw_tree_grid(
+    ui: &mut egui::Ui,
+    view: &Shared<TreeState>,
+    hooks: &Hooks<'_>,
+    params: &TreeParams,
+    menu: Option<&dyn Fn(&mut egui::Ui, &Vec<String>)>,
+) {
+    use crate::grid::{show, GridColumn, GridOptions};
+    let TreeParams { opts, headers, date_format, builtin, .. } = params;
+    let ctx = ui.ctx().clone();
+    let available = ui.available_width();
+    if !available.is_finite() {
+        return;
+    }
+    let grid_id = view.borrow().id.clone();
+    let focus_id = ui.make_persistent_id(("data_grid", grid_id.as_str())).with("focus");
+    {
+        let wanted: Vec<Column> = (0..hooks.extras.len()).map(Column::Extra).chain(builtin.iter().map(|s| Column::Sort(*s))).collect();
+        set_catalog(&mut view.borrow_mut().columns, &wanted, headers, hooks);
+    }
+    // the columns after the name, all of them (the grid hides the ones the user hid), in the order of Python then of the view
+    let all: Vec<(Column, f32)> = (0..hooks.extras.len())
+        .map(Column::Extra)
+        .chain(builtin.iter().map(|s| Column::Sort(*s)))
+        .map(|c| (c, default_width(c, hooks)))
+        .collect();
+
+    // the state of the view and of the grid, taken out while the tree is drawn
+    let mut values = std::mem::take(&mut view.borrow_mut().values);
+    values.refresh();
+    let (mut gstate, nodes_and_rules) = {
+        let mut v = view.borrow_mut();
+        let mut g = std::mem::take(&mut v.grid);
+        g.columns = std::mem::take(&mut v.columns);
+        for (path, open) in std::mem::take(&mut v.pending_open) {
+            if open {
+                g.expanded.insert(path);
+            } else {
+                g.expanded.remove(&path);
+            }
+        }
+        if let Some(selected) = v.pending_selected.take() {
+            g.cursor = selected.last().cloned();
+            g.anchor = g.cursor.clone();
+            g.selected = selected;
+        }
+        g.selected.retain(|p| Path::new(p).exists());
+        match v.focus.take() {
+            Some(true) => ctx.memory_mut(|m| m.request_focus(focus_id)),
+            Some(false) => ctx.memory_mut(|m| m.surrender_focus(focus_id)),
+            None if v.keep_focus && !ctx.text_edit_focused() && !crate::terminal::terminal_focused(&ctx) => ctx.memory_mut(|m| m.request_focus(focus_id)),
+            None => {}
+        }
+        if let Some(target) = v.scroll_to.take() {
+            g.scroll_to = Some(target);
+        }
+        let rules = Rules::new(&g.columns, hooks, v.dirs_first);
+        let core = v.core.clone();
+        let mut core = lock(&core);
+        let mut known = std::mem::take(&mut v.known_dirs);
+        let given = v.paths.is_some();
+        let show_hidden = v.show_hidden;
+        // the root is open the first time it is seen
+        if v.show_root && !known.contains(&to_str(&v.root)) {
+            g.expanded.insert(to_str(&v.root));
+        }
+        let nodes = if let Some(paths) = v.paths.clone() {
+            let mut top = vec![];
+            for path in &paths {
+                let Some(parent) = path.parent() else { continue };
+                let found = core.list(Some(&ctx), parent).iter().find(|e| same_path(&e.path, path)).cloned();
+                if let Some(e) = found.filter(|e| show_hidden || !e.hidden) {
+                    top.push(grid_node(&mut core, &ctx, e, show_hidden, &g.expanded, &mut known));
+                }
+            }
+            top
+        } else if v.show_root {
+            match entry(&v.root) {
+                Some(root) => vec![grid_node(&mut core, &ctx, root, show_hidden, &g.expanded, &mut known)],
+                None => vec![],
+            }
+        } else {
+            grid_children(&mut core, &ctx, &v.root, show_hidden, &g.expanded, &mut known)
+        };
+        v.known_dirs = known;
+        (g, (nodes, rules, given, v.multi_select, v.activatable_dirs))
+    };
+    let (mut nodes, rules, given, multi_select, activatable_dirs) = nodes_and_rules;
+    let all_entries = if all.iter().any(|(c, _)| c.data_type(hooks) == DataType::Choice) {
+        let mut all = vec![];
+        collect_entries(&nodes, &mut all);
+        all
+    } else {
+        vec![]
+    };
+    nodes = arrange_nodes(nodes, &rules, hooks, &mut values, !given);
+    fill_badges(&mut nodes, hooks);
+    {
+        let mut v = view.borrow_mut();
+        v.listing = Arc::new(all_entries);
+        v.values = std::mem::take(&mut values);
+    }
+
+    // typing the start of a name selects the first row that begins with it
+    let focused = ctx.memory(|m| m.has_focus(focus_id));
+    if focused {
+        let keys = read_keys(ui);
+        if !keys.text.trim().is_empty() {
+            let mut v = view.borrow_mut();
+            if v.typed_at.is_none_or(|t| t.elapsed() > Duration::from_secs(1)) {
+                v.typed.clear();
+            }
+            let typed = format!("{}{}", v.typed, keys.text.to_lowercase());
+            v.typed = typed.clone();
+            v.typed_at = Some(Instant::now());
+            let found = v.shown.iter().find(|p| Path::new(p).file_name().is_some_and(|n| n.to_string_lossy().to_lowercase().starts_with(&typed))).cloned();
+            if let Some(path) = found {
+                gstate.selected = vec![path.clone()];
+                gstate.cursor = Some(path.clone());
+                gstate.anchor = Some(path.clone());
+                gstate.scroll_to = Some(path);
+            }
+        }
+    }
+
+    let mut rows = vec![];
+    grid_rows(&nodes, None, &ctx, &all, date_format, &mut rows);
+    let mut dirs: HashSet<String> = HashSet::new();
+    fn collect_dirs(nodes: &[Node], into: &mut HashSet<String>) {
+        for n in nodes {
+            if n.entry.is_dir {
+                into.insert(n.id.clone());
+            }
+            if let Some(c) = &n.children {
+                collect_dirs(c, into);
+            }
+        }
+    }
+    collect_dirs(&nodes, &mut dirs);
+
+    // the name takes what the other columns leave, unless the user chose its width
+    let others: f32 = all.iter().filter(|(c, _)| !gstate.columns.hidden.contains(&c.key(hooks))).map(|(_, w)| *w).sum();
+    let mut columns: Vec<GridColumn> = vec![{
+        let mut c = GridColumn::new("name", &headers[0]);
+        c.width = (available - others).max(120.0);
+        c
+    }];
+    for (column, width) in &all {
+        let mut c = GridColumn::new(&column.key(hooks), &match column {
+            Column::Sort(sort) => headers[*sort as usize].clone(),
+            Column::Extra(k) => hooks.extras[*k].title.clone(),
+        });
+        c.ty = column.data_type(hooks);
+        c.width = *width;
+        c.custom = matches!(column, Column::Extra(_));
+        c.icon = match column {
+            Column::Extra(k) => hooks.extras[*k].icon.clone(),
+            Column::Sort(_) => None,
+        };
+        columns.push(c);
+    }
+    let options = GridOptions {
+        header: *opts,
+        multi_select,
+        striped: false,
+        tree: true,
+        sortable: true,
+        id: grid_id,
+        drag: opts.drag_out,
+        tree_column: Some("name".into()),
+        keep_order: true,
+        ..Default::default()
+    };
+    let out = {
+        let mut cell = |ui: &mut egui::Ui, row: &crate::grid::GridRow, column: &GridColumn, rect: Rect| -> bool {
+            let Some(extra) = hooks.extras.iter().find(|e| e.title == column.key) else { return false };
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(4.0, 0.0))).layout(egui::Layout::left_to_right(Align::Center)));
+            child.shrink_clip_rect(rect);
+            (extra.cell)(&mut child, Path::new(&row.id));
+            true
+        };
+        let mut context = |ui: &mut egui::Ui, ids: &[String]| {
+            if let Some(menu_fun) = menu {
+                menu_fun(ui, &ids.to_vec());
+            }
+        };
+        show(ui, &mut gstate, &columns, &rows, &options, &mut cell, &mut context)
+    };
+
+    // files from the Finder or from the window over the tree: the folder under the pointer takes them
+    let mut drop_target = None;
+    if ctx.input(|i| !i.raw.hovered_files.is_empty() || !i.raw.dropped_files.is_empty()) {
+        ctx.request_repaint();
+        if let Some(p) = native_pointer().filter(|p| ui.clip_rect().contains(*p)) {
+            if let Some((id, rect)) = out.row_rects.iter().find(|(_, r)| r.contains(p)).filter(|(id, _)| dirs.contains(id)) {
+                ui.painter().rect_filled(*rect, 4.0, ui.visuals().selection.bg_fill.gamma_multiply(0.25));
+                ui.painter().rect_stroke(rect.shrink(1.0), 4.0, Stroke::new(2.0, ui.visuals().selection.bg_fill), egui::StrokeKind::Inside);
+                drop_target = Some(id.clone());
+            }
+        }
+    }
+    let mut middle = None;
+    if ctx.input(|i| i.pointer.button_clicked(egui::PointerButton::Middle)) {
+        if let Some(p) = ctx.input(|i| i.pointer.interact_pos()) {
+            middle = out.row_rects.iter().find(|(_, r)| r.contains(p) && ui.clip_rect().contains(p)).map(|(id, _)| id.clone());
+        }
+    }
+    // a double click on a folder opens or closes it, unless the folders are activatable
+    let mut activated = out.activated.clone();
+    if !activatable_dirs && activated.len() == 1 && dirs.contains(&activated[0]) {
+        let id = activated.remove(0);
+        if !gstate.expanded.remove(&id) {
+            gstate.expanded.insert(id);
+        }
+    }
+    if let Some(ids) = &out.drag_started {
+        let paths: Vec<PathBuf> = ids.iter().map(PathBuf::from).collect();
+        if start_drag(&paths) {
+            ctx.stop_dragging();
+        }
+    }
+
+    let mut v = view.borrow_mut();
+    v.drop_target = drop_target;
+    v.middle_clicked = middle;
+    v.activated = activated;
+    v.shown = out.shown.clone();
+    // a change asked for by the menu wins over the state of this frame
+    if let Some(selected) = v.pending_selected.clone() {
+        gstate.cursor = selected.last().cloned();
+        gstate.selected = selected;
+    }
+    v.selected = gstate.selected.clone();
+    v.open = v.known_dirs.iter().filter(|d| gstate.expanded.contains(*d)).cloned().collect();
+    v.columns = std::mem::take(&mut gstate.columns);
+    v.grid = gstate;
 }

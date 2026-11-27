@@ -111,11 +111,12 @@ Index of all files: [docs/framework/README.md](docs/framework/README.md).
 
 ## Examples (`examples/`)
 
-Two scripts, nothing else to import (`finder.py` holds its own tags database and PDF reader):
+Three scripts, nothing else to import (`finder.py` holds its own tags database and PDF reader):
 
 | File | Shows |
 |---|---|
 | `widget_gallery.py` | most widgets, one after the other |
+| `style_doc.py` | the style of every widget (background, border, text, rounding, font) in each state and in both themes, the tokens of the style with the widgets that use them, an editor of the style sheet (`Context.style_snapshot`, `Context.set_style_tokens`), a global transparency, saved to JSON |
 | `finder.py` | a mini Finder, the reference for a real desktop layout: sidebar, toolbar, list/icon/tree views, preview, a right-hand **Dock** with an **Actions** pane, tags (`Tags`, `tags_edit`, `TagTreeView`) kept in a SQLite file (`TagStore`, shared with `finder-rs`), folders watched by the `FileWatcher`, a PDF viewer (`PdfView`, `pdf_thumbnail`, `pdf_info`), terminals in the dock, layout rules and glass, the window, theme, view, folder and dock layout kept between runs |
 
 The folders `examples/icons` (the SVG icons of the bars) and `examples/app_icon` (the icon of the app) are used by
@@ -134,7 +135,7 @@ The repository is a Cargo workspace of three crates:
 - `pyegui-core` (`core/`): what does not depend on Python, shared with the Rust applications: `watcher`
   (`Core`), `transfer` (`Transfer`, `drop_operation_for`), `pdf`, `pdf_nav`, `pdf_text`, `pdf_view`
   (`PdfDocument`, `PdfView`, `pdf_view`, `pdf_thumbnail`), `terminal` (`Terminal`, `show`), `tags` (`Tags`, `tags_edit`, the chips), `dock_draw` (outlines of tabs and panes, corners smoothed over one pixel, `snap`), `titlebar` (window buttons, edge resize), `markdown`
-  (`show`, `code_view`), `gherkin`, `style`, `window` (native backdrops, blur, corner radius), `icons`, `path` (breadcrumb, combo), `date_range` (`DateRange`, `date_range_picker`), `date_input` (`parse_date`, `parse_range`: dates typed in French, with `rosetta-date`), `human_date` (`human_day`, `human_datetime`, `human_ago`, `human_full_date`: dates said in French), `property_set` (`PropertySetState`, `property_set`, `Property`, `Change`), `columns`, `meta` (meta properties: types, configuration of the lists, the stored form of a value), `table` (the table with sort, filters and pinned columns, drawn by `table(view=...)` and by the Base SQL pane of finder-rs) and `files` (the file views: `FolderView`, `TreeState`, `draw_folder`, `draw_tree`, `Hooks` with Rust closures for badges and extra columns). A module of `src/` that moved to the core keeps only
+  (`show`, `code_view`), `gherkin`, `style`, `window` (native backdrops, blur, corner radius), `icons`, `path` (breadcrumb, combo), `date_range` (`DateRange`, `date_range_picker`), `date_input` (`parse_date`, `parse_range`: dates typed in French, with `rosetta-date`), `human_date` (`human_day`, `human_datetime`, `human_ago`, `human_full_date`: dates said in French), `property_set` (`PropertySetState`, `property_set`, `Property`, `Change`), `columns`, `meta` (meta properties: types, configuration of the lists, the stored form of a value), `grid` (`GridState`, `show`, `arrange`: the data grid that is not tied to files, flat or tree, columns that move, hide and pin, cells edited in place; `DataGrid` / `data_grid` in Python), `table` (the table with sort, filters and pinned columns, drawn by `table(view=...)` and by the Base SQL pane of finder-rs) and `files` (the file views: `FolderView`, `TreeState`, `draw_folder`, `draw_tree`, `Hooks` with Rust closures for badges and extra columns). A module of `src/` that moved to the core keeps only
   its wrappers (see `src/watcher.rs`, `src/terminal.rs`, `src/pdf_view.rs`); options read from kwargs become
   a struct of the core (`TerminalOptions`, `MarkdownOptions`, `PdfViewOptions`...). Still in `src/` because
   they hold Python callbacks: `dock`, `tags`, `table`, `tree`, `widgets`, `containers`; `files` and `columns` keep only the Python classes, the kwargs and the conversion of Python functions to closures.

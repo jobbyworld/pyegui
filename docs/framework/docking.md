@@ -316,3 +316,71 @@ def update_func(ctx):
     menu_button("Panes", lambda: dock_menu(dock, panes, layout=default_layout))
     dock_area(dock)
 ```
+
+
+## `TabView`
+
+
+The tabs of a `tab_view`: their titles and the active one. A state object: create it once, outside the update
+function; `tab_view(tabs, content)` draws it.
+
+**Args**
+
+- `titles` (list[str]): the titles of the tabs. Default is none
+- `active` (int): the index of the active tab. Default is 0
+
+**Example:**
+
+```python
+tabs = TabView(["Files", "Editor"])
+
+def update_func(ctx):
+    tab_view(tabs, lambda i: label(f"content of {tabs.titles[i]}"), closable=True, add_button=True)
+    if tabs.take_added():
+        tabs.add(f"Tab {len(tabs.titles) + 1}")
+```
+
+
+- `TabView.active` (attribute): The index of the active tab (read and write)
+- `TabView.active_title` (attribute): The title of the active tab, or None when there is no tab
+- `TabView.add(title)` (method): Adds a tab at the end and makes it the active one
+- `TabView.remove(title)` (method): Removes the first tab with this title. The active tab stays the same tab, or the one before it if it was removed
+- `TabView.set_active_title(title)` (method): Makes the tab with this title the active one
+- `TabView.take_added()` (method): True once after the "+" button was clicked. Add the tab with `add`
+- `TabView.take_closed()` (method): The title of the tab closed with its cross (or the middle button) since the last call, or None. The tab is
+
+  already removed
+
+- `TabView.titles` (attribute): The titles of the tabs, in order
+
+## `tab_view(tabs, update_fun, **kwargs)`
+
+A bar of tabs with, under it, the pane with the content of the active tab.
+
+The look is the one of the tabs of a `Dock`: both read the same style tokens (`tabs.*` for the classic tabs,
+`pill_tabs.*` for the pill ones, see `Context.set_style_tokens`), and the options of the call win over them.
+
+**Args**
+
+- `tabs` (TabView): the titles and the active tab
+- `update_fun` (callable): draws the content of the active tab; it is given the index of the tab
+
+**Keyword args**
+
+- `tab_style` (str): "classic" tabs joined to their pane, or "pill" tabs rounded on every corner. Default is classic
+- `closable` (bool): a cross on every tab, and the middle button closes it (`TabView.take_closed`)
+- `add_button` (bool): a "+" after the last tab (`TabView.take_added`)
+- `margin` (float): space between the pane and its content. Default is 8
+- tab_bar_height (float), tab_spacing (float), tab_title_spacing (float): sizes of the bar
+- tab_bar_color, active_tab_fill, inactive_tab_fill, hovered_tab_fill (color): backgrounds
+- active_tab_text_color, inactive_tab_text_color (color): colors of the titles
+- active_tab_stroke, inactive_tab_stroke (tuple[float, color]): outlines
+
+**Example:**
+
+```python
+tabs = TabView(["A", "B"])
+
+def update_func(ctx):
+    tab_view(tabs, lambda i: label("content " + tabs.titles[i]), tab_style="pill", closable=True)
+```

@@ -1,0 +1,107 @@
+{
+  "name": "contraste",
+  "description": "Fort contraste, traits noirs épais, coins droits, symbole plus/moins",
+  "opacity": 1.0,
+  "light": {
+    "colors.panel": "#ffffffff",
+    "colors.window": "#ffffffff",
+    "colors.text_edit_bg": "#ffffffff",
+    "colors.striped_bg": "#00000012",
+    "colors.code_bg": "#f0f0f0ff",
+    "colors.text": "#000000ff",
+    "colors.strong_text": "#000000ff",
+    "colors.weak_text": "#000000cc",
+    "colors.hyperlink": "#0033ccff",
+    "colors.selection_bg": "#ffd400ff",
+    "colors.selection_stroke": "#000000ff",
+    "colors.separator": "#000000ff",
+    "widgets.noninteractive.fill": "#ffffffff",
+    "widgets.inactive.fill": "#f0f0f0ff",
+    "widgets.inactive.weak_fill": "#f0f0f0ff",
+    "widgets.hovered.fill": "#ffe680ff",
+    "widgets.hovered.weak_fill": "#ffe680ff",
+    "widgets.active.fill": "#ffd400ff",
+    "widgets.active.weak_fill": "#ffd400ff",
+    "widgets.open.fill": "#ffe680ff",
+    "widgets.open.weak_fill": "#ffe680ff",
+    "widgets.noninteractive.rounding": 0,
+    "widgets.inactive.rounding": 0,
+    "widgets.hovered.rounding": 0,
+    "widgets.active.rounding": 0,
+    "widgets.open.rounding": 0,
+    "window.rounding": 0,
+    "window.menu_rounding": 0,
+    "window.stroke": [
+      1.5,
+      "#000000ff"
+    ],
+    "grid.row_line": [
+      1.0,
+      "#000000ff99"
+    ],
+    "grid.column_line": [
+      1.0,
+      "#000000ff"
+    ],
+    "grid.guide_line": [
+      1.5,
+      "#000000ff"
+    ],
+    "grid.guide_radius": 0.0,
+    "grid.chevron": "plus",
+    "grid.chevron_color": "#000000cc",
+    "grid.chevron_hover_color": "#000000ff",
+    "grid.chevron_size": 5
+  },
+  "dark": {
+    "colors.panel": "#000000ff",
+    "colors.window": "#000000ff",
+    "colors.text_edit_bg": "#000000ff",
+    "colors.striped_bg": "#ffffff14",
+    "colors.code_bg": "#101010ff",
+    "colors.text": "#ffffffff",
+    "colors.strong_text": "#ffffffff",
+    "colors.weak_text": "#ffffffcc",
+    "colors.hyperlink": "#66ccffff",
+    "colors.selection_bg": "#ffd400ff",
+    "colors.selection_stroke": "#ffffffff",
+    "colors.separator": "#ffffffff",
+    "widgets.noninteractive.fill": "#000000ff",
+    "widgets.inactive.fill": "#1a1a1aff",
+    "widgets.inactive.weak_fill": "#1a1a1aff",
+    "widgets.hovered.fill": "#333300ff",
+    "widgets.hovered.weak_fill": "#333300ff",
+    "widgets.active.fill": "#665500ff",
+    "widgets.active.weak_fill": "#665500ff",
+    "widgets.open.fill": "#333300ff",
+    "widgets.open.weak_fill": "#333300ff",
+    "widgets.noninteractive.rounding": 0,
+    "widgets.inactive.rounding": 0,
+    "widgets.hovered.rounding": 0,
+    "widgets.active.rounding": 0,
+    "widgets.open.rounding": 0,
+    "window.rounding": 0,
+    "window.menu_rounding": 0,
+    "window.stroke": [
+      1.5,
+      "#ffffffff"
+    ],
+    "grid.row_line": [
+      1.0,
+      "#ffffffff99"
+    ],
+    "grid.column_line": [
+      1.0,
+      "#ffffffff"
+    ],
+    "grid.guide_line": [
+      1.5,
+      "#ffffffff"
+    ],
+    "grid.guide_radius": 0.0,
+    "grid.chevron": "plus",
+    "grid.chevron_color": "#ffffffcc",
+    "grid.chevron_hover_color": "#ffffffff",
+    "grid.chevron_size": 5
+  }
+}
