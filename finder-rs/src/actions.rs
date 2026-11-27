@@ -187,17 +187,29 @@ pub fn run_shortcuts(app: &mut FinderApp, ctx: &egui::Context) {
     }
 }
 
+/// The path as the Explorer reads it: backslashes, without the `\?\` prefix (with slashes it opens the Documents)
+#[cfg(target_os = "windows")]
+pub fn windows_path(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('/', "\\");
+    text.strip_prefix("\\\\?\\").map(str::to_owned).unwrap_or(text)
+}
+
 pub fn reveal(path: &Path) {
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("explorer").arg(format!("/select,{}", path.display())).spawn();
+    {
+        // the argument is written as is, quoted: Rust would quote the whole `/select,path` and the Explorer
+        // would not understand it
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("explorer").raw_arg(format!("/select,\"{}\"", windows_path(path))).spawn();
+    }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = std::process::Command::new("xdg-open").arg(path.parent().unwrap_or(path)).spawn();
 }
 
 /// Puts a file in the trash of the system (macOS: through the Finder, so that Put Back works).
-/// Elsewhere the file is removed for good: the caller asks first.
+/// Elsewhere: the recycle bin or the trash of the desktop (`trash` crate).
 pub fn trash(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -210,8 +222,7 @@ pub fn trash(path: &Path) -> Result<(), String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let meta = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
-        if meta.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) }.map_err(|e| e.to_string())
+        trash::delete(path).map_err(|e| e.to_string())
     }
 }
 

@@ -1152,20 +1152,55 @@ impl FinderApp {
         if paths.is_empty() {
             return;
         }
-        if cfg!(target_os = "macos") {
-            self.delete(paths);
-        } else {
+        // the trash keeps the files: no question
+        self.delete(paths);
+    }
+
+    /// Shift+Delete: asks, then removes for good (no trash)
+    pub fn ask_delete_for_good(&mut self) {
+        let paths = self.selected_paths();
+        if !paths.is_empty() {
             self.confirm_delete = Some(paths);
         }
     }
 
+    /// The item that gets the selection once `paths` are gone: the one after the last of them in the list, else
+    /// the one before the first
+    fn select_next_after(&mut self, paths: &[PathBuf]) {
+        let gone: HashSet<&PathBuf> = paths.iter().collect();
+        let last = self.items.iter().rposition(|e| gone.contains(&e.path));
+        let first = self.items.iter().position(|e| gone.contains(&e.path));
+        let next = last
+            .and_then(|i| self.items[i + 1..].iter().find(|e| !gone.contains(&e.path)))
+            .or_else(|| first.and_then(|i| self.items[..i].iter().rev().find(|e| !gone.contains(&e.path))))
+            .map(|e| e.path.clone());
+        self.selected.clear();
+        if let Some(next) = next {
+            self.selected.insert(next);
+        }
+    }
+
+    fn delete_for_good(&mut self, paths: Vec<PathBuf>) {
+        self.select_next_after(&paths);
+        for path in paths {
+            let removed = match std::fs::symlink_metadata(&path) {
+                Ok(m) if m.is_dir() => std::fs::remove_dir_all(&path),
+                Ok(_) => std::fs::remove_file(&path),
+                Err(e) => Err(e),
+            };
+            if let Err(e) = removed {
+                self.notice = Some(format!("{}: {e}", path.display()));
+            }
+        }
+    }
+
     fn delete(&mut self, paths: Vec<PathBuf>) {
+        self.select_next_after(&paths);
         for path in paths {
             if let Err(e) = actions::trash(&path) {
                 self.notice = Some(format!("{}: {e}", path.display()));
             }
         }
-        self.selected.clear();
     }
 
     /// Copy or cut of the selection: in the clipboard of the system (the files can be pasted in the
@@ -1375,7 +1410,14 @@ impl FinderApp {
                     if ui.button("Annuler").clicked() {
                         keep = false;
                     }
-                    if ui.button(RichText::new("Supprimer").color(Color32::from_rgb(220, 60, 60))).clicked() {
+                    let delete = ui.button(RichText::new("Supprimer").color(Color32::from_rgb(220, 60, 60)));
+                    // the button that confirms has the focus when the window opens: Enter validates, Tab goes to Annuler
+                    let id = egui::Id::new("delete-focus");
+                    if !ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false)) {
+                        delete.request_focus();
+                        ctx.data_mut(|d| d.insert_temp(id, true));
+                    }
+                    if delete.clicked() || ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
                         yes = true;
                     }
                 });
@@ -1392,7 +1434,7 @@ impl FinderApp {
         if let Some(paths) = self.confirm_delete.take() {
             let mut keep = true;
             let mut yes = false;
-            crate::glyphs::modal(ctx, "delete").show(ctx, |ui| {
+            let modal = crate::glyphs::modal(ctx, "delete").show(ctx, |ui| {
                 ui.set_width(340.0);
                 if glyphs::modal_title(ui, "Supprimer définitivement ?") {
                     keep = false;
@@ -1402,13 +1444,26 @@ impl FinderApp {
                     if ui.button("Annuler").clicked() {
                         keep = false;
                     }
-                    if ui.button(RichText::new("Supprimer").color(Color32::from_rgb(220, 60, 60))).clicked() {
+                    let delete = ui.button(RichText::new("Supprimer").color(Color32::from_rgb(220, 60, 60)));
+                    // the button that confirms has the focus when the window opens: Enter validates, Tab goes to Annuler
+                    let id = egui::Id::new("delete-focus");
+                    if !ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false)) {
+                        delete.request_focus();
+                        ctx.data_mut(|d| d.insert_temp(id, true));
+                    }
+                    if delete.clicked() || ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
                         yes = true;
                     }
                 });
             });
+            if modal.should_close() || ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+                keep = false;
+            }
+            if yes || !keep {
+                ctx.data_mut(|d| d.insert_temp(egui::Id::new("delete-focus"), false));
+            }
             if yes {
-                self.delete(paths);
+                self.delete_for_good(paths);
             } else if keep {
                 self.confirm_delete = Some(paths);
             }
@@ -1767,6 +1822,25 @@ impl FinderApp {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace) | i.consume_key(Modifiers::NONE, Key::Escape)) {
                 self.viewer = None;
             }
+            return;
+        }
+        // Delete puts the selection in the trash
+        // on Windows egui-winit turns Shift+Delete into a Cut event (the old cut key of the system) and the key
+        // itself is not seen: a cut with Shift and no Ctrl is Shift+Delete
+        let shift_delete = ctx.input_mut(|i| {
+            let key = i.consume_key(Modifiers::SHIFT, Key::Delete);
+            let cut = i.modifiers.shift && !i.modifiers.command && i.events.iter().any(|e| matches!(e, egui::Event::Cut));
+            if cut {
+                i.events.retain(|e| !matches!(e, egui::Event::Cut));
+            }
+            key || cut
+        });
+        if !self.selected.is_empty() && shift_delete {
+            self.ask_delete_for_good();
+            return;
+        }
+        if !self.selected.is_empty() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete)) {
+            self.ask_delete();
             return;
         }
         // the arrows, Enter and the letters are read by the views
@@ -3301,7 +3375,7 @@ fn open_with_system(path: &Path) {
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(path).spawn();
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("explorer").arg(path).spawn();
+    let _ = std::process::Command::new("explorer").arg(crate::actions::windows_path(path)).spawn();
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = std::process::Command::new("xdg-open").arg(path).spawn();
 }
