@@ -701,7 +701,9 @@ pub fn show(
     // the separators of the columns, in line with the ones of the header
     {
         let line = look.column_line;
-        let rows_rect = output.inner_rect;
+        // the lines stop at the last row: under it the grid is empty, and the room it was given may be taller
+        let rows_end = output.inner_rect.top() - output.state.clamped_offset().y + lines.len() as f32 * row_height;
+        let rows_rect = Rect::from_min_max(output.inner_rect.min, pos2(output.inner_rect.right(), rows_end.min(output.inner_rect.bottom()).max(output.inner_rect.top())));
         let painter = ui.painter().with_clip_rect(rows_rect);
         let count = zones.placed.len();
         for (n, p) in zones.placed.iter().enumerate() {
