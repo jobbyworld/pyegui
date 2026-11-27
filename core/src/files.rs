@@ -532,6 +532,8 @@ pub struct FolderView {
     pub anchor: Option<PathBuf>,
     pub cursor: Option<PathBuf>,
     pub activated: Vec<PathBuf>,
+    /// the item that got a click of the middle button during the last frame (a new tab, in the apps)
+    pub middle_clicked: Option<PathBuf>,
     /// the folder under the pointer while files are dragged over the view or dropped on it
     pub drop_target: Option<PathBuf>,
     /// the items shown at the last frame, in their order
@@ -579,6 +581,7 @@ impl FolderView {
             anchor: None,
             cursor: None,
             activated: vec![],
+            middle_clicked: None,
             drop_target: None,
             shown: vec![],
             scroll_to: None,
@@ -1086,6 +1089,7 @@ pub fn draw_folder_in(
     let id = ui.make_persistent_id(&view.id);
     let ctx = ui.ctx().clone();
     view.activated.clear();
+    view.middle_clicked = None;
     view.drop_target = None;
     view.folder_changed = false;
     let mut menus = Menus::new();
@@ -1206,6 +1210,9 @@ pub fn draw_folder_in(
                     if start_drag(&paths) {
                         ui.ctx().stop_dragging(); // the mouse is the drag session's now
                     }
+                }
+                if response.middle_clicked() {
+                    view.middle_clicked = Some(e.path.clone());
                 }
                 if response.clicked() || response.secondary_clicked() {
                     ui.memory_mut(|m| m.request_focus(id));
@@ -1365,6 +1372,8 @@ pub struct TreeState {
     pub shown: Vec<String>,
     pub known_dirs: HashSet<String>,
     pub activated: Vec<String>,
+    /// the row that got a click of the middle button during the last frame
+    pub middle_clicked: Option<String>,
     /// the folder under the pointer while files are dragged over the tree or dropped on it
     pub drop_target: Option<String>,
     pub focus: Option<bool>,
@@ -2013,6 +2022,15 @@ pub fn draw_tree(
     }
 
     let mut v = view.borrow_mut();
+    v.middle_clicked = None;
+    if ctx.input(|i| i.pointer.button_clicked(egui::PointerButton::Middle)) {
+        if let Some(p) = ctx.input(|i| i.pointer.interact_pos()).filter(|p| tree_response.rect.contains(*p) && ui.clip_rect().contains(*p)) {
+            let step = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+            if p.y >= tree_top.y {
+                v.middle_clicked = tree_node_at(&nodes, ((p.y - tree_top.y) / step) as usize, &mut 0).map(|n| n.id.clone());
+            }
+        }
+    }
     v.activated.clear();
     for action in actions {
         match action {
@@ -2084,6 +2102,7 @@ impl TreeState {
             shown: vec![],
             known_dirs: HashSet::new(),
             activated: vec![],
+            middle_clicked: None,
             drop_target: None,
             focus: None,
             keep_focus: false,

@@ -128,6 +128,10 @@ def update_func(ctx):
 
   own that has a value function. A click on a title of the header changes it
 
+- `FileListView.take_middle_clicked()` (method): The path of the item that got a click of the middle button since the last call, or None. The
+
+  call forgets it. Apps open it in a new tab, like a browser does with a link
+
 - `FileListView.up()` (method): Enters the parent folder and selects the folder we come from. Cmd+Up does the same
 
 ## `FileIconView`
@@ -252,6 +256,10 @@ def update_func(ctx):
 
   own that has a value function. A click on a title of the header changes it
 
+- `FileIconView.take_middle_clicked()` (method): The path of the item that got a click of the middle button since the last call, or None. The
+
+  call forgets it. Apps open it in a new tab, like a browser does with a link
+
 - `FileIconView.up()` (method): Enters the parent folder and selects the folder we come from. Cmd+Up does the same
 
 ## `FileTreeView`
@@ -363,6 +371,10 @@ def update_func(ctx):
 - `FileTreeView.sort_by` (attribute): The order of the items: "name", "modified", "size", "kind", or the title of a column of your
 
   own that has a value function. A click on a title of the header changes it
+
+- `FileTreeView.take_middle_clicked()` (method): The path of the row that got a click of the middle button since the last call, or None. The call
+
+  forgets it. Apps open it in a new tab, like a browser does with a link
 
 
 ## `file_list_view(view, **kwargs)`

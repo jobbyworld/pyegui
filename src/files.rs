@@ -312,6 +312,12 @@ macro_rules! folder_view_methods {
                 self.view.columns.icon_clicked.take()
             }
 
+            /// The path of the item that got a click of the middle button since the last call, or None. The
+            /// call forgets it. Apps open it in a new tab, like a browser does with a link
+            fn take_middle_clicked(&mut self) -> Option<String> {
+                self.view.middle_clicked.take().map(|p| p.to_string_lossy().into_owned())
+            }
+
             /// The columns pinned at the left (by column key): they stay in place while the others scroll
             /// horizontally. The user pins a column with a right click on its title
             #[getter]
@@ -897,6 +903,12 @@ impl FileTreeView {
     /// the "icon" of extra_columns), or None. The call forgets it
     fn icon_clicked(&mut self) -> Option<String> {
         self.v().columns.icon_clicked.take()
+    }
+
+    /// The path of the row that got a click of the middle button since the last call, or None. The call
+    /// forgets it. Apps open it in a new tab, like a browser does with a link
+    fn take_middle_clicked(&mut self) -> Option<String> {
+        self.v().middle_clicked.take()
     }
 
     /// The columns pinned at the left (by column key): they stay in place while the others scroll
