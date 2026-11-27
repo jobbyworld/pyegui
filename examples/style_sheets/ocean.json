@@ -115,5 +115,49 @@
     "menu.hovered.weak_fill": "#2f8fd8c0",
     "menu.inactive.rounding": 8,
     "sidebar.inactive.weak_fill": "#2f8fd833"
+  },
+  "app": {
+    "light": {
+      "edge": [
+        1,
+        "#2f8fd855"
+      ],
+      "line": [
+        1,
+        "#2f8fd844"
+      ],
+      "hover_fill": "#2f8fd826",
+      "select_fill": "#2f8fd855",
+      "item_rounding": 10,
+      "card_rounding": 14,
+      "dialog_rounding": 18,
+      "dock_rounding": 16,
+      "pane_rounding": 14,
+      "pane_margin": 10,
+      "unified_gap": 10,
+      "danger": "#e5484d",
+      "dialog_fill": "#f2f8fff5"
+    },
+    "dark": {
+      "edge": [
+        1,
+        "#2f8fd855"
+      ],
+      "line": [
+        1,
+        "#2f8fd844"
+      ],
+      "hover_fill": "#2f8fd826",
+      "select_fill": "#2f8fd855",
+      "item_rounding": 10,
+      "card_rounding": 14,
+      "dialog_rounding": 18,
+      "dock_rounding": 16,
+      "pane_rounding": 14,
+      "pane_margin": 10,
+      "unified_gap": 10,
+      "danger": "#e5484d",
+      "dialog_fill": "#0b2540f5"
+    }
   }
 }

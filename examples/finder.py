@@ -1913,10 +1913,6 @@ ICONS_DIR = (
     Path(__file__).resolve().parent / "icons"
 )  # white SVG icons, tinted to the theme
 
-EDGE = (
-    1,
-    (127, 127, 127, 60),
-)  # the one outline of every box: the same width and color
 GAP = 4  # between two boxes
 H = GAP // 2  # each box gives half of the gap on the sides that face another box
 TREE, LIST, ICONS = 0, 1, 2  # the order of the segmented control of the toolbar
@@ -2257,16 +2253,11 @@ palette_index = Int(0)  # the highlighted action, moved by the keyboard or the m
 file_clipboard = {"paths": [], "cut": False}
 theme = Int(LIGHT)
 glass = Int(FULL)
-GLASS_OPACITY = 1.2  # multiplies the opacity of the glass
-GLASS_LEVELS = {"central": 0.3, "dock": 0.3}  # the files and the docks are clear glass; the rest is the style's
-BACKDROP_BLUR = 32  # the blur of what is behind the window (macOS), in points
 # the layout, like the window of the Claude app: the sidebar runs along the whole height of the
 # window, without gap nor corners; it and the body are cut in three bands of the same heights (top,
 # content, bottom) whose lines continue from one to the other
-UNIFIED_GAP = 8  # the gap of the unified layout, around the dock and between its panes
 TOP_H, BOTTOM_H = 40, 40  # the heights of the top and bottom bands, in the sidebar and the body
 CLEAR = (0, 0, 0, 0)
-LINE = (1, (127, 127, 127, 70))  # the lines between the bands and between the sidebar and the body
 # the boxes layout: the margins outside the sidebar (left, top, right, bottom) and its corners
 accent_name = Str("Blue")
 pill_tabs = Bool(False)
@@ -2462,7 +2453,7 @@ TERMINAL_DARK = dict(
 
 # the terminals of the dock at the bottom: states, created once, outside the update function.
 # They start in the folder the Finder opens
-shell = Terminal(cwd=str(start), font=nerd_font(), light=TERMINAL_LIGHT, dark=TERMINAL_DARK)
+shell = Terminal(cwd=str(start), font=nerd_font(), light=TERMINAL_LIGHT, dark=TERMINAL_DARK)  # apply_style gives them the colors of the style sheet
 python = Terminal(
     cwd=str(start), shell=newest_python(), args=["-q"], font=nerd_font(), light=TERMINAL_LIGHT, dark=TERMINAL_DARK
 )
@@ -2746,6 +2737,56 @@ def style_sheet(name):
     return sheet_cache[name]
 
 
+# the look of the app that is not a token of the framework: the strokes of the boxes, the roundings, the fills under the
+# mouse, the glass, the terminals. A style sheet gives them under "app", for "light" and for "dark"; what it does not give
+# stays as here. A color is "#rrggbb[aa]" or (r, g, b, a), a stroke is (width, color)
+APP_STYLE = {
+    "edge": (1, (127, 127, 127, 60)),  # the one outline of every box
+    "line": (1, (127, 127, 127, 70)),  # the lines between the bands and between the sidebar and the body
+    "hover_fill": (127, 127, 127, 30),  # an item under the mouse
+    "select_fill": None,  # an item picked or dragged over: the accent at 25 % when None
+    "card_fill": (127, 127, 127, 28),
+    "card_selected_fill": (127, 127, 127, 60),
+    "card_hover_fill": (127, 127, 127, 35),
+    "item_rounding": 6,  # the rows of the lists, the palette, the sidebar
+    "card_rounding": 8,
+    "dialog_rounding": 12,
+    "dialog_fill": None,  # nearly opaque, so what is behind does not show through the text: the sheet of the theme when None
+    "dock_rounding": 9,  # the corners of the outline of a pane of the dock, the files alone have the same
+    "pane_rounding": 6,  # the outline of a zone of the keyboard focus
+    "pane_margin": 8,  # space between the outline of a pane and its contents
+    "unified_gap": 8,  # around the dock and between its panes
+    "danger": "#dc3c3c",  # the button that deletes
+    "glass_opacity": 1.2,  # multiplies the opacity of the glass
+    "glass_central": 0.3,  # the files and the docks are clear glass
+    "glass_dock": 0.3,
+    "blur": 32,  # the blur of what is behind the window (macOS), in points
+    "terminal": None,  # the colors of the terminals, see Terminal.set_colors; the One Light / One Dark ones when None
+}
+
+
+def app(name):
+    """a value of the look of the app for the theme shown: the style sheet, then APP_STYLE"""
+    dark = bool(context) and context[0].is_dark_theme
+    data = style_sheet(sheet_name.value) or {}
+    section = data.get("app")
+    value = section.get("dark" if dark else "light", {}).get(name) if isinstance(section, dict) else None
+    if value is None:
+        value = APP_STYLE[name]
+    return tuple(value) if isinstance(value, list) else value
+
+
+def select_fill(accent):
+    return app("select_fill") or accent + "40"
+
+
+def terminal_colors():
+    """(light, dark) colors of the terminals: the ones of the sheet, or One Light and One Dark"""
+    data = (style_sheet(sheet_name.value) or {}).get("app")
+    pick = lambda which, default: (data.get(which, {}).get("terminal") if isinstance(data, dict) else None) or default
+    return pick("light", TERMINAL_LIGHT), pick("dark", TERMINAL_DARK)
+
+
 def apply_style_sheet(ctx):
     """the tokens of the chosen sheet, over the accent and the glass: the colors, the strokes, the roundings, the
     fill of the popups and the paddings of the buttons"""
@@ -2772,8 +2813,9 @@ def apply_style():
         ctx.set_glass_style(
             accent=accent,
             mode="full" if glass.value == FULL else "partial",
-            opacity=GLASS_OPACITY,
-            **GLASS_LEVELS,
+            opacity=app("glass_opacity"),
+            central=app("glass_central"),
+            dock=app("glass_dock"),
         )
     else:
         ctx.set_accent(accent)
@@ -2792,12 +2834,14 @@ def apply_style():
             ctx.set_font(ui_font)
         except OSError:
             pass
+    light_colors, dark_colors = terminal_colors()
     for terminal_state in (shell, python):
+        terminal_state.set_colors(light=light_colors, dark=dark_colors)
         terminal_state.font = font_path("terminal") or nerd_font()
         terminal_state.font_size = font_sizes["terminal"].value
     apply_dock_style()
     apply_gaps()
-    ctx.set_backdrop_blur(BACKDROP_BLUR)  # macOS only, added to the blur of the backdrop
+    ctx.set_backdrop_blur(app("blur"))  # macOS only, added to the blur of the backdrop
 
 
 def apply_dock_style():
@@ -2807,12 +2851,12 @@ def apply_dock_style():
     dock.set_style(
         tab_style="pill" if pill_tabs.value else "classic",
         tab_bar_height=26,
-        pane_margin=DOCK_PANE_MARGIN,
+        pane_margin=app("pane_margin"),
         gap_width=GAP,
         resize_stroke=(1, (0, 0, 0, 0)),
     )
     for key, k in (("active_tab_stroke", 0), ("pane_stroke", 0), ("inactive_tab_stroke", 1)):
-        color = look.outline[k].to_tuple() if look.outline_set[k] else EDGE[1]
+        color = look.outline[k].to_tuple() if look.outline_set[k] else app("edge")[1]
         dock.set_style(**{key: (look.outline_width[k].value, color)})
     inactive, active = layer_fill(1), layer_fill(2)
     if inactive:
@@ -2899,9 +2943,9 @@ def apply_background():
     ctx = context[0]
     if mode == 0:
         ctx.set_backdrop_image(None)
-        ctx.set_backdrop_blur(look.blur.value or BACKDROP_BLUR)  # macOS only
+        ctx.set_backdrop_blur(look.blur.value or app("blur"))  # macOS only
         return
-    ctx.set_backdrop_blur(BACKDROP_BLUR)
+    ctx.set_backdrop_blur(app("blur"))
     if mode == 2:
         ctx.set_backdrop_image(solid_png(rgb_of(look.color)), luminance=1.0, saturation=1.0, blur=0.0, contrast=1.0, scrim=0.0, opacity=1.0, fit="stretch")
         return
@@ -3091,7 +3135,7 @@ def apply_gaps():
     """the layout lays out the gaps itself: no margin in the central panel, and the gap of the dock
     between its panes"""
     context[0].set_central_margin(0)
-    dock.set_style(gap_width=UNIFIED_GAP)
+    dock.set_style(gap_width=app("unified_gap"))
 
 
 def snapshot():
@@ -3672,11 +3716,11 @@ def tag_picker_ui():
 
             response = interactive(row)
             if i == tag_index.value:
-                draw_rect(response.rect, fill=accent + "40", rounding=6)
+                draw_rect(response.rect, fill=select_fill(accent), rounding=app("item_rounding"))
                 if moved_by_key:
                     scroll_to_rect(response.rect)
             elif response.hovered:
-                draw_rect(response.rect, fill=(127, 127, 127, 30), rounding=6)
+                draw_rect(response.rect, fill=app("hover_fill"), rounding=app("item_rounding"))
             if response.hovered and pointer_pos() != tag_picker_state["pointer"]:
                 tag_index.value = i  # the mouse takes over the highlight when it moves
             if response.clicked:
@@ -3702,7 +3746,7 @@ def tag_picker_ui():
 
 def dialog_fill():
     """the background of a dialog: nearly opaque, so what is behind does not show through the text"""
-    return (30, 31, 36, 245) if context[0].is_dark_theme else (248, 248, 250, 245)
+    return app("dialog_fill") or ((30, 31, 36, 245) if context[0].is_dark_theme else (248, 248, 250, 245))
 
 
 def tags_panel():
@@ -4326,7 +4370,7 @@ def tag_picker():
     if not chosen():
         tag_picker_open.value = False
     elif modal(
-        "tag-picker", tag_picker_ui, rounding=12, inner_margin=14, fill=dialog_fill()
+        "tag-picker", tag_picker_ui, rounding=app("dialog_rounding"), inner_margin=14, fill=dialog_fill()
     ):
         tag_picker_open.value = False
 
@@ -4399,9 +4443,9 @@ def favorites_section(accent):
         rows.append((top + bottom) / 2)
         bounds = (left, bounds[1] if bounds else top, right, bottom)
         if on:
-            draw_rect(response.rect, fill=accent + "40", rounding=6)
+            draw_rect(response.rect, fill=select_fill(accent), rounding=app("item_rounding"))
         elif response.hovered:
-            draw_rect(response.rect, fill=(127, 127, 127, 30), rounding=6)
+            draw_rect(response.rect, fill=app("hover_fill"), rounding=app("item_rounding"))
         if response.clicked:
             go_or_select(path)
         if response.drag_started:
@@ -4865,7 +4909,7 @@ def recent_panel():
                 label(str(path.parent).replace(str(HOME), "~"), size=10, truncate=True, selectable=False)
 
             frame(
-                content, fill=(127, 127, 127, 60 if selected_card else 28), rounding=8,
+                content, fill=app("card_selected_fill") if selected_card else app("card_fill"), rounding=app("card_rounding"),
                 inner_margin=margin, outer_margin=(0, 0, 0, 4),
             )
 
@@ -4873,7 +4917,7 @@ def recent_panel():
         tooltip(str(path).replace(str(HOME), "~"), lambda card=card, result=result: result.append(interactive(card)))
         response = result[0]
         if response.hovered:
-            draw_rect(response.rect, fill=(127, 127, 127, 35), rounding=8)
+            draw_rect(response.rect, fill=app("card_hover_fill"), rounding=app("card_rounding"))
         if response.clicked:
             go_or_select(path)
     if len(opened_data()["recent"]) >= recent_shown[0]:  # the base may hold older ones
@@ -4886,11 +4930,11 @@ def recent_panel():
 
                 horizontal(line)
 
-            frame(content, stroke=EDGE, rounding=8, inner_margin=margin, outer_margin=(0, 0, 0, 4))
+            frame(content, stroke=app("edge"), rounding=app("card_rounding"), inner_margin=margin, outer_margin=(0, 0, 0, 4))
 
         response = interactive(more)
         if response.hovered:
-            draw_rect(response.rect, fill=(127, 127, 127, 35), rounding=8)
+            draw_rect(response.rect, fill=app("card_hover_fill"), rounding=app("card_rounding"))
         if response.clicked:
             recent_shown[0] += RECENT_LIMIT
 
@@ -5644,12 +5688,12 @@ def delete_dialog():
         def buttons():
             if button_clicked("Annuler"):
                 delete_ask["paths"] = []
-            if button_clicked("Supprimer", text_color="#dc3c3c", request_focus=first):
+            if button_clicked("Supprimer", text_color=app("danger"), request_focus=first):
                 delete_for_good()
 
         horizontal(buttons)
 
-    if modal("delete", form, rounding=12, inner_margin=14, fill=dialog_fill()):
+    if modal("delete", form, rounding=app("dialog_rounding"), inner_margin=14, fill=dialog_fill()):
         delete_ask["paths"] = []  # Escape or a click outside
 
 
@@ -5871,7 +5915,7 @@ def index_ignore_ui():
 
 
 def index_ignore_dialog():
-    if modal("index-ignore", index_ignore_ui, rounding=12, inner_margin=14, fill=dialog_fill()):
+    if modal("index-ignore", index_ignore_ui, rounding=app("dialog_rounding"), inner_margin=14, fill=dialog_fill()):
         index_ignore_open.value = False
 
 
@@ -6309,7 +6353,7 @@ def integration_dialog():
         if button_clicked("OK") or key_pressed("Enter"):
             integration_note.value = ""
 
-    if modal("integration", form, rounding=12, inner_margin=14, fill=dialog_fill()):
+    if modal("integration", form, rounding=app("dialog_rounding"), inner_margin=14, fill=dialog_fill()):
         integration_note.value = ""
 
 
@@ -6819,11 +6863,11 @@ def palette_tags_ui():
 
             response = interactive(row)
             if i == tag_index.value:
-                draw_rect(response.rect, fill=accent + "40", rounding=6)
+                draw_rect(response.rect, fill=select_fill(accent), rounding=app("item_rounding"))
                 if moved_by_key:
                     scroll_to_rect(response.rect)
             elif response.hovered:
-                draw_rect(response.rect, fill=(127, 127, 127, 30), rounding=6)
+                draw_rect(response.rect, fill=app("hover_fill"), rounding=app("item_rounding"))
             if response.hovered and pointer_pos() != tag_picker_state["pointer"]:
                 tag_index.value = i  # the mouse takes over the highlight when it moves
             if response.clicked:
@@ -6902,11 +6946,11 @@ def palette_ui():
 
             response = interactive(row)
             if i == palette_index.value:
-                draw_rect(response.rect, fill=accent + "40", rounding=6)
+                draw_rect(response.rect, fill=select_fill(accent), rounding=app("item_rounding"))
                 if moved_by_key:
                     scroll_to_rect(response.rect)
             elif response.hovered:
-                draw_rect(response.rect, fill=(127, 127, 127, 30), rounding=6)
+                draw_rect(response.rect, fill=app("hover_fill"), rounding=app("item_rounding"))
             if response.hovered and pointer_moved:
                 palette_index.value = (
                     i  # the mouse takes over the highlight from the keyboard
@@ -6924,7 +6968,7 @@ def palette_ui():
 
 
 def action_palette():
-    if modal("palette", palette_ui, rounding=12):
+    if modal("palette", palette_ui, rounding=app("dialog_rounding")):
         palette_open.value = False
 
 
@@ -7098,14 +7142,12 @@ def zone_stroke(zone, otherwise):
     context[0].request_repaint()  # the fade runs without any other event
     color = ACCENTS[accent_name.value]
     r, g, b = (int(color[i : i + 2], 16) for i in (1, 3, 5))
-    return (EDGE[0], (r, g, b, round(255 * alpha)))
+    return (app("edge")[0], (r, g, b, round(255 * alpha)))
 
 
 # the dock fills the middle of the window: the files are one of its panes (that cannot be closed), the
 # others can be closed, moved by their tab and dropped on any side of the files or of each other
 CENTRAL = "Fichiers"
-DOCK_PANE_MARGIN = 8  # space between the outline of a pane and its contents, see pane_margin of the dock
-DOCK_ROUNDING = 9  # the corners of the outline of a pane of the dock, the files alone have the same
 
 
 def zone_pane(zone, ui, margin=0):
@@ -7114,8 +7156,8 @@ def zone_pane(zone, ui, margin=0):
     return lambda: frame(
         in_zone(zone, ui),
         inner_margin=margin,
-        rounding=6,
-        stroke=zone_stroke(zone, (EDGE[0], (0, 0, 0, 0))),
+        rounding=app("pane_rounding"),
+        stroke=zone_stroke(zone, (app("edge")[0], (0, 0, 0, 0))),
     )
 
 
@@ -7733,7 +7775,7 @@ def meta_manager():
         adding=mm["adding"],
         id="meta-manager",
         fill=dialog_fill(),
-        rounding=12,
+        rounding=app("dialog_rounding"),
         inner_margin=14,
     )
     for event in events:
@@ -7900,7 +7942,7 @@ def meta_rules_dialog():
         adding=mr["adding"],
         id="meta-rules",
         fill=dialog_fill(),
-        rounding=12,
+        rounding=app("dialog_rounding"),
         inner_margin=14,
     )
     for event in events:
@@ -7969,11 +8011,11 @@ def make_dock():
         id="inspector",
         tab_menu=tab_menu,
         tab_bar_height=26,
-        pane_margin=DOCK_PANE_MARGIN,
+        pane_margin=app("pane_margin"),
         gap_width=GAP,  # a gap between the panes, as wide as between the other boxes
-        pane_stroke=EDGE,
-        active_tab_stroke=EDGE,
-        inactive_tab_stroke=EDGE,
+        pane_stroke=app("edge"),
+        active_tab_stroke=app("edge"),
+        inactive_tab_stroke=app("edge"),
         resize_stroke=(
             1,
             (0, 0, 0, 0),
@@ -8058,10 +8100,10 @@ def make_window(folder):
         "files_list": FileListView("list", folder, watcher=watcher, navigate=False),
         "files_icons": FileIconView("icons", folder, watcher=watcher, navigate=False),
         "tree_menu": {"paths": None},
-        "shell": Terminal(cwd=str(folder), font=nerd_font(), light=TERMINAL_LIGHT, dark=TERMINAL_DARK),
+        "shell": Terminal(cwd=str(folder), font=nerd_font(), light=terminal_colors()[0], dark=terminal_colors()[1]),
         "python": Terminal(
             cwd=str(folder), shell=newest_python(), args=["-q"], font=nerd_font(),
-            light=TERMINAL_LIGHT, dark=TERMINAL_DARK,
+            light=terminal_colors()[0], dark=terminal_colors()[1],
         ),
         "follow_folder": Bool(True), "shell_folder": {"path": folder},
         "tag_tree": TagTreeView(), "item_tags": Tags(), "item_tags_of": {"path": None, "version": -1},
@@ -8305,20 +8347,20 @@ def layout():
         outer_margin=0,
         rounding=0,
         show_separator_line=True,  # the line between the sidebar and the body
-        separator_stroke=LINE,
+        separator_stroke=app("line"),
         **layer_kwargs(0),
     )
-    top_panel("toolbar", toolbar, exact_size=TOP_H, resizable=False, inner_margin=(8, 0, 12, 0), rounding=0, show_separator_line=True, separator_stroke=LINE, **layer_kwargs(1))
-    bottom_panel("path", path_bar, exact_size=BOTTOM_H, resizable=False, inner_margin=(8, 0, 12, 0), rounding=0, show_separator_line=True, separator_stroke=LINE, **layer_kwargs(1))
+    top_panel("toolbar", toolbar, exact_size=TOP_H, resizable=False, inner_margin=(8, 0, 12, 0), rounding=0, show_separator_line=True, separator_stroke=app("line"), **layer_kwargs(1))
+    bottom_panel("path", path_bar, exact_size=BOTTOM_H, resizable=False, inner_margin=(8, 0, 12, 0), rounding=0, show_separator_line=True, separator_stroke=app("line"), **layer_kwargs(1))
     # one gap everywhere: a side of the dock that faces a neighbour without gap (the line of the
     # sidebar, of the bars, the border of the window) gets the whole gap, and the dock puts the same
     # gap between its panes. The central panel adds no margin of its own (set_central_margin)
-    dock_or_files(outer_margin=UNIFIED_GAP)
+    dock_or_files(outer_margin=app("unified_gap"))
 
 
 def dock_or_files(**kwargs):
     """the panes of the dock, or the files alone when the dock is hidden"""
-    frame(lambda: dock_area(dock) if show_dock.value else frame(central_ui, stroke=EDGE, rounding=DOCK_ROUNDING, inner_margin=DOCK_PANE_MARGIN - 1), **kwargs)  # minus the line of the outline
+    frame(lambda: dock_area(dock) if show_dock.value else frame(central_ui, stroke=app("edge"), rounding=app("dock_rounding"), inner_margin=app("pane_margin") - 1), **kwargs)  # minus the line of the outline
 
 
 if __name__ == "__main__":

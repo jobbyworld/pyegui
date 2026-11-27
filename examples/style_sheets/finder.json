@@ -147,5 +147,59 @@
     "spacing.button_padding_radius": 0.8,
     "menu.button_padding_radius": 0.8,
     "colors.text": "#f2f2f7ff"
+  },
+  "app": {
+    "light": {
+      "edge": [
+        1,
+        "#7f7f7f3c"
+      ],
+      "line": [
+        1,
+        "#7f7f7f46"
+      ],
+      "hover_fill": "#7f7f7f1e",
+      "card_fill": "#7f7f7f1c",
+      "card_selected_fill": "#7f7f7f3c",
+      "card_hover_fill": "#7f7f7f23",
+      "item_rounding": 6,
+      "card_rounding": 8,
+      "dialog_rounding": 12,
+      "dock_rounding": 9,
+      "pane_rounding": 6,
+      "pane_margin": 8,
+      "unified_gap": 8,
+      "danger": "#dc3c3c",
+      "glass_opacity": 1.2,
+      "glass_central": 0.3,
+      "glass_dock": 0.3,
+      "blur": 32
+    },
+    "dark": {
+      "edge": [
+        1,
+        "#7f7f7f3c"
+      ],
+      "line": [
+        1,
+        "#7f7f7f46"
+      ],
+      "hover_fill": "#7f7f7f1e",
+      "card_fill": "#7f7f7f1c",
+      "card_selected_fill": "#7f7f7f3c",
+      "card_hover_fill": "#7f7f7f23",
+      "item_rounding": 6,
+      "card_rounding": 8,
+      "dialog_rounding": 12,
+      "dock_rounding": 9,
+      "pane_rounding": 6,
+      "pane_margin": 8,
+      "unified_gap": 8,
+      "danger": "#dc3c3c",
+      "glass_opacity": 1.2,
+      "glass_central": 0.3,
+      "glass_dock": 0.3,
+      "blur": 32
+    }
   }
 }

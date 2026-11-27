@@ -122,6 +122,12 @@ Three scripts, nothing else to import (`finder.py` holds its own tags database a
 The folders `examples/icons` (the SVG icons of the bars) and `examples/app_icon` (the icon of the app) are used by
 `finder.py` and by `finder-rs`.
 
+`finder.py` is themable by the style sheets of `examples/style_sheets` (chooser *Feuille de style* of its look panel,
+`FINDER_SHEET=name` to try one): the tokens of the sheet go to `set_style_tokens`, and an `"app"` section (`light` / `dark`)
+gives what is not a token of the framework: the `APP_STYLE` table of `finder.py` (strokes of the boxes, roundings, fills under
+the mouse, dialogs, the gaps of the dock, the glass, the blur, the colors of the terminals), read by `app("name")`. A new
+hard-coded look value of `finder.py` goes in `APP_STYLE`, not in the code. `scripts/make_finder_sheet.py` writes the sheet `finder`.
+
 `finder.py` is the reference for a real desktop layout. Its Actions pane works like the Actions
 dock of the PyQt app `pyfinder`: one registry (`ACTIONS`: category, label, icon, shortcut, enabled
 predicate, run) read by both the panel and the keyboard, so an action is declared once.

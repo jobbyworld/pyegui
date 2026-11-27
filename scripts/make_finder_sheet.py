@@ -21,6 +21,16 @@ CONTRAST = {
 }
 
 
+# the "app" section: the look of examples/finder.py that is not a token of the framework (APP_STYLE of finder.py)
+APP = {
+    "edge": [1, "#7f7f7f3c"], "line": [1, "#7f7f7f46"],
+    "hover_fill": "#7f7f7f1e", "card_fill": "#7f7f7f1c", "card_selected_fill": "#7f7f7f3c", "card_hover_fill": "#7f7f7f23",
+    "item_rounding": 6, "card_rounding": 8, "dialog_rounding": 12, "dock_rounding": 9, "pane_rounding": 6,
+    "pane_margin": 8, "unified_gap": 8, "danger": "#dc3c3c",
+    "glass_opacity": OPACITY, "glass_central": LEVELS["central"], "glass_dock": LEVELS["dock"], "blur": 32,
+}
+
+
 def flatten(snap):
     out = {}
     for group in ("colors", "tabs", "pill_tabs", "grid", "popups"):
@@ -44,6 +54,7 @@ def update(ctx):
     for t in ("light", "dark"):
         now = flatten(ctx.style_snapshot(t))
         sheet[t] = {p: (list(v) if isinstance(v, tuple) else v) for p, v in now.items() if v != plain[t].get(p)}
+    sheet["app"] = {"light": dict(APP), "dark": dict(APP)}
     for t, tokens in CONTRAST.items():
         sheet[t].update(tokens)
     with open(OUT, "w") as f:
