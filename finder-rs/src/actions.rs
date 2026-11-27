@@ -111,6 +111,8 @@ pub static ACTIONS: &[Action] = &[
         let folder = app.folder().to_path_buf();
         app.transfer.start(app.selected_paths(), folder, false);
     }},
+    // the Finder of macOS: Option+Cmd+Delete deletes at once; elsewhere it is Shift+Delete, read by the app itself
+    Action { category: "Fichier", label: "Supprimer définitivement", icon: "trash", shortcut: if cfg!(target_os = "macos") { Some(KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::Backspace)) } else { None }, enabled: has_selection, run: |app, _| app.ask_delete_for_good() },
     Action { category: "Fichier", label: "Mettre à la corbeille", icon: "trash", shortcut: Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::Backspace)), enabled: has_selection, run: |app, _| app.ask_delete() },
     Action { category: "Édition", label: "Copier", icon: "copy", shortcut: cmd(Key::C), enabled: has_selection, run: |app, _| {
         app.copy_files(false);
