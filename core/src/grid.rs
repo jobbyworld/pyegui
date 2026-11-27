@@ -523,6 +523,14 @@ pub fn show(
                 let mut left = cell_rect.left() + 8.0;
                 let is_first = Some(&column.key) == first_key.as_ref();
                 if options.tree && is_first {
+                    // the guides of the levels above: one vertical line under the chevron of each ancestor
+                    let guide = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color.gamma_multiply(0.8));
+                    for level in 0..line.depth {
+                        let x = (cell_rect.left() + 8.0 + level as f32 * options.indent + 6.0).round() - 0.5;
+                        if x > clip.left() && x < clip.right() {
+                            ui.painter().with_clip_rect(clip).vline(x, rect.y_range(), guide);
+                        }
+                    }
                     left += line.depth as f32 * options.indent;
                     if line.has_children {
                         let chevron = Rect::from_center_size(pos2(left + 6.0, cell_rect.center().y), vec2(14.0, row_height));
