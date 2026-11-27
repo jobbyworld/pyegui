@@ -15,4 +15,4 @@ Generated from the docstrings by `scripts/gen_framework_docs.py`, do not edit by
 - [Images and icons](images.md): 7 names
 - [PDF](pdf.md): 5 names
 - [Keyboard, mouse and drag and drop](interaction.md): 17 names
-- [Themes, colors, fonts and glass](styling.md): 16 names
+- [Themes, colors, fonts and glass](styling.md): 18 names

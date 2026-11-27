@@ -111,11 +111,12 @@ Index of all files: [docs/framework/README.md](docs/framework/README.md).
 
 ## Examples (`examples/`)
 
-Two scripts, nothing else to import (`finder.py` holds its own tags database and PDF reader):
+Three scripts, nothing else to import (`finder.py` holds its own tags database and PDF reader):
 
 | File | Shows |
 |---|---|
 | `widget_gallery.py` | most widgets, one after the other |
+| `style_doc.py` | the style of every widget (background, border, text, rounding, font) in each state and in both themes, the tokens of the style with the widgets that use them, an editor of the style sheet (`Context.style_snapshot`, `Context.set_style_tokens`), a global transparency, saved to JSON |
 | `finder.py` | a mini Finder, the reference for a real desktop layout: sidebar, toolbar, list/icon/tree views, preview, a right-hand **Dock** with an **Actions** pane, tags (`Tags`, `tags_edit`, `TagTreeView`) kept in a SQLite file (`TagStore`, shared with `finder-rs`), folders watched by the `FileWatcher`, a PDF viewer (`PdfView`, `pdf_thumbnail`, `pdf_info`), terminals in the dock, layout rules and glass, the window, theme, view, folder and dock layout kept between runs |
 
 The folders `examples/icons` (the SVG icons of the bars) and `examples/app_icon` (the icon of the app) are used by
