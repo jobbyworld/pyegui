@@ -268,11 +268,11 @@ fn list_ui(ui: &mut Ui, state: &mut SettingsState, o: &SettingsOptions, items: &
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), add_h - 4.0), Sense::click());
     let visuals = ui.visuals();
     if o.adding {
-        ui.painter().rect_filled(rect, 7.0, visuals.selection.bg_fill.gamma_multiply(0.6));
+        ui.painter().rect_filled(rect, crate::style::fit_radius(ui.visuals(), 7.0), visuals.selection.bg_fill.gamma_multiply(0.6));
     } else if response.hovered() {
-        ui.painter().rect_filled(rect, 7.0, visuals.widgets.hovered.weak_bg_fill);
+        ui.painter().rect_filled(rect, crate::style::fit_radius(ui.visuals(), 7.0), visuals.widgets.hovered.weak_bg_fill);
     }
-    ui.painter().rect_stroke(rect, 7.0, Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color), StrokeKind::Inside);
+    ui.painter().rect_stroke(rect, crate::style::fit_radius(ui.visuals(), 7.0), Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color), StrokeKind::Inside);
     let color: Color32 = if o.adding { visuals.strong_text_color() } else { visuals.text_color() };
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, format!("＋  {}", o.add_label), FontId::proportional(14.0), color);
     if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {

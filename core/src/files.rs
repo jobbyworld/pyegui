@@ -1047,9 +1047,9 @@ pub fn paint_list_row(
 pub fn paint_tile(ui: &egui::Ui, e: &Entry, rect: Rect, icon: f32, badges: &[Color32], selected: bool, hovered: bool, focused: bool) {
     let icon_rect = Rect::from_center_size(pos2(rect.center().x, rect.top() + 6.0 + icon / 2.0), vec2(icon, icon));
     if selected {
-        ui.painter().rect_filled(icon_rect.expand(4.0), 6.0, ui.visuals().text_color().gamma_multiply(0.12));
+        ui.painter().rect_filled(icon_rect.expand(4.0), crate::style::fit_radius(ui.visuals(), 6.0), ui.visuals().text_color().gamma_multiply(0.12));
     } else if hovered {
-        ui.painter().rect_filled(rect.shrink(2.0), 6.0, ui.visuals().widgets.hovered.weak_bg_fill.gamma_multiply(0.5));
+        ui.painter().rect_filled(rect.shrink(2.0), crate::style::fit_radius(ui.visuals(), 6.0), ui.visuals().widgets.hovered.weak_bg_fill.gamma_multiply(0.5));
     }
     paint_icon(ui, e, icon_rect);
     // the badges on the top left corner of the icon
@@ -1066,7 +1066,7 @@ pub fn paint_tile(ui: &egui::Ui, e: &Entry, rect: Rect, icon: f32, badges: &[Col
     let pos = pos2(rect.center().x, icon_rect.bottom() + 6.0);
     if selected {
         let text_rect = galley.rect.translate(pos.to_vec2()).expand2(vec2(4.0, 1.0));
-        ui.painter().rect_filled(text_rect, 4.0, fill);
+        ui.painter().rect_filled(text_rect, crate::style::fit_radius(ui.visuals(), 4.0), fill);
     }
     ui.painter().galley(pos, galley, color);
 }
@@ -1245,11 +1245,11 @@ pub fn draw_folder_in(
                 match &shape {
                     Shape::List { .. } => {
                         if selected {
-                            ui.painter().rect_filled(rect, 4.0, fill);
+                            ui.painter().rect_filled(rect, crate::style::fit_radius(ui.visuals(), 4.0), fill);
                         } else if response.hovered() {
-                            ui.painter().rect_filled(rect, 4.0, ui.visuals().widgets.hovered.weak_bg_fill.gamma_multiply(0.5));
+                            ui.painter().rect_filled(rect, crate::style::fit_radius(ui.visuals(), 4.0), ui.visuals().widgets.hovered.weak_bg_fill.gamma_multiply(0.5));
                         } else if i % 2 == 1 {
-                            ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+                            ui.painter().rect_filled(rect, crate::style::fit_radius(ui.visuals(), 0.0), ui.visuals().faint_bg_color);
                         }
                         if e.hidden {
                             ui.multiply_opacity(HIDDEN_OPACITY);
@@ -1266,8 +1266,8 @@ pub fn draw_folder_in(
                 ui.set_opacity(opacity);
                 if drop_here {
                     // after the row: its background would hide the frame
-                    ui.painter().rect_filled(rect, 4.0, ui.visuals().selection.bg_fill.gamma_multiply(0.25));
-                    ui.painter().rect_stroke(rect.shrink(1.0), 4.0, Stroke::new(2.0, ui.visuals().selection.bg_fill), egui::StrokeKind::Inside);
+                    ui.painter().rect_filled(rect, crate::style::fit_radius(ui.visuals(), 4.0), ui.visuals().selection.bg_fill.gamma_multiply(0.25));
+                    ui.painter().rect_stroke(rect.shrink(1.0), crate::style::fit_radius(ui.visuals(), 4.0), Stroke::new(2.0, ui.visuals().selection.bg_fill), egui::StrokeKind::Inside);
                 }
             }
             if view.folder_changed {
@@ -1610,7 +1610,7 @@ pub fn tree_header(
     let shift = (ui.clip_rect().top() - slot.top()).max(0.0);
     let rect = slot.translate(vec2(0.0, shift));
     if shift > 0.5 && !opts.tinted {
-        ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
+        ui.painter().rect_filled(rect, crate::style::fit_radius(ui.visuals(), 0.0), ui.visuals().panel_fill);
     }
     let mut cells: Vec<Cell> = vec![Cell {
         key: "name".into(),
@@ -2006,8 +2006,8 @@ pub fn draw_tree(
                 if let Some(node) = tree_node_at(&nodes, index, &mut 0).filter(|n| n.entry.is_dir) {
                     let top = tree_top.y + index as f32 * step;
                     let row = Rect::from_min_max(pos2(tree_response.rect.left(), top), pos2(tree_response.rect.right(), top + step - ui.spacing().item_spacing.y));
-                    ui.painter().rect_filled(row, 4.0, ui.visuals().selection.bg_fill.gamma_multiply(0.25));
-                    ui.painter().rect_stroke(row.shrink(1.0), 4.0, Stroke::new(2.0, ui.visuals().selection.bg_fill), egui::StrokeKind::Inside);
+                    ui.painter().rect_filled(row, crate::style::fit_radius(ui.visuals(), 4.0), ui.visuals().selection.bg_fill.gamma_multiply(0.25));
+                    ui.painter().rect_stroke(row.shrink(1.0), crate::style::fit_radius(ui.visuals(), 4.0), Stroke::new(2.0, ui.visuals().selection.bg_fill), egui::StrokeKind::Inside);
                     drop_target = Some(node.id.clone());
                 }
             }
@@ -2423,8 +2423,8 @@ pub fn draw_tree_grid(
         ctx.request_repaint();
         if let Some(p) = native_pointer().filter(|p| ui.clip_rect().contains(*p)) {
             if let Some((id, rect)) = out.row_rects.iter().find(|(_, r)| r.contains(p)).filter(|(id, _)| dirs.contains(id)) {
-                ui.painter().rect_filled(*rect, 4.0, ui.visuals().selection.bg_fill.gamma_multiply(0.25));
-                ui.painter().rect_stroke(rect.shrink(1.0), 4.0, Stroke::new(2.0, ui.visuals().selection.bg_fill), egui::StrokeKind::Inside);
+                ui.painter().rect_filled(*rect, crate::style::fit_radius(ui.visuals(), 4.0), ui.visuals().selection.bg_fill.gamma_multiply(0.25));
+                ui.painter().rect_stroke(rect.shrink(1.0), crate::style::fit_radius(ui.visuals(), 4.0), Stroke::new(2.0, ui.visuals().selection.bg_fill), egui::StrokeKind::Inside);
                 drop_target = Some(id.clone());
             }
         }

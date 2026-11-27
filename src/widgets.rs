@@ -885,7 +885,7 @@ unsafe fn segmented_control(
     egui::Frame::new()
         .fill(ui.visuals().extreme_bg_color)
         .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-        .corner_radius(egui::CornerRadius::same(radius.saturating_add(2)))
+        .corner_radius(egui::CornerRadius::same(if radius == 0 { 0 } else { radius.saturating_add(2) }))
         .inner_margin(egui::Margin::same(2))
         .show(ui, |ui| {
             ui.horizontal(|ui| {

@@ -444,7 +444,7 @@ pub fn header(
             let funnel = ui.interact(spot, id.with(("funnel", &cell.key)), Sense::click());
             if hovered || filter_active || popup_open {
                 if funnel.hovered() || popup_open {
-                    ui.painter().rect_filled(spot, 4.0, ui.visuals().widgets.hovered.weak_bg_fill);
+                    ui.painter().rect_filled(spot, crate::style::fit_radius(ui.visuals(), 4.0), ui.visuals().widgets.hovered.weak_bg_fill);
                 }
                 let color = if filter_active { ui.visuals().hyperlink_color } else { ui.visuals().weak_text_color() };
                 paint_funnel(ui, spot.center(), color, filter_active);
@@ -499,7 +499,7 @@ pub fn header(
                     .unwrap_or(last)
                     .clamp(first, last);
                 ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
-                ui.painter().rect_filled(cells[from].rect, 0.0, ui.visuals().text_color().gamma_multiply(0.08));
+                ui.painter().rect_filled(cells[from].rect, crate::style::fit_radius(ui.visuals(), 0.0), ui.visuals().text_color().gamma_multiply(0.08));
                 if to != from {
                     let x = if to > from { cells[to].rect.right() } else { cells[to].rect.left() };
                     ui.painter().vline(x, cells[to].rect.y_range(), Stroke::new(2.0, accent));
@@ -820,7 +820,7 @@ fn settings_menu(ui: &mut egui::Ui, id: Id, header: Rect, state: &mut ColumnsSta
     if hovered || was_open || gear.hovered() {
         let visuals = ui.visuals();
         let fill = if was_open || gear.hovered() { visuals.widgets.hovered.bg_fill } else { visuals.widgets.inactive.weak_bg_fill };
-        ui.painter().rect_filled(slot, 5.0, fill);
+        ui.painter().rect_filled(slot, crate::style::fit_radius(ui.visuals(), 5.0), fill);
         let ink = visuals.text_color();
         paint_svg(ui, "bytes://pyegui-columns-sliders.svg", ICON_SLIDERS, Rect::from_center_size(slot.center(), vec2(14.0, 14.0)), ink);
     }
@@ -855,9 +855,9 @@ fn settings_menu(ui: &mut egui::Ui, id: Id, header: Rect, state: &mut ColumnsSta
                     let hidden = state.hidden.contains(key);
                     let dragged = state.settings_drag.as_deref() == Some(key.as_str());
                     if dragged {
-                        ui.painter().rect_filled(row, 5.0, accent.gamma_multiply(0.35));
+                        ui.painter().rect_filled(row, crate::style::fit_radius(ui.visuals(), 5.0), accent.gamma_multiply(0.35));
                     } else if ui.rect_contains_pointer(row) && state.settings_drag.is_none() {
-                        ui.painter().rect_filled(row, 5.0, ui.visuals().widgets.hovered.weak_bg_fill);
+                        ui.painter().rect_filled(row, crate::style::fit_radius(ui.visuals(), 5.0), ui.visuals().widgets.hovered.weak_bg_fill);
                     }
                     // the grip: six dots, the handle of the drag and drop
                     let grip = Rect::from_min_size(row.min, vec2(22.0, row_h));

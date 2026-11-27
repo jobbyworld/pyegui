@@ -306,7 +306,7 @@ fn toolbar(ui: &mut Ui, state: &mut PropertySetState, o: &PropertySetOptions) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         let visuals = ui.visuals().clone();
-        let frame = egui::Frame::new().stroke(Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color)).corner_radius(8).inner_margin(2);
+        let frame = egui::Frame::new().stroke(Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color)).corner_radius(crate::style::fit_radius(&visuals, 8.0) as u8).inner_margin(2);
         frame.show(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             if ui.selectable_label(state.grouped, &o.grouped_label).clicked() {
@@ -325,7 +325,7 @@ fn header(ui: &mut Ui, state: &mut PropertySetState, group: &str, count: usize, 
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), o.row_height), Sense::click());
     let visuals = ui.visuals().clone();
     let fill = visuals.widgets.noninteractive.weak_bg_fill.gamma_multiply(if response.hovered() { 1.0 } else { 0.7 });
-    ui.painter().rect_filled(rect, 0.0, fill);
+    ui.painter().rect_filled(rect, crate::style::fit_radius(ui.visuals(), 0.0), fill);
     let filtering = !state.filter.trim().is_empty();
     let folded = !filtering && state.collapsed.contains(group);
     chevron(ui, rect.left_center() + egui::vec2(12.0, 0.0), !folded, visuals.text_color());
@@ -344,9 +344,9 @@ fn row(ui: &mut Ui, state: &mut PropertySetState, p: &Property, o: &PropertySetO
     let visuals = ui.visuals().clone();
     let selected = state.selected.as_deref() == Some(p.id.as_str());
     if selected {
-        ui.painter().rect_filled(rect, 0.0, visuals.selection.bg_fill.gamma_multiply(0.35));
+        ui.painter().rect_filled(rect, crate::style::fit_radius(ui.visuals(), 0.0), visuals.selection.bg_fill.gamma_multiply(0.35));
     } else if response.hovered() {
-        ui.painter().rect_filled(rect, 0.0, visuals.widgets.hovered.weak_bg_fill.gamma_multiply(0.5));
+        ui.painter().rect_filled(rect, crate::style::fit_radius(ui.visuals(), 0.0), visuals.widgets.hovered.weak_bg_fill.gamma_multiply(0.5));
     }
     let line = visuals.widgets.noninteractive.bg_stroke.color.gamma_multiply(0.6);
     ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, line));
@@ -521,7 +521,7 @@ fn editor(ui: &mut Ui, state: &mut PropertySetState, p: &Property, o: &PropertyS
             };
             let response = ui.add_enabled(p.editable(), edit.hint_text(RichText::new(hint).italics()).frame(egui::Frame::NONE));
             if response.has_focus() {
-                ui.painter().rect_stroke(response.rect.expand(2.0), 3.0, Stroke::new(1.0, ui.visuals().selection.stroke.color), egui::StrokeKind::Inside);
+                ui.painter().rect_stroke(response.rect.expand(2.0), crate::style::fit_radius(ui.visuals(), 3.0), Stroke::new(1.0, ui.visuals().selection.stroke.color), egui::StrokeKind::Inside);
             }
             // a text or a number is kept as it is typed (a text that is not a number yet is refused by the caller): a click on another item changes the key of the set in the same frame
             // as the focus is lost, and what was typed would be dropped with the buffers
@@ -708,7 +708,7 @@ fn choice_rows(ui: &mut Ui, spec: &ChoiceSpec<'_>, new_option: &mut String, chan
 fn description_pane(ui: &mut Ui, state: &PropertySetState, props: &[Property], height: f32) {
     let visuals = ui.visuals().clone();
     let current = state.selected.as_deref().and_then(|id| props.iter().find(|p| p.id == id));
-    let frame = egui::Frame::new().fill(visuals.widgets.noninteractive.weak_bg_fill.gamma_multiply(0.8)).corner_radius(8).inner_margin(8);
+    let frame = egui::Frame::new().fill(visuals.widgets.noninteractive.weak_bg_fill.gamma_multiply(0.8)).corner_radius(crate::style::fit_radius(&visuals, 8.0) as u8).inner_margin(8);
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.set_min_height(height - 16.0);

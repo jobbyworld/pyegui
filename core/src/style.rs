@@ -549,3 +549,14 @@ pub fn layer_fill(layer: Layer, visuals: &egui::Visuals) -> Color32 {
 pub fn bar_tint(visuals: &egui::Visuals) -> Color32 {
     layer_fill(Layer::Inactive, visuals)
 }
+
+/// A rounding drawn by hand (a hover, a selection, a frame of a control), for the theme of `visuals`: `base` when the
+/// widgets are rounded, 0 when the theme has square widgets, so that what is drawn by hand has the corners of the
+/// widgets around it
+pub fn fit_radius(visuals: &egui::Visuals, base: f32) -> f32 {
+    if visuals.widgets.inactive.corner_radius.nw == 0 {
+        0.0
+    } else {
+        base
+    }
+}

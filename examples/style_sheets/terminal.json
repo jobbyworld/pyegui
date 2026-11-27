@@ -103,5 +103,21 @@
     "grid.chevron_color": "#7cfc7c99",
     "grid.chevron_hover_color": "#c8ffc8ff",
     "grid.chevron_size": 4.0
+  },
+  "app": {
+    "light": {
+      "item_rounding": 0,
+      "card_rounding": 0,
+      "dialog_rounding": 0,
+      "dock_rounding": 0,
+      "pane_rounding": 0
+    },
+    "dark": {
+      "item_rounding": 0,
+      "card_rounding": 0,
+      "dialog_rounding": 0,
+      "dock_rounding": 0,
+      "pane_rounding": 0
+    }
   }
 }

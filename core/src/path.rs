@@ -324,7 +324,7 @@ pub fn combo(ui: &mut egui::Ui, path: &Path, options: &ComboOptions) -> Elements
             let hovered = row_response.hovered();
             let color = if hovered { ui.visuals().selection.stroke.color } else { ui.visuals().text_color() };
             if hovered {
-                ui.painter().rect_filled(row, 6.0, ui.visuals().selection.bg_fill);
+                ui.painter().rect_filled(row, crate::style::fit_radius(ui.visuals(), 6.0), ui.visuals().selection.bg_fill);
             }
             if i == 0 {
                 ui.painter().text(pos2(row.left() + 11.0, row.center().y), Align2::CENTER_CENTER, "✓", body.clone(), color);

@@ -650,12 +650,12 @@ pub fn tags_edit(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
                                         let (boxed, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
                                         let ink = ui.visuals().text_color();
                                         if on {
-                                            ui.painter().rect_filled(boxed, 3.0, ui.visuals().hyperlink_color);
+                                            ui.painter().rect_filled(boxed, crate::style::fit_radius(ui.visuals(), 3.0), ui.visuals().hyperlink_color);
                                             let (m, white) = (boxed.center(), Stroke::new(1.6, Color32::WHITE));
                                             ui.painter().line_segment([m + vec2(-3.5, 0.5), m + vec2(-1.0, 3.0)], white);
                                             ui.painter().line_segment([m + vec2(-1.0, 3.0), m + vec2(3.8, -3.0)], white);
                                         } else {
-                                            ui.painter().rect_stroke(boxed, 3.0, Stroke::new(1.3, ink.gamma_multiply(0.7)), StrokeKind::Inside);
+                                            ui.painter().rect_stroke(boxed, crate::style::fit_radius(ui.visuals(), 3.0), Stroke::new(1.3, ink.gamma_multiply(0.7)), StrokeKind::Inside);
                                         }
                                     }
                                     path_ui(ui, &state, suggestion)
@@ -785,16 +785,16 @@ pub fn tags_pick(ui: &mut egui::Ui, tags: &mut Tags, o: &TagsOptions) -> bool {
                 let (row, row_response) = ui.allocate_exact_size(vec2(ui.available_width().max(220.0), 24.0), Sense::click());
                 let ink = ui.visuals().text_color();
                 if row_response.hovered() && !inherited {
-                    ui.painter().rect_filled(row, 5.0, ui.visuals().widgets.hovered.weak_bg_fill);
+                    ui.painter().rect_filled(row, crate::style::fit_radius(ui.visuals(), 5.0), ui.visuals().widgets.hovered.weak_bg_fill);
                 }
                 let boxed = Rect::from_center_size(egui::pos2(row.left() + 12.0 + depth as f32 * 16.0, row.center().y), vec2(14.0, 14.0));
                 if on {
-                    ui.painter().rect_filled(boxed, 3.0, ui.visuals().hyperlink_color.gamma_multiply(if inherited { 0.5 } else { 1.0 }));
+                    ui.painter().rect_filled(boxed, crate::style::fit_radius(ui.visuals(), 3.0), ui.visuals().hyperlink_color.gamma_multiply(if inherited { 0.5 } else { 1.0 }));
                     let (m, white) = (boxed.center(), Stroke::new(1.6, Color32::WHITE));
                     ui.painter().line_segment([m + vec2(-3.5, 0.5), m + vec2(-1.0, 3.0)], white);
                     ui.painter().line_segment([m + vec2(-1.0, 3.0), m + vec2(3.8, -3.0)], white);
                 } else {
-                    ui.painter().rect_stroke(boxed, 3.0, Stroke::new(1.3, ink.gamma_multiply(0.7)), StrokeKind::Inside);
+                    ui.painter().rect_stroke(boxed, crate::style::fit_radius(ui.visuals(), 3.0), Stroke::new(1.3, ink.gamma_multiply(0.7)), StrokeKind::Inside);
                 }
                 let color = tags.color_of(&path);
                 let icon_at = egui::pos2(boxed.right() + 12.0, row.center().y);

@@ -29,8 +29,9 @@ pub fn segmented(ui: &mut Ui, id: &str, size: f32, cells: &[Cell]) -> Segments {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(cell_size.x * cells.len() as f32, cell_size.y), Sense::hover());
     let visuals = ui.visuals().clone();
     // like segmented_control: the cells have the radius of the widgets, the frame two more
-    let inner = f32::from(visuals.widgets.inactive.corner_radius.nw).clamp(6.0, 12.0);
-    let outer = (inner + 2.0).min(CONTROL_H / 2.0);
+    let base = f32::from(visuals.widgets.inactive.corner_radius.nw);
+    let inner = if base == 0.0 { 0.0 } else { base.clamp(6.0, 12.0) }; // square widgets: square cells
+    let outer = if inner == 0.0 { 0.0 } else { (inner + 2.0).min(CONTROL_H / 2.0) };
     ui.painter().rect_filled(rect, outer, visuals.widgets.inactive.weak_bg_fill.gamma_multiply(0.9));
     ui.painter().rect_stroke(rect, outer, Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color), StrokeKind::Inside);
     let mut out = Segments { clicked: None, responses: Vec::new() };
