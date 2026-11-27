@@ -6391,7 +6391,7 @@ ACTIONS = [
         "Édition",
         "Supprimer définitivement",
         "trash",
-        "Shift+Delete",  # before the trash: Delete also matches when Shift is held
+        "Cmd+Alt+Backspace|Shift+Delete" if MACOS else "Shift+Delete",  # before the trash: Delete also matches when Shift is held
         has_selection,
         delete_for_good_ask,
     ),
