@@ -1,5 +1,6 @@
 //! The fill of the popups, each with its own RGBA color: `popups.dropdown_fill` (the list of a combo box),
-//! `popups.menu_fill` (menus and context menus) and `popups.tooltip_fill` (the tooltips). The alpha of the
+//! `popups.menu_fill` (menus and context menus) and `popups.tooltip_fill` (the tooltips) and `popups.window_fill` (the windows and the modals; `colors.window` is the
+//! fill under the whole window of the app). The alpha of the
 //! color is the transparency of the popup: `#1e1e2e80` is half transparent.
 //!
 //! The order of lookup is: the token of the theme, then the window fill of the style.
@@ -15,6 +16,8 @@ pub enum Kind {
     Dropdown,
     Menu,
     Tooltip,
+    /// the windows and the modals: not the fill of the whole window of the app, which is `colors.window`
+    Window,
 }
 
 /// What the user gave for one theme; nothing set means the usual fill
@@ -23,11 +26,12 @@ pub struct PopupSet {
     pub dropdown_fill: Option<Color32>,
     pub menu_fill: Option<Color32>,
     pub tooltip_fill: Option<Color32>,
+    pub window_fill: Option<Color32>,
 }
 
 /// `[theme]`: 0 is light, 1 dark
 static TOKENS: RwLock<[PopupSet; 2]> = RwLock::new(
-    [PopupSet { dropdown_fill: None, menu_fill: None, tooltip_fill: None }; 2],
+    [PopupSet { dropdown_fill: None, menu_fill: None, tooltip_fill: None, window_fill: None }; 2],
 );
 
 /// The tokens given for a theme
@@ -52,6 +56,7 @@ pub fn fill(style: &Style, kind: Kind) -> Option<Color32> {
         Kind::Dropdown => set.dropdown_fill,
         Kind::Menu => set.menu_fill,
         Kind::Tooltip => set.tooltip_fill,
+        Kind::Window => set.window_fill,
     }
 }
 

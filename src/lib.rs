@@ -241,6 +241,7 @@ impl Context {
             ("dropdown_fill", pyegui_core::popup_style::Kind::Dropdown),
             ("menu_fill", pyegui_core::popup_style::Kind::Menu),
             ("tooltip_fill", pyegui_core::popup_style::Kind::Tooltip),
+            ("window_fill", pyegui_core::popup_style::Kind::Window),
         ] {
             d.set_item(name, hex(pyegui_core::popup_style::fill(&style, kind).unwrap_or(v.window_fill)))?;
         }
@@ -274,7 +275,7 @@ impl Context {
 
     /// Changes any value of the style of a theme by its path, the same paths as the dict of `style_snapshot`
     /// (`colors.panel`, `widgets.hovered.weak_fill`, `widgets.active.stroke`, `window.rounding`, `fonts.Body`,
-    /// `spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`, `popups.dropdown_fill`...). The widgets of a context (`menu`, `dropdown`, `sidebar`, `topbar`, `bottombar`) have their own tokens `<context>.<state>.<field>`, e.g. `menu.hovered.weak_fill`, looked up before `widgets.<state>.<field>`; `<context>.button_padding` (x, y) and `<context>.button_padding_radius` give the padding of their buttons, `spacing.button_padding_radius` does it for the whole app: a factor of the rounding of the buttons that the padding at the left and at the right is at least (a round button needs room for its corners). The fill of the popups is an RGBA color whose alpha is the transparency: `popups.dropdown_fill` (the list of a combo box), `popups.menu_fill` (menus and context menus) and `popups.tooltip_fill` (tooltips), e.g. `{"popups.dropdown_fill": "#1e1e2e80"}` for a half transparent dropdown. The tabs of a `Dock` and of a `tab_view` read the
+    /// `spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`, `popups.dropdown_fill`...). The widgets of a context (`menu`, `dropdown`, `sidebar`, `topbar`, `bottombar`) have their own tokens `<context>.<state>.<field>`, e.g. `menu.hovered.weak_fill`, looked up before `widgets.<state>.<field>`; `<context>.button_padding` (x, y) and `<context>.button_padding_radius` give the padding of their buttons, `spacing.button_padding_radius` does it for the whole app: a factor of the rounding of the buttons that the padding at the left and at the right is at least (a round button needs room for its corners). The fill of the popups is an RGBA color whose alpha is the transparency: `popups.dropdown_fill` (the list of a combo box), `popups.menu_fill` (menus and context menus) `popups.tooltip_fill` (tooltips) and `popups.window_fill` (windows and modals, while `colors.window` is the fill under the whole window of the app), e.g. `{"popups.dropdown_fill": "#1e1e2e80"}` for a half transparent dropdown. The tabs of a `Dock` and of a `tab_view` read the
     /// `tabs.*` (classic tabs) and `pill_tabs.*` tokens. Only the given paths are changed. Colors are "#rrggbb[aa]", (r, g, b[, a]);
     /// a stroke is (width, color); a rounding or a size is a float; a font is (size, family) or a size.
     ///
@@ -460,6 +461,7 @@ impl Context {
                         "dropdown_fill" => t.dropdown_fill = color,
                         "menu_fill" => t.menu_fill = color,
                         "tooltip_fill" => t.tooltip_fill = color,
+                        "window_fill" => t.window_fill = color,
                         _ => bad = true,
                     });
                     if bad {

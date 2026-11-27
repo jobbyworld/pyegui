@@ -15,11 +15,11 @@ ACCENT, OPACITY, LEVELS = "#3b82f6", 1.2, {"central": 0.3, "dock": 0.3}  # as in
 CONTRAST = {
     # opaque windows and popups, a little lighter than the glass, so that they stand out from the sheet behind them
     "light": {"spacing.button_padding_radius": 0.8, "menu.button_padding_radius": 0.8, "colors.text": "#1c1c1eff",
-              "colors.window": "#ffffffff", "popups.menu_fill": "#fdfdffff", "popups.dropdown_fill": "#fdfdffff",
+              "popups.window_fill": "#ffffffff", "popups.menu_fill": "#fdfdffff", "popups.dropdown_fill": "#fdfdffff",
               "popups.tooltip_fill": "#ffffffff"},
     # dark: the striped rows are lighter than the glass
     "dark": {"spacing.button_padding_radius": 0.8, "menu.button_padding_radius": 0.8, "colors.text": "#f2f2f7ff",
-             "colors.striped_bg": "#ffffff14", "colors.window": "#1d212cff", "popups.menu_fill": "#222734ff",
+             "colors.striped_bg": "#ffffff14", "colors.window": "#13151d70", "popups.window_fill": "#1d212cff", "popups.menu_fill": "#222734ff",
              "popups.dropdown_fill": "#222734ff", "popups.tooltip_fill": "#272c3bff"},
 }
 

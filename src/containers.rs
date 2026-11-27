@@ -265,8 +265,13 @@ unsafe fn window(
         let (x, y) = kwarg::<(f32, f32)>(kwargs, "anchor_offset")?.unwrap_or((0.0, 0.0));
         w = w.anchor(align, [x, y]);
     }
-    if has_frame_kwargs(kwargs)? {
-        w = w.frame(apply_frame_kwargs(egui::Frame::window(&ctx.global_style()), kwargs)?);
+    let window_fill = pyegui_core::popup_style::fill(&ctx.global_style(), pyegui_core::popup_style::Kind::Window);
+    if has_frame_kwargs(kwargs)? || window_fill.is_some() {
+        let mut base = egui::Frame::window(&ctx.global_style());
+        if let Some(color) = window_fill {
+            base = base.fill(color);
+        }
+        w = w.frame(apply_frame_kwargs(base, kwargs)?);
     }
 
     let show = |w: egui::Window<'_>| {
@@ -318,8 +323,13 @@ unsafe fn modal(
     if let Some(color) = kwarg_color(kwargs, "backdrop_color")? {
         m = m.backdrop_color(color);
     }
-    if has_frame_kwargs(kwargs)? {
-        m = m.frame(apply_frame_kwargs(egui::Frame::popup(&ctx.global_style()), kwargs)?);
+    let window_fill = pyegui_core::popup_style::fill(&ctx.global_style(), pyegui_core::popup_style::Kind::Window);
+    if has_frame_kwargs(kwargs)? || window_fill.is_some() {
+        let mut base = egui::Frame::popup(&ctx.global_style());
+        if let Some(color) = window_fill {
+            base = base.fill(color);
+        }
+        m = m.frame(apply_frame_kwargs(base, kwargs)?);
     }
 
     let response = m.show(&ctx, |ui| run_nested_update_func(ui, update_fun));

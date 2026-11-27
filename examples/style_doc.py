@@ -301,7 +301,8 @@ for _w in WIDGETS:
 
 # the popups are not drawn by a widget of the pages above
 USED_BY.update({"popups.dropdown_fill": ["ComboBox (the list)"], "popups.menu_fill": ["Menu / Popup (menus, context menus)"],
-                "popups.tooltip_fill": ["Menu / Popup / Tooltip (tooltips)"]})
+                "popups.tooltip_fill": ["Menu / Popup / Tooltip (tooltips)"],
+                "popups.window_fill": ["Window / Modal (not the fill under the whole window: colors.window)"]})
 
 # ---------------------------------------------------------------------------------------------------------
 # the style sheet: tokens of both themes, edits on top of the defaults, a global transparency
