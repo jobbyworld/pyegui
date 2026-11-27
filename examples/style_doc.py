@@ -140,6 +140,36 @@ WIDGETS = [
         name="Separator", category="Données", sample="", functions="separator",
         parts=[("Ligne", [row("Trait", stroke="widgets.noninteractive.stroke")])],
     ),
+    dict(
+        name="PropertySet", category="Widgets du framework", sample="Valeur", functions="PropertySet, property_set",
+        note="Une page de propriétés comme la fenêtre Propriétés de Visual Studio. Tout vient des jetons des widgets non interactifs et de la sélection, atténués par un facteur (×0.7 = alpha multiplié).",
+        parts=[
+            ("Cadre", [row("Cadre", stroke="widgets.noninteractive.stroke", text="colors.text", rounding=8)]),
+            ("En-tête de groupe", [row("Repos", fill="widgets.noninteractive.weak_fill*0.7", text="colors.strong_text"), row("Survol", fill="widgets.noninteractive.weak_fill", text="colors.strong_text"), row("Compteur", text="colors.weak_text")]),
+            ("Ligne", [row("Repos", text="colors.text"), row("Survol", fill="widgets.hovered.weak_fill*0.5", text="colors.text"), row("Sélectionnée", fill="colors.selection_bg*0.35", text="colors.text"), row("Lecture seule", text="colors.weak_text"), row("Séparateur", stroke="widgets.noninteractive.stroke*0.6"), row("Champ qui a le focus", stroke="colors.selection_stroke", text="colors.text", rounding=3)]),
+            ("Description", [row("Zone de description", fill="widgets.noninteractive.weak_fill*0.8", text="colors.text", rounding=8)]),
+        ],
+    ),
+    dict(
+        name="Table", category="Widgets du framework", sample="cellule", functions="table, table(view=...), TableView",
+        note="Le titre est fort quand la colonne est triée ou survolée, faible sinon. La barre de défilement horizontale se dessine avec la couleur du texte à faible alpha.",
+        parts=[
+            ("En-tête", [row("Trait sous l'en-tête", stroke="widgets.noninteractive.stroke"), row("Titre (trié ou survolé)", text="colors.strong_text"), row("Titre (autre colonne)", text="colors.weak_text"), row("Filtre actif", text="colors.hyperlink"), row("Filtre inactif", text="colors.weak_text"), row("Colonne déplacée", fill="colors.text*0.08", text="colors.text")]),
+            ("Lignes", [row("Normale", text="colors.text"), row("Rayée", fill="colors.striped_bg", text="colors.text"), row("Survol", fill="colors.text*0.06", text="colors.text"), row("Sélectionnée", fill="colors.selection_bg", text="colors.text")]),
+            ("Barre de défilement horizontale", [row("Piste", fill="colors.text*0.08", rounding=3), row("Poignée", fill="colors.text*0.3", rounding=3), row("Poignée (survol, glissée)", fill="colors.text*0.5", rounding=3)]),
+            ("Réglage des colonnes", [row("Bouton au repos", fill="widgets.inactive.weak_fill", text="colors.text", rounding=4), row("Bouton au survol", fill="widgets.hovered.fill", text="colors.text", rounding=4), row("Ligne survolée", fill="widgets.hovered.weak_fill", text="colors.text", rounding=5), row("Ligne glissée", fill="colors.selection_bg*0.35", text="colors.text", rounding=5)]),
+        ],
+    ),
+    dict(
+        name="TreeView", category="Widgets du framework", sample="dossier", functions="tree_view, TreeView, TagTreeView",
+        note="Dessiné par egui_ltreeview. La sélection d'un arbre sans focus est un fond discret, pas la couleur de la sélection.",
+        parts=[("Lignes", [row("Normale", text="colors.text"), row("Sélectionnée (arbre actif)", fill="colors.selection_bg", text="colors.selection_stroke", rounding="widgets.active.rounding"), row("Sélectionnée (sans focus)", fill="widgets.inactive.weak_fill*0.3", text="colors.text", rounding="widgets.active.rounding")]), ("Repères", [row("Guides d'indentation", stroke="widgets.noninteractive.stroke"), row("Marqueur de dépôt", fill="colors.selection_bg*0.6", rounding="widgets.active.rounding")])],
+    ),
+    dict(
+        name="FileListView / FileTreeView", category="Widgets du framework", sample="photo.png", functions="FileListView, FileIconView, FileTreeView",
+        note="Une sélection avec le focus utilise la sélection du thème; sans focus, la couleur du texte à 15 %. Un dossier visé par un dépôt prend un cadre de la couleur de la sélection.",
+        parts=[("Éléments", [row("Normal", text="colors.text"), row("Rayé (liste)", fill="colors.striped_bg", text="colors.text"), row("Survol", fill="widgets.hovered.weak_fill*0.5", text="colors.text", rounding=4), row("Sélectionné (focus)", fill="colors.selection_bg", text="colors.selection_stroke", rounding=4), row("Sélectionné (sans focus)", fill="colors.text*0.15", text="colors.strong_text", rounding=4), row("Cible d'un dépôt", fill="colors.selection_bg*0.25", stroke="colors.selection_bg", text="colors.text", rounding=4)]), ("Séparateurs", [row("Colonnes et en-tête", stroke="widgets.noninteractive.stroke"), row("Entre les lignes", stroke="widgets.noninteractive.stroke*0.6")])],
+    ),
 ]
 
 CATEGORIES = []
@@ -147,16 +177,25 @@ for w in WIDGETS:
     if w["category"] not in CATEGORIES:
         CATEGORIES.append(w["category"])
 
+def split(path):
+    """a path with a factor, `colors.selection_bg*0.35`: the token and the factor the widget applies to its alpha"""
+    if isinstance(path, str) and "*" in path:
+        name, factor = path.split("*")
+        return name, float(factor)
+    return path, 1.0
+
+
 # which widgets use which token (read from the rows above)
 USED_BY = {}
 for _w in WIDGETS:
     for _title, _rows in _w["parts"]:
         for _r in _rows:
             for _key in ("fill", "stroke", "text", "rounding"):
-                if _r[_key]:
-                    USED_BY.setdefault(_r[_key], [])
-                    if _w["name"] not in USED_BY[_r[_key]]:
-                        USED_BY[_r[_key]].append(_w["name"])
+                if isinstance(_r[_key], str):
+                    _token = split(_r[_key])[0]
+                    USED_BY.setdefault(_token, [])
+                    if _w["name"] not in USED_BY[_token]:
+                        USED_BY[_token].append(_w["name"])
 
 # ---------------------------------------------------------------------------------------------------------
 # the style sheet: tokens of both themes, edits on top of the defaults, a global transparency
@@ -297,6 +336,10 @@ def resolve(theme, path, dim=1.0):
     """the value of a token in a theme, as drawn (transparency and fade of disabled widgets included)"""
     if path is None:
         return None
+    if isinstance(path, (int, float)):  # a fixed value of the widget, not a token
+        return path
+    path, factor = split(path)
+    dim = dim * factor
     value = view[theme].get(path)
     if value is None:
         return None
@@ -313,9 +356,12 @@ def describe(theme, r):
     for name, key in (("fond", "fill"), ("bord", "stroke"), ("texte", "text")):
         path = r[key]
         if path:
-            value = (edits[theme].get(path) or base[theme].get(path))
-            parts.append(f"{name} {format_value(value)}")
-    if r["rounding"]:
+            token, factor = split(path)
+            value = edits[theme].get(token) or base[theme].get(token)
+            parts.append(f"{name} {format_value(value)}" + (f" ×{factor:g}" if factor != 1.0 else ""))
+    if isinstance(r["rounding"], (int, float)):
+        parts.append(f"rayon {r['rounding']:g} (fixe)")
+    elif r["rounding"]:
         parts.append(f"rayon {view[theme].get(r['rounding'])}")
     if r["font"]:
         size, family = font_of(theme, r["font"])
@@ -388,7 +434,7 @@ def widget_page(w):
 
         columns(2, pair)
         add_space(8)
-    paths = sorted({p for _, rs in w["parts"] for r in rs for p in (r["fill"], r["stroke"], r["text"], r["rounding"]) if p})
+    paths = sorted({split(p)[0] for _, rs in w["parts"] for r in rs for p in (r["fill"], r["stroke"], r["text"], r["rounding"]) if isinstance(p, str)})
     collapsing("Jetons utilisés", lambda: [code(p) for p in paths])
 
 
