@@ -10,7 +10,7 @@ path_combo (a menu of the parent folders) and the path bar a path_breadcrumb.
 Mouse: click to select, double click to open (folders here, files with their app). Right-click
 opens the action palette. In the tree view, the arrow of a folder shows its contents in the tree.
 Keyboard: arrows to select, Enter or Cmd+Down to open, Backspace or Cmd+Up for the parent folder,
-Cmd+[ and Cmd+] to go back and forward, Escape to clear the search and the selection,
+Cmd+Left and Cmd+Right to go back and forward, Escape to clear the search and the selection,
 Space or Cmd+P to open the action palette (search and run an action for the current selection).
 
     python finder.py [folder]
@@ -2695,9 +2695,9 @@ def keyboard():
         return
     if key_pressed("Cmd+ArrowUp") or key_pressed("Backspace"):
         up()
-    if key_pressed("Cmd+OpenBracket"):
+    if key_pressed("Cmd+ArrowLeft"):
         back()
-    if key_pressed("Cmd+CloseBracket"):
+    if key_pressed("Cmd+ArrowRight"):
         forward()
     if key_pressed("Escape", when_typing=True):
         if reading.value:
@@ -6296,8 +6296,8 @@ def export_markdown_pdf():
 
 # category, label, icon, shortcut, enabled, run. "Cmd" is the command key on macOS and ctrl elsewhere
 ACTIONS = [
-    ("Navigation", "Précédent", "chevron-left", "Cmd+OpenBracket", lambda: bool(reading.value) or position.value > 0, lambda: back()),
-    ("Navigation", "Suivant", "chevron-right", "Cmd+CloseBracket", lambda: position.value < len(history) - 1, lambda: forward()),
+    ("Navigation", "Précédent", "chevron-left", "Cmd+ArrowLeft", lambda: bool(reading.value) or position.value > 0, lambda: back()),
+    ("Navigation", "Suivant", "chevron-right", "Cmd+ArrowRight", lambda: position.value < len(history) - 1, lambda: forward()),
     ("Ouvrir", "Nouvelle fenêtre", "dock", "Cmd+N", lambda: True, lambda: new_window(new_target())),
     ("Ouvrir", "Nouvel onglet", "dock", "Cmd+Shift+T", lambda: True, lambda: new_tab()),
     ("Ouvrir", "Ouvrir", "open", "Cmd+ArrowDown", has_selection, action_open),

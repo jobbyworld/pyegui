@@ -135,8 +135,8 @@ pub static ACTIONS: &[Action] = &[
     Action { category: "Chemin", label: "Afficher dans le gestionnaire", icon: "reveal", shortcut: None, enabled: has_selection, run: |app, _| {
         if let Some(p) = app.selected_paths().first() { reveal(p); }
     }},
-    Action { category: "Navigation", label: "Précédent", icon: "chevron-left", shortcut: cmd(Key::OpenBracket), enabled: |a| a.history.can_back(), run: |app, _| app.back() },
-    Action { category: "Navigation", label: "Suivant", icon: "chevron-right", shortcut: cmd(Key::CloseBracket), enabled: |a| a.history.can_forward(), run: |app, _| app.forward() },
+    Action { category: "Navigation", label: "Précédent", icon: "chevron-left", shortcut: cmd(Key::ArrowLeft), enabled: |a| a.history.can_back(), run: |app, _| app.back() },
+    Action { category: "Navigation", label: "Suivant", icon: "chevron-right", shortcut: cmd(Key::ArrowRight), enabled: |a| a.history.can_forward(), run: |app, _| app.forward() },
     Action { category: "Navigation", label: "Dossier parent", icon: "folder-up", shortcut: cmd(Key::ArrowUp), enabled: |a| a.folder().parent().is_some(), run: |app, _| app.parent() },
     Action { category: "Affichage", label: "Arbre", icon: "tree", shortcut: cmd(Key::Num1), enabled: always, run: |app, _| app.view = ViewMode::Tree },
     Action { category: "Affichage", label: "Liste", icon: "list", shortcut: cmd(Key::Num2), enabled: always, run: |app, _| app.view = ViewMode::List },
