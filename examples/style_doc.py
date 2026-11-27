@@ -208,6 +208,11 @@ WIDGETS = [
         ],
     ),
     dict(
+        name="DataGrid", category="Widgets du framework", sample="Pomme", functions="DataGrid, data_grid (liste ou arbre, cellules éditables)",
+        note="Une grille de données qui n'est pas liée aux fichiers: la liste et l'arbre dessinent comme les vues de fichiers. La sélection avec le focus est la sélection du thème; sans focus, le texte à 15 %.",
+        parts=[("Lignes", [row("Normale", text="colors.text"), row("Rayée", fill="colors.striped_bg", text="colors.text"), row("Survol", fill="colors.text*0.06", text="colors.text"), row("Sélectionnée (focus)", fill="colors.selection_bg", text="colors.selection_stroke"), row("Sélectionnée (sans focus)", fill="colors.text*0.15", text="colors.strong_text")]), ("En-tête", [row("Trait sous l'en-tête", stroke="widgets.noninteractive.stroke"), row("Titre", text="colors.weak_text"), row("Titre trié", text="colors.strong_text")]), ("Cellule en édition", [row("Champ", fill="colors.text_edit_bg", stroke="colors.selection_stroke", text="colors.text", rounding="widgets.inactive.rounding")])],
+    ),
+    dict(
         name="TreeView", category="Widgets du framework", sample="dossier", functions="tree_view, TreeView, TagTreeView",
         note="Dessiné par egui_ltreeview. La sélection d'un arbre sans focus est un fond discret, pas la couleur de la sélection.",
         parts=[("Lignes", [row("Normale", text="colors.text"), row("Sélectionnée (arbre actif)", fill="colors.selection_bg", text="colors.selection_stroke", rounding="widgets.active.rounding"), row("Sélectionnée (sans focus)", fill="widgets.inactive.weak_fill*0.3", text="colors.text", rounding="widgets.active.rounding")]), ("Repères", [row("Guides d'indentation", stroke="widgets.noninteractive.stroke"), row("Marqueur de dépôt", fill="colors.selection_bg*0.6", rounding="widgets.active.rounding")])],
@@ -550,6 +555,24 @@ def preview_tabs(pill):
         t.add(f"Onglet {len(t.titles) + 1}")
 
 
+GRID_DATA = {
+    "1": ["Fruits", "", "Paris"], "2": ["Pomme", "12", "Lyon"], "3": ["Poire", "4", "Nice"],
+    "4": ["Légumes", "", "Lille"], "5": ["Carotte", "30", "Paris"], "6": ["Navet", "7", "Lille"],
+}
+GRID_PARENTS = {"2": "1", "3": "1", "5": "4", "6": "4"}
+GRID = DataGrid([dict(key="name", title="Nom", editable=True, width=200), dict(key="qty", title="Quantité", type="number", width=100, editable=True), dict(key="city", title="Ville", type="choice", width=120)], id="sd-grid")
+GRID.expanded = ["1", "4"]
+
+
+def preview_grid():
+    """a tree of cells that can be edited with a double click, sorted and filtered from its header"""
+    data_grid(GRID, [dict(id=i, cells=c, parent=GRID_PARENTS.get(i)) for i, c in GRID_DATA.items()], tree=True, settings=True, max_height=190)
+    edit = GRID.take_edited()
+    if edit:
+        row, column, text = edit
+        GRID_DATA[row][{"name": 0, "qty": 1, "city": 2}[column]] = text
+
+
 PREVIEWS = {
     "Label": lambda: (label("Texte courant"), strong("Texte fort"), weak("Texte faible"), small("Petit texte"), heading("Titre"), colored_label("#ef4444", "Texte coloré")),
     "Hyperlink": lambda: (hyperlink_to("pyegui sur GitHub", "https://github.com/GachiLord/pyegui"), link_clicked("un faux lien")),
@@ -576,6 +599,7 @@ PREVIEWS = {
     "Tags (puces)": lambda: tags_edit(pv["tags"]),
     "Liste de choix (simple / multiple)": lambda: (label("Choix multiple"), preview_choice(True), label("Choix unique"), preview_choice(False)),
     "TreeView": lambda: tree_view(pv["tree"], NODES),
+    "DataGrid": preview_grid,
     "FileListView / FileTreeView": preview_files,
 }
 

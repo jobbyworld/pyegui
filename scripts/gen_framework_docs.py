@@ -72,7 +72,7 @@ THEMES = [
      "Widgets for collections. Tables only draw the visible rows, so they stay fast with many "
      "rows. A `TreeView` keeps the selection and the opened folders, the nodes are rebuilt each "
      "frame.",
-     ["table", "TableView", "table_ui", "tree_view", "TreeView", "TreeNode", "plot", "PlotLine",
+     ["table", "TableView", "table_ui", "DataGrid", "data_grid", "tree_view", "TreeView", "TreeNode", "plot", "PlotLine",
       "PlotPoints", "PlotBars", "PlotRule"]),
     ("docking", "Docking tabs",
      "A `Dock` holds panes shown as tabs that the user can resize, rearrange by dragging and "

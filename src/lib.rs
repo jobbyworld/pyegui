@@ -23,6 +23,7 @@ mod icons;
 mod layout;
 mod dock;
 mod tab_view;
+mod grid;
 mod files;
 mod markdown;
 #[cfg(feature = "pdf")]
@@ -3269,6 +3270,7 @@ fn pyegui(m: &Bound<'_, PyModule>) -> PyResult<()> {
     transfer::register(m)?;
     dock::register(m)?;
     tab_view::register(m)?;
+    grid::register(m)?;
     plot::register(m)?;
     markdown::register(m)?;
     #[cfg(feature = "pdf")]
