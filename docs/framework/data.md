@@ -121,7 +121,7 @@ draw it with `data_grid`.
 
 **Args**
 
-- `columns` (list[dict]): the columns, each a dict with `key` (what the state and the events name it by), `title` (default the key), `type` ("text", "number", "date" or "choice", default "text"), `width` (default 120) and `editable` (a double click on a cell, or F2, edits it)
+- `columns` (list[dict]): the columns, each a dict with `key` (what the state and the events name it by), `title` (default the key), `type` ("text", "number", "date" or "choice", default "text"), `width` (default 120) `editable` (a double click on a cell, or F2, edits it) and `custom` (the cells are drawn by the `cell` function of `data_grid`, with widgets)
 - `id` (str): tells apart two grids of a ui. Default is "grid"
 
 **Example:**
@@ -171,7 +171,7 @@ only the visible rows are drawn.
 **Args**
 
 - `grid` (DataGrid): the state
-- `rows` (list[dict]): the rows, each a dict with `id` (unique), `cells` (the texts, in the order of the columns, or a dict by column key), `parent` (the id of the parent row, for a tree) and `readonly`
+- `rows` (list[dict]): the rows, each a dict with `id` (unique), `cells` (the texts, in the order of the columns, or a dict by column key), `parent` (the id of the parent row, for a tree), `readonly` and `icon` (an image uri drawn before the text of the first column, e.g. "file://..." or "bytes://...")
 
 **Keyword args**
 
@@ -185,6 +185,10 @@ only the visible rows are drawn.
 - `indent` (float): the indentation of a level of the tree. Default is 16
 - `drag` (bool): tell the start of a drag of the selection (`take_drag_started`). Default is False
 - `context_menu` (callable): called with the list of ids concerned when a row is right-clicked, inside a menu
+- `cell` (callable): called with the row id and the column key for each cell of a column with `custom=True`, in a ui of the size of the cell: draw a widget there (a chip, a switch, a button)
+
+An empty area under the rows clears the selection on a click, and a drag there draws a lasso that selects the
+rows it touches (Cmd or Shift keeps the selection).
 
 **Example:**
 

@@ -18,7 +18,8 @@ use pyegui_core::grid::{show, GridColumn, GridOptions, GridOutput, GridRow, Grid
 /// Args:
 ///     columns (list[dict]): the columns, each a dict with `key` (what the state and the events name it by), `title`
 ///         (default the key), `type` ("text", "number", "date" or "choice", default "text"), `width` (default 120)
-///         and `editable` (a double click on a cell, or F2, edits it)
+///         `editable` (a double click on a cell, or F2, edits it) and `custom` (the cells are drawn by the `cell`
+///         function of `data_grid`, with widgets)
 ///     id (str): tells apart two grids of a ui. Default is "grid"
 ///
 /// Example::
@@ -63,6 +64,9 @@ fn columns_from_py(columns: &Bound<'_, PyList>) -> PyResult<Vec<GridColumn>> {
         if let Some(e) = d.get_item("editable")? {
             column.editable = e.extract()?;
         }
+        if let Some(e) = d.get_item("custom")? {
+            column.custom = e.extract()?;
+        }
         if out.iter().any(|c: &GridColumn| c.key == key) {
             return Err(PyValueError::new_err(format!("two columns have the key '{key}'")));
         }
@@ -103,7 +107,8 @@ fn rows_from_py(rows: &Bound<'_, PyAny>, columns: &[GridColumn]) -> PyResult<Vec
         };
         let parent = d.get_item("parent")?.filter(|v| !v.is_none()).map(|v| v.str().map(|s| s.to_string())).transpose()?;
         let readonly = d.get_item("readonly")?.map(|v| v.extract()).transpose()?.unwrap_or(false);
-        out.push(GridRow { id, cells, parent, readonly });
+        let icon = d.get_item("icon")?.filter(|v| !v.is_none()).map(|v| v.extract::<String>()).transpose()?;
+        out.push(GridRow { id, cells, parent, readonly, icon });
     }
     Ok(out)
 }
@@ -275,7 +280,8 @@ impl DataGrid {
 /// Args:
 ///     grid (DataGrid): the state
 ///     rows (list[dict]): the rows, each a dict with `id` (unique), `cells` (the texts, in the order of the columns,
-///         or a dict by column key), `parent` (the id of the parent row, for a tree) and `readonly`
+///         or a dict by column key), `parent` (the id of the parent row, for a tree), `readonly` and `icon` (an
+///         image uri drawn before the text of the first column, e.g. "file://..." or "bytes://...")
 ///
 /// Keyword args:
 ///     tree (bool): the rows are a tree (`parent`), with a chevron and an indentation in the first column. Default is False
@@ -288,6 +294,11 @@ impl DataGrid {
 ///     indent (float): the indentation of a level of the tree. Default is 16
 ///     drag (bool): tell the start of a drag of the selection (`take_drag_started`). Default is False
 ///     context_menu (callable): called with the list of ids concerned when a row is right-clicked, inside a menu
+///     cell (callable): called with the row id and the column key for each cell of a column with `custom=True`, in
+///         a ui of the size of the cell: draw a widget there (a chip, a switch, a button)
+///
+/// An empty area under the rows clears the selection on a click, and a drag there draws a lasso that selects the
+/// rows it touches (Cmd or Shift keeps the selection).
 ///
 /// Example::
 ///
@@ -315,22 +326,31 @@ unsafe fn data_grid(py: Python<'_>, grid: Py<DataGrid>, rows: &Bound<'_, PyAny>,
     options.indent = kwarg(kwargs, "indent")?.unwrap_or(16.0);
     options.drag = kwarg(kwargs, "drag")?.unwrap_or(false);
     let menu: Option<Bound<'_, PyAny>> = kwarg(kwargs, "context_menu")?;
+    let cell_fn: Option<Bound<'_, PyAny>> = kwarg(kwargs, "cell")?;
 
     // the state is not borrowed while the grid is drawn: the menu may read the grid
     let mut state = std::mem::take(&mut grid.borrow_mut(py).state);
     let ui = current_ui(&UI)?;
-    let mut error: Option<PyErr> = None;
+    let error: std::cell::RefCell<Option<PyErr>> = std::cell::RefCell::new(None);
     let out: GridOutput = show(
         ui,
         &mut state,
         &columns,
         &rows,
         &options,
-        &mut |_ui: &mut egui::Ui, _row: &GridRow, _col: &GridColumn, _rect: egui::Rect| false,
+        &mut |ui: &mut egui::Ui, row: &GridRow, col: &GridColumn, rect: egui::Rect| {
+            let (Some(f), true) = (&cell_fn, error.borrow().is_none()) else { return false };
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(6.0, 1.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            child.shrink_clip_rect(rect);
+            if let Err(e) = run_nested_call(&mut child, f, (row.id.clone(), col.key.clone())) {
+                *error.borrow_mut() = Some(e);
+            }
+            true
+        },
         &mut |ui: &mut egui::Ui, ids: &[String]| {
-            if let (Some(f), None) = (&menu, &error) {
+            if let (Some(f), true) = (&menu, error.borrow().is_none()) {
                 if let Err(e) = run_nested_call(ui, f, (ids.to_vec(),)) {
-                    error = Some(e);
+                    *error.borrow_mut() = Some(e);
                 }
             }
         },
@@ -354,7 +374,7 @@ unsafe fn data_grid(py: Python<'_>, grid: Py<DataGrid>, rows: &Bound<'_, PyAny>,
     }
     g.hovered = out.hovered;
     g.shown = out.shown;
-    match error {
+    match error.into_inner() {
         Some(e) => Err(e),
         None => Ok(()),
     }

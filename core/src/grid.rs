@@ -26,11 +26,13 @@ pub struct GridColumn {
     /// a double click on a cell of the column (or F2 on the row) edits it in place
     pub editable: bool,
     pub icon: Option<crate::columns::ColumnIcon>,
+    /// the cells are drawn by the caller (the `cell` function of `show`), not as text
+    pub custom: bool,
 }
 
 impl GridColumn {
     pub fn new(key: &str, title: &str) -> Self {
-        GridColumn { key: key.into(), title: title.into(), ty: DataType::Text, width: DEFAULT_WIDTH, editable: false, icon: None }
+        GridColumn { key: key.into(), title: title.into(), ty: DataType::Text, width: DEFAULT_WIDTH, editable: false, icon: None, custom: false }
     }
 }
 
@@ -43,6 +45,8 @@ pub struct GridRow {
     pub parent: Option<String>,
     /// the row cannot be edited
     pub readonly: bool,
+    /// an image (an uri) drawn before the text of the first column
+    pub icon: Option<String>,
 }
 
 /// The cell being edited
@@ -76,6 +80,11 @@ pub struct GridState {
     pub scroll_to: Option<String>,
     /// the grid has the keyboard focus (read it to tint the selection)
     pub focused: bool,
+    /// the lasso being drawn: where it started (in the coordinates of the content) and the selection it keeps
+    pub band: Option<(egui::Vec2, Vec<String>)>,
+    /// the scroll offset of the last frame, and what the lasso asks to scroll by
+    pub offset_y: f32,
+    pub scroll_by: f32,
 }
 
 impl Default for ColumnsState {
@@ -315,6 +324,20 @@ pub enum Target {
     End,
 }
 
+/// The ids of the rows (`row_height` high, one after the other from 0) that a band from `top` to `bottom` touches
+pub fn rows_in_band(shown: &[String], row_height: f32, top: f32, bottom: f32) -> Vec<String> {
+    let (top, bottom) = if top <= bottom { (top, bottom) } else { (bottom, top) };
+    if shown.is_empty() || row_height <= 0.0 || bottom < 0.0 {
+        return vec![];
+    }
+    let first = (top.max(0.0) / row_height).floor() as usize;
+    let last = ((bottom / row_height).floor() as usize).min(shown.len() - 1);
+    if first > last {
+        return vec![];
+    }
+    shown[first..=last].to_vec()
+}
+
 // -- drawing ------------------------------------------------------------------------------------------------
 
 /// Draws the grid. `cell` may draw a cell itself (a chip, a switch): called with the cell rectangle, it returns
@@ -415,7 +438,12 @@ pub fn show(
     let text_color = ui.visuals().text_color();
     let faint = ui.visuals().faint_bg_color;
 
+    // the empty space (and the rows' gaps) answers to a click that clears the selection and to the lasso
+    let band_sense = ui.interact(body_rect, id.with("band"), if options.multi_select { Sense::click_and_drag() } else { Sense::click() });
     let mut area = egui::ScrollArea::vertical().id_salt(id.with("rows")).max_height(body_height).auto_shrink([false, options.max_height.is_some()]);
+    if state.scroll_by != 0.0 {
+        area = area.vertical_scroll_offset((state.offset_y + std::mem::take(&mut state.scroll_by)).max(0.0));
+    }
     if let Some(target) = state.scroll_to.take() {
         if let Some(i) = shown_ids.iter().position(|s| *s == target) {
             area = area.vertical_scroll_offset((i as f32 * row_height - body_height / 2.0).max(0.0));
@@ -482,6 +510,15 @@ pub fn show(
                     }
                     left += 16.0;
                 }
+                if is_first {
+                    if let Some(uri) = &row.icon {
+                        let icon = Rect::from_min_size(pos2(left, cell_rect.center().y - 8.0), vec2(16.0, 16.0));
+                        if icon.intersects(clip) {
+                            egui::Image::new(uri.as_str()).fit_to_exact_size(vec2(16.0, 16.0)).paint_at(ui, icon);
+                        }
+                        left += 20.0;
+                    }
+                }
                 let editing_here = state.editing.as_ref().is_some_and(|e| e.row == row.id && e.column == column.key);
                 let text = row.cells.get(c).map_or("", |s| s.as_str());
                 if editing_here {
@@ -501,7 +538,7 @@ pub fn show(
                     }
                     continue;
                 }
-                if cell(ui, row, column, cell_rect.intersect(clip)) {
+                if column.custom && cell(ui, row, column, cell_rect.intersect(clip)) {
                     continue;
                 }
                 let painter = ui.painter().with_clip_rect(clip);
@@ -534,6 +571,50 @@ pub fn show(
         }
     });
     hscroll_bar(ui, id, &mut state.columns, &zones, output.inner_rect);
+    state.offset_y = output.state.offset().y;
+
+    // the lasso
+    if options.multi_select {
+        let origin = output.inner_rect.min - vec2(0.0, output.state.offset().y);
+        let mods = ui.input(|i| i.modifiers);
+        if band_sense.drag_started() {
+            if let Some(start) = ui.input(|i| i.pointer.press_origin()) {
+                let kept = if mods.command || mods.shift { state.selected.clone() } else { vec![] };
+                state.band = Some((start - origin, kept));
+            }
+        }
+        if band_sense.drag_stopped() || !band_sense.dragged() {
+            state.band = None;
+        } else if let (Some((start, kept)), Some(here)) = (state.band.clone(), ui.input(|i| i.pointer.interact_pos())) {
+            let end = here - origin;
+            let mut selected = kept;
+            for id in rows_in_band(&shown_ids, row_height, start.y.min(end.y), start.y.max(end.y)) {
+                if !selected.contains(&id) {
+                    selected.push(id);
+                }
+            }
+            if selected != state.selected {
+                state.selected = selected;
+                state.cursor = state.selected.last().cloned();
+                out.selection_changed = true;
+            }
+            let accent = ui.visuals().selection.bg_fill;
+            let band = Rect::from_two_pos(pos2(start.x, start.y) + origin.to_vec2(), here).intersect(output.inner_rect);
+            ui.painter().rect(band, 2.0, accent.gamma_multiply(0.25), egui::Stroke::new(1.0, accent), egui::StrokeKind::Inside);
+            let rows_area = output.inner_rect;
+            let past = if here.y < rows_area.top() { here.y - rows_area.top() } else if here.y > rows_area.bottom() { here.y - rows_area.bottom() } else { 0.0 };
+            if past != 0.0 {
+                state.scroll_by = past.clamp(-30.0, 30.0);
+                ui.ctx().request_repaint();
+            }
+        }
+        if band_sense.clicked() && !mods.command && !mods.shift && state.editing.is_none() && !state.selected.is_empty() {
+            focus.request_focus();
+            state.selected.clear();
+            state.cursor = None;
+            out.selection_changed = true;
+        }
+    }
 
     // what the frame decided
     if let Some((row, modifiers)) = clicked {
@@ -642,7 +723,7 @@ mod tests {
     use super::*;
 
     fn rows() -> Vec<GridRow> {
-        let r = |id: &str, parent: Option<&str>, name: &str, n: &str| GridRow { id: id.into(), cells: vec![name.into(), n.into()], parent: parent.map(String::from), readonly: false };
+        let r = |id: &str, parent: Option<&str>, name: &str, n: &str| GridRow { id: id.into(), cells: vec![name.into(), n.into()], parent: parent.map(String::from), readonly: false, icon: None };
         vec![r("a", None, "Alpha", "3"), r("b", None, "Bravo", "10"), r("a1", Some("a"), "Child 1", "2"), r("a2", Some("a"), "Child 2", "1"), r("b1", Some("b"), "Kid", "5")]
     }
 
@@ -654,6 +735,15 @@ mod tests {
 
     fn ids(shown: &[Shown], rows: &[GridRow]) -> Vec<String> {
         shown.iter().map(|s| rows[s.index].id.clone()).collect()
+    }
+
+    #[test]
+    fn the_lasso_takes_the_rows_it_touches() {
+        let ids: Vec<String> = ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(rows_in_band(&ids, 20.0, 25.0, 45.0), vec!["b", "c"]);
+        assert_eq!(rows_in_band(&ids, 20.0, 70.0, 10.0), vec!["a", "b", "c", "d"]);
+        assert_eq!(rows_in_band(&ids, 20.0, 500.0, 600.0), Vec::<String>::new());
+        assert!(rows_in_band(&[], 20.0, 0.0, 10.0).is_empty());
     }
 
     #[test]
