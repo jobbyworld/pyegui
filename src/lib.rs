@@ -2066,6 +2066,9 @@ unsafe fn text_edit_multiline(text: &mut Str, kwargs: Option<&Bound<'_, PyDict>>
 ///
 ///     frame (bool): False shows only the text, until hovered
 ///
+///     request_focus (bool): True gives the keyboard focus to the button (Enter or Space then click it). Pass it
+///         on the frame a dialog opens, not on every frame
+///
 /// Example::
 ///
 ///     if button_clicked("click me"):
@@ -2099,7 +2102,11 @@ unsafe fn button_clicked(text: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyRe
         button = button.frame(frame);
     }
 
-    Ok(ui.add(button).clicked())
+    let response = ui.add(button);
+    if kwarg::<bool>(kwargs, "request_focus")?.unwrap_or(false) {
+        response.request_focus();
+    }
+    Ok(response.clicked())
 }
 
 /// Returns true if the small button was clicked this frame

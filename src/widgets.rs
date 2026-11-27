@@ -1092,7 +1092,17 @@ unsafe fn key_pressed(shortcut: &str, when_typing: bool) -> PyResult<bool> {
     if !when_typing && (ctx.text_edit_focused() || crate::terminal::terminal_focused(&ctx)) {
         return Ok(false);
     }
-    Ok(ctx.input(|i| i.key_pressed(key) && i.modifiers.matches_logically(modifiers)))
+    Ok(ctx.input(|i| {
+        // Windows: egui-winit turns Shift+Delete into a Cut event and the key itself is not seen
+        let shift_delete = cfg!(windows)
+            && key == egui::Key::Delete
+            && modifiers.shift
+            && !modifiers.command
+            && i.modifiers.shift
+            && !i.modifiers.command
+            && i.events.iter().any(|e| matches!(e, egui::Event::Cut));
+        shift_delete || (i.key_pressed(key) && i.modifiers.matches_logically(modifiers))
+    }))
 }
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

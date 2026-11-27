@@ -14,6 +14,7 @@ Returns true if the button was clicked this frame
 - `text_color` (color): color of the text
 - `min_size` (tuple[float, float]): minimum width and height
 - `frame` (bool): False shows only the text, until hovered
+- `request_focus` (bool): True gives the keyboard focus to the button (Enter or Space then click it). Pass it on the frame a dialog opens, not on every frame
 
 **Example:**
 

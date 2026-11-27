@@ -2520,6 +2520,7 @@ def popup_open():
         or tag_manager_open.value
         or meta_open["manager"]
         or meta_open["rules"]
+        or delete_ask["paths"]
     )
 
 
@@ -5311,6 +5312,62 @@ def trash():
     focus_zone.value = "content"  # the keys go on in the files, even if the action was run from the dock
 
 
+delete_ask = {"paths": [], "fresh": False}  # what Shift+Delete asked to delete for good, until the answer
+
+
+def delete_for_good_ask():
+    """Shift+Delete: asks, then deletes the selection without the trash"""
+    delete_ask["paths"] = [str(p) for p in chosen()]
+    delete_ask["fresh"] = True
+
+
+def delete_for_good():
+    paths = delete_ask["paths"]
+    delete_ask["paths"] = []
+    if not paths:
+        return
+    try:
+        following = next_after(paths)
+    except Exception:  # never in the way of the deletion
+        following = None
+    for path in paths:
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+        except OSError as error:
+            print(f"delete: {path}: {error}", file=sys.stderr)
+    refresh(current())
+    deselect()
+    if following and Path(following).exists():
+        select_path(following)  # the selection goes on to the next item
+        scroll_target.value = following
+    focus_zone.value = "content"
+
+
+def delete_dialog():
+    """the question of Shift+Delete: the button that deletes has the focus, so Enter validates; Escape cancels"""
+
+    def form():
+        set_width(360)
+        heading("Supprimer définitivement ?")
+        label(f"{len(delete_ask['paths'])} élément(s) seront supprimés, sans corbeille.")
+        first = delete_ask["fresh"]
+        delete_ask["fresh"] = False
+
+        def buttons():
+            if button_clicked("Annuler"):
+                delete_ask["paths"] = []
+            if button_clicked("Supprimer", text_color="#dc3c3c", request_focus=first):
+                delete_for_good()
+
+        horizontal(buttons)
+
+    if modal("delete", form, rounding=12, inner_margin=14, fill=dialog_fill()):
+        delete_ask["paths"] = []  # Escape or a click outside
+
+
 def reveal():
     path = targets()[0]
     if MACOS:
@@ -6097,6 +6154,14 @@ ACTIONS = [
     ),
     (
         "Édition",
+        "Supprimer définitivement",
+        "trash",
+        "Shift+Delete",  # before the trash: Delete also matches when Shift is held
+        has_selection,
+        delete_for_good_ask,
+    ),
+    (
+        "Édition",
         "Mettre à la corbeille",
         "trash",
         # Delete: the key of the extended keyboards (Fn+Backspace), Clear: the one of the numeric keypad
@@ -6331,6 +6396,8 @@ ACTIONS = [
 
 
 def action_keys():
+    if delete_ask["paths"]:
+        return  # the question has its own keys
     for _, _, _, shortcut, enabled, run in ACTIONS:
         if shortcut and enabled() and any(key_pressed(k) for k in shortcut.split("|")):  # "A|B": two keys
             run()
@@ -7774,6 +7841,8 @@ def window_frame(ctx):
     window("Apparence", background_window, open=bg_open, default_width=300, resizable=False)
     if renaming.value:
         rename_dialog()
+    if delete_ask["paths"]:
+        delete_dialog()
     if integration_note.value:
         integration_dialog()
     if index_ignore_open.value:
