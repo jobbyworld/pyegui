@@ -340,6 +340,8 @@ def specimen(theme, w, r):
     """what the row looks like: a box with the background, the border and the rounding, and the text in its color"""
     fill = resolve(theme, r["fill"], r["dim"])
     stroke = resolve(theme, r["stroke"], r["dim"])
+    if isinstance(stroke, str):  # a color token used as a border (the focus): one point wide
+        stroke = (1.0, stroke)
     text = resolve(theme, r["text"], r["dim"])
     rounding = resolve(theme, r["rounding"]) or 0
     options = dict(rounding=float(rounding), inner_margin=(10, 4, 10, 4))
@@ -366,7 +368,7 @@ def theme_column(theme, title, w, part_rows):
         colored_label(resolve(theme, "colors.strong_text"), title)
         for r in part_rows:
             horizontal(lambda r=r: (specimen(theme, w, r), colored_label(text, r["label"])))
-            colored_label(weak_text, describe(theme, r))
+            colored_label(weak_text if theme == "light" else text, describe(theme, r))
 
     frame(card, fill=view[theme]["colors.panel"], rounding=10.0, inner_margin=12.0, stroke=(1.0, "#80808040"))
 
