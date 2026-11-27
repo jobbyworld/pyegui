@@ -19,8 +19,8 @@ CONTRAST = {
               "popups.tooltip_fill": "#ffffffff"},
     # dark: the striped rows are lighter than the glass
     "dark": {"spacing.button_padding_radius": 0.8, "menu.button_padding_radius": 0.8, "colors.text": "#f2f2f7ff",
-             "colors.striped_bg": "#ffffff14", "colors.window": "#13151d70", "popups.window_fill": "#1d212cff", "popups.menu_fill": "#222734ff",
-             "popups.dropdown_fill": "#222734ff", "popups.tooltip_fill": "#272c3bff"},
+             "colors.striped_bg": "#ffffff14", "colors.window": "#13151d70", "popups.window_fill": "#232326ff", "popups.menu_fill": "#2a2a2eff",
+             "popups.dropdown_fill": "#2a2a2eff", "popups.tooltip_fill": "#303035ff"},
 }
 
 
@@ -57,7 +57,7 @@ def update(ctx):
     for t in ("light", "dark"):
         now = flatten(ctx.style_snapshot(t))
         sheet[t] = {p: (list(v) if isinstance(v, tuple) else v) for p, v in now.items() if v != plain[t].get(p)}
-    sheet["app"] = {"light": dict(APP, dialog_fill="#ffffffff"), "dark": dict(APP, dialog_fill="#1d212cff")}
+    sheet["app"] = {"light": dict(APP, dialog_fill="#ffffffff"), "dark": dict(APP, dialog_fill="#232326ff")}
     for t, tokens in CONTRAST.items():
         sheet[t].update(tokens)
     with open(OUT, "w") as f:

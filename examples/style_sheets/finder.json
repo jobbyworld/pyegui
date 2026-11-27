@@ -102,10 +102,10 @@
       1.0,
       "#1b1b1b1b"
     ],
-    "popups.dropdown_fill": "#222734ff",
-    "popups.menu_fill": "#222734ff",
-    "popups.tooltip_fill": "#272c3bff",
-    "popups.window_fill": "#1d212cff",
+    "popups.dropdown_fill": "#2a2a2eff",
+    "popups.menu_fill": "#2a2a2eff",
+    "popups.tooltip_fill": "#303035ff",
+    "popups.window_fill": "#232326ff",
     "widgets.noninteractive.fill": "#00000000",
     "widgets.noninteractive.weak_fill": "#00000000",
     "widgets.noninteractive.stroke": [
@@ -203,7 +203,7 @@
       "glass_central": 0.3,
       "glass_dock": 0.3,
       "blur": 32,
-      "dialog_fill": "#1d212cff"
+      "dialog_fill": "#232326ff"
     }
   }
 }
