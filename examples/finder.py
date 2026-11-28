@@ -172,6 +172,7 @@ from pyegui import (
     set_min_width,
     set_width,
     slider_int,
+    sidebar_section,
     small,
     small_button_clicked,
     strong,
@@ -2233,7 +2234,10 @@ def current_look():
 
 
 def accent_value():
-    """the accent: the color of the picker, or one of the four first"""
+    """the accent: the one of the style sheet, else the color of the picker, or one of the four first"""
+    given = app("accent")
+    if given:
+        return given
     return "#%02x%02x%02x" % rgb_of(accent_rgb) if accent_custom.value else ACCENTS[accent_name.value]
 show_hidden = Bool(False)  # the hidden items (a name with a dot, a hidden flag), faded when shown
 path_editing = Bool(False)  # the path bar is a text field holding the full path
@@ -2760,6 +2764,12 @@ APP_STYLE = {
     "glass_opacity": 1.2,  # multiplies the opacity of the glass
     "glass_central": 0.3,  # the files and the docks are clear glass
     "glass_dock": 0.3,
+    "glass_sidebar": None,  # opacity of the glass of the sidebar, 0 for no fill (its items sit on the background of the window); the default one when None
+    "glass_bars": None,  # the same for the top and bottom bars
+    "accent": None,  # the primary color of the style, "#rrggbb"; the choice of the user when None
+    "background": None,  # the background of the window: "backdrop" (glass of the system), "image" or "color"; the choice of the user when None
+    "background_color": None,  # the color of the plain background, "#rrggbb"
+    "background_image": None,  # the picture of the background, a path
     "blur": 32,  # the blur of what is behind the window (macOS), in points
     "terminal": None,  # the colors of the terminals, see Terminal.set_colors; the One Light / One Dark ones when None
 }
@@ -2816,6 +2826,8 @@ def apply_style():
             opacity=app("glass_opacity"),
             central=app("glass_central"),
             dock=app("glass_dock"),
+            sidebar=app("glass_sidebar"),
+            bars=app("glass_bars"),
         )
     else:
         ctx.set_accent(accent)
@@ -2858,10 +2870,16 @@ def apply_dock_style():
     for key, k in (("active_tab_stroke", 0), ("pane_stroke", 0), ("inactive_tab_stroke", 1)):
         color = look.outline[k].to_tuple() if look.outline_set[k] else app("edge")[1]
         dock.set_style(**{key: (look.outline_width[k].value, color)})
+    # the fills chosen in the look panel, unless the style sheet gives that tab token itself (the sheet is the style)
+    tokens = (style_sheet(sheet_name.value) or {}).get("dark" if look.dark else "light") or {}
     inactive, active = layer_fill(1), layer_fill(2)
-    if inactive:
-        dock.set_style(tab_bar_color=inactive, inactive_tab_fill=inactive)
-    if active:
+    if inactive and "tabs.bar_fill" not in tokens:
+        dock.set_style(tab_bar_color=inactive)
+    if inactive and "tabs.inactive_fill" not in tokens:
+        dock.set_style(inactive_tab_fill=inactive)
+    # the active tab is the sheet of its pane: with a sheet that gives the dock its sheet, or with joined tabs (the tab
+    # and its pane are one piece), the dock draws it with the fill of its pane, not with the glass of the look
+    if active and "tabs.active_fill" not in tokens and "layout.dock.sheet" not in tokens and tokens.get("tabs.outline") != "joined":
         dock.set_style(active_tab_fill=active)
 
 
@@ -2926,17 +2944,33 @@ def solid_png(color):
     return str(path)
 
 
+SHEET_BACKGROUNDS = {"backdrop": 0, "glass": 0, "image": 1, "color": 2}
+
+
+def sheet_background():
+    """the background that the style sheet gives (app.background, background_color, background_image), else None"""
+    mode = SHEET_BACKGROUNDS.get(app("background") or "")
+    if mode is None:
+        return None
+    color = app("background_color")
+    rgb = tuple(int(color.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4)) if isinstance(color, str) and len(color.lstrip("#")) >= 6 else None
+    return mode, rgb, app("background_image")
+
+
 def background_path():
     """the picture of the backdrop if it can be read, else None"""
-    path = current_look().image.value.strip().strip("'\"")
+    given = sheet_background()
+    path = (given[2] if given and given[2] else current_look().image.value).strip().strip("'\"")
     return path if path and Path(path).is_file() else None
 
 
 def apply_background():
     """gives the picture (or the plain color) and its filters to pyegui when one of them changed"""
     look = current_look()
-    mode = look.background.value if BACKDROP is not None or look.background.value else 2
-    wanted = (mode, look.dark, background_path() if mode == 1 else None, *look.background_signature()[1:])
+    given = sheet_background()
+    mode = given[0] if given else look.background.value if BACKDROP is not None or look.background.value else 2
+    color = (given[1] if given and given[1] else None) or rgb_of(look.color)
+    wanted = (mode, look.dark, background_path() if mode == 1 else None, *look.background_signature()[1:], given)
     if wanted == look_applied["background"]:
         return
     look_applied["background"] = wanted
@@ -2947,7 +2981,7 @@ def apply_background():
         return
     ctx.set_backdrop_blur(app("blur"))
     if mode == 2:
-        ctx.set_backdrop_image(solid_png(rgb_of(look.color)), luminance=1.0, saturation=1.0, blur=0.0, contrast=1.0, scrim=0.0, opacity=1.0, fit="stretch")
+        ctx.set_backdrop_image(solid_png(color), luminance=1.0, saturation=1.0, blur=0.0, contrast=1.0, scrim=0.0, opacity=1.0, fit="stretch")
         return
     ctx.set_backdrop_image(
         background_path(),
@@ -3149,7 +3183,7 @@ def snapshot():
         "view": view.value,
         "show_sidebar": show_sidebar.value,
         "show_dock": show_dock.value,
-        "closed_sections": sorted(closed_sections),
+        "closed_sections": sorted(t for t, o in section_open.items() if not o.value),
         "show_hidden": show_hidden.value,
         "blue_folders": blue_folders.value,
         "index_ignore": {"hidden": index_ignore_hidden.value, "names": list(index_ignore_names)},
@@ -3196,7 +3230,9 @@ def restore(saved):
     view.value = saved.get("view", view.value)
     show_sidebar.value = saved.get("show_sidebar", show_sidebar.value)
     show_dock.value = saved.get("show_dock", show_dock.value)
-    closed_sections.update(s for s in saved.get("closed_sections", []) if isinstance(s, str))
+    for title in saved.get("closed_sections", []):
+        if isinstance(title, str) and SECTION_TITLES.get(title, title) in section_open:
+            section_open[SECTION_TITLES.get(title, title)].value = False
     ignore = saved.get("index_ignore")
     if isinstance(ignore, dict):
         index_ignore_hidden.value = bool(ignore.get("hidden", True))
@@ -3519,7 +3555,9 @@ def tags_tree():
     # the right click keeps the colors; the trash (a second click deletes the tag, and what it was put on)
     # and the mouse move the tags, in the order of the base
     clicked = tag_tree_view(
-        tag_tree, library, counts=library_state["counts"], removable=False, deletable=True, movable=True, keep_order=True, icon=True
+        tag_tree, library, counts=library_state["counts"], removable=False, deletable=True, movable=True, keep_order=True, icon=True,
+        row_height=26, rounding=app("item_rounding"), selected_fill=select_fill(ACCENTS[accent_name.value]), hover_fill=app("hover_fill"),
+        danger=(220, 90, 90),
     )
     ids = library_state["ids"]
     for path in tag_tree.take_deleted():
@@ -3793,7 +3831,8 @@ def tags_panel():
         checks = {path: state_of(i) for path, i in ids.items()}
         clicked = tag_tree_view(
             tags_pane_tree, library, counts=library_state["counts"], removable=False, deletable=True,
-            movable=True, keep_order=True, icon=True, checks=checks,
+            movable=True, keep_order=True, icon=True, checks=checks, row_height=26, rounding=app("item_rounding"),
+            selected_fill=select_fill(ACCENTS[accent_name.value]), hover_fill=app("hover_fill"), danger=(220, 90, 90),
         )
         for path in tags_pane_tree.take_deleted():
             if path in ids:
@@ -4225,7 +4264,7 @@ def open_requested_panes():
         if title in dock.titles:
             dock.set_active(title)
             continue
-        pane = DockPane(title, ALL_PANES[title], closable=True)
+        pane = dock_pane(title)
         if title in BOTTOM_PANES:  # the terminals live under the files
             dock.add_pane(pane)
             continue
@@ -4545,30 +4584,8 @@ def theme_control():
         apply_style()
 
 
-closed_sections = set()  # the sections of the sidebar that are folded
-section_hovered = {}  # the sections whose title was under the pointer at the last frame
-
-
-def section_header(title):
-    """the title of a section of the sidebar: a click folds or unfolds it, a chevron shows at the right while
-    the title is under the pointer. Returns whether the section is open"""
-    opened = title not in closed_sections
-    width = available_width()
-
-    def line():
-        set_width(width)
-        weak(title)
-        # the row must stay within `width`: the title, the space and the chevron (14) are separated by the
-        # spacing of the row (2 x 8), a row that is wider makes the panel grow at every hover
-        add_space(max(width - text_width(title, size=12) - 14 - 2 * 8 - 4, 0))
-        if section_hovered.get(title):
-            image(svg("chevron-down" if opened else "chevron-right"), size=14, tint=icon_tint())
-
-    response = interactive(lambda: horizontal(line))
-    section_hovered[title] = response.hovered
-    if response.clicked:
-        closed_sections.symmetric_difference_update({title})
-    return opened
+SECTION_TITLES = {"Favorites": "Favoris", "Locations": "Emplacements", "Tags": "Étiquettes"}  # the titles of finder-rs; the old keys of the saved state
+section_open = {title: Bool(True) for title in SECTION_TITLES.values()}  # the sections of the sidebar: false when folded (saved)
 
 
 def sidebar_content():
@@ -4590,20 +4607,16 @@ def sidebar_content():
         ):
             go(path)
 
-    if section_header("Favorites"):
-        favorites_section(accent)
-    else:
-        fav_view.update(area=None, rows=[], ids=[], moving=None, insert=None)
-
-    add_space(12)
-    if section_header("Locations"):
+    def locations_ui():
         for icon_name, name, path in locations():
             place(icon_name, name, path)
-    add_space(12)
 
+    # the title, the chevron and the gap are the ones of the framework (tokens section.*), like finder-rs
+    if not sidebar_section("Favoris", lambda: favorites_section(accent), open=section_open["Favoris"]):
+        fav_view.update(area=None, rows=[], ids=[], moving=None, insert=None)
+    sidebar_section("Emplacements", locations_ui, open=section_open["Emplacements"])
     # the tags are created in the preview, the Tags pane and the tag picker
-    if section_header("Tags"):
-        tags_tree()
+    sidebar_section("Étiquettes", tags_tree, open=section_open["Étiquettes"])
 
 
 # toolbar
@@ -4658,7 +4671,7 @@ SEARCH_WIDTH, SEARCH_MIN = (
 
 
 def menu_panes():
-    return [DockPane(title, ui, closable=True) for title, ui in ALL_PANES.items()]
+    return [dock_pane(title, ui) for title, ui in ALL_PANES.items()]
 
 
 def panes_menu():
@@ -7990,6 +8003,19 @@ BOTTOM_PANES = {
 ALL_PANES = {**PANES, **BOTTOM_PANES}
 central_ui = zone_pane("content", content, margin=8)
 
+PANE_ICONS = {  # the icons of the tabs, the ones of finder-rs (dock.rs)
+    "Actions": "panes", "Preview": "eye", "Tags": "tag", "Propriétés": "list", "Recent": "list", "Recherche": "search",
+    "Dossiers surveillés": "eye", "Activités": "refresh", "Indexation": "search", "Base SQL": "list",
+    "Terminal": "terminal", "Python": "terminal",
+}
+
+
+def dock_pane(title, ui=None):
+    """a pane of the dock, closable, with the icon of its tab"""
+    icon = PANE_ICONS.get(title)
+    return DockPane(title, ui or ALL_PANES[title], closable=True, **({"icon": svg(icon)} if icon else {}))
+
+
 def make_dock():
     """the dock of a window: its panes, in the first layout"""
     new = Dock(
@@ -8002,17 +8028,26 @@ def make_dock():
                         DockPane(CENTRAL, lambda: draw_tab(CENTRAL), hide_tab=True, central=True, label=lambda: tab_name(CENTRAL)),  # no tab while the files are alone
                         DockContainer(
                             "tabs",
-                            [DockPane(title, ui, closable=True) for title, ui in BOTTOM_PANES.items()],
+                            [dock_pane(title, ui) for title, ui in BOTTOM_PANES.items()],
                         ),
                     ],
                 ),
                 DockContainer(
                     "vertical",
-                    [DockPane(title, ui, closable=True) for title, ui in PANES.items() if title not in WATCH_PANES + JOB_PANES],
+                    [dock_pane(title, ui) for title, ui in PANES.items() if title not in WATCH_PANES + JOB_PANES],
                 ),
             ],
         ),
         id="inspector",
+        **dock_options(),
+    )
+    if default_layout:
+        new.load(default_layout)
+    return new
+
+
+def dock_options():
+    return dict(
         tab_menu=tab_menu,
         tab_bar_height=26,
         pane_margin=app("pane_margin"),
@@ -8025,9 +8060,14 @@ def make_dock():
             (0, 0, 0, 0),
         ),  # the gap stays empty: no grey band, the panes still resize
     )
-    if default_layout:
-        new.load(default_layout)
-    return new
+
+
+def make_files_dock():
+    """the files alone, when the dock is hidden: a dock of one pane, so that it is painted like a pane of the dock"""
+    return Dock(DockPane(CENTRAL, central_ui, hide_tab=True, central=True), id="files", **dock_options())
+
+
+files_dock = None
 
 
 default_layout = None
@@ -8338,6 +8378,14 @@ def window_frame(ctx):
         tag_picker()
 
 
+def separator_kwargs():
+    """the line between the sidebar and the body: the token layout.sidebar.outline of the style sheet when it has one,
+    else the line of the app"""
+    data = style_sheet(sheet_name.value) or {}
+    tokens = data.get("dark" if context[0].is_dark_theme else "light") or {}
+    return {} if "layout.sidebar.outline" in tokens else {"separator_stroke": app("line")}
+
+
 def layout():
     """like the Claude app: a sidebar along the whole height, a line between it and the body, and in
     both a top band, a content and a bottom band whose lines continue from one to the other"""
@@ -8351,11 +8399,11 @@ def layout():
         outer_margin=0,
         rounding=0,
         show_separator_line=True,  # the line between the sidebar and the body
-        separator_stroke=app("line"),
+        **separator_kwargs(),
         **layer_kwargs(0),
     )
-    top_panel("toolbar", toolbar, exact_size=TOP_H, resizable=False, inner_margin=(8, 0, 12, 0), rounding=0, show_separator_line=True, separator_stroke=app("line"), **layer_kwargs(1))
-    bottom_panel("path", path_bar, exact_size=BOTTOM_H, resizable=False, inner_margin=(8, 0, 12, 0), rounding=0, show_separator_line=True, separator_stroke=app("line"), **layer_kwargs(1))
+    top_panel("toolbar", toolbar, exact_size=TOP_H, resizable=False, inner_margin=(8, 0, 12, 0), rounding=0, show_separator_line=False, **layer_kwargs(1))
+    bottom_panel("path", path_bar, exact_size=BOTTOM_H, resizable=False, inner_margin=(8, 0, 12, 0), rounding=0, show_separator_line=False, **layer_kwargs(1))
     # one gap everywhere: a side of the dock that faces a neighbour without gap (the line of the
     # sidebar, of the bars, the border of the window) gets the whole gap, and the dock puts the same
     # gap between its panes. The central panel adds no margin of its own (set_central_margin)
@@ -8364,7 +8412,10 @@ def layout():
 
 def dock_or_files(**kwargs):
     """the panes of the dock, or the files alone when the dock is hidden"""
-    frame(lambda: dock_area(dock) if show_dock.value else frame(central_ui, stroke=app("edge"), rounding=app("dock_rounding"), inner_margin=app("pane_margin") - 1), **kwargs)  # minus the line of the outline
+    global files_dock
+    if not show_dock.value and files_dock is None:
+        files_dock = make_files_dock()
+    frame(lambda: dock_area(dock if show_dock.value else files_dock), **kwargs)
 
 
 if __name__ == "__main__":

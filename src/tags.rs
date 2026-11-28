@@ -7,13 +7,14 @@
 use std::collections::{BTreeMap, HashMap};
 use std::ops::{Deref, DerefMut};
 
-use eframe::egui::{self, vec2, Color32, Id, Rect, Sense, Stroke, StrokeKind, TextStyle};
-use pyegui_core::tags::{color_row, last_level, level_paths, normalize, paint_tag_icon, path_ui, to_hex, Tags as CoreTags, TagsOptions};
+use eframe::egui::{Color32, Id};
+use pyegui_core::tag_tree::{self, CheckState, TagRow, TagTreeEvent, TagTreeOptions, TagTreeState};
+use pyegui_core::tags::{color_row, last_level, level_paths, normalize, path_ui, to_hex, Tags as CoreTags, TagsOptions};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use crate::style::extract_color;
+use crate::style::{extract_color, kwarg_color};
 use crate::{current_ui, kwarg, UI};
 
 /// A list of tags and their colors. Create it once, outside the update function, and draw it with
@@ -286,17 +287,12 @@ pub(crate) struct TagTreeView {
     /// The path of the level selected, or None
     #[pyo3(get, set)]
     selected: Option<String>,
-    folded: std::collections::HashSet<String>,
-    /// the level being moved with the mouse
-    dragging: Option<String>,
-    /// the level whose trash was clicked once: a second click deletes it
-    armed: Option<String>,
+    /// the folded levels, the level being moved and the armed trash (the state of the tree of the core)
+    state: TagTreeState<String>,
     /// the levels deleted with the trash, until take_deleted()
     deleted: Vec<String>,
     /// the move asked for with the mouse, until take_moved()
     moved: Option<(String, Option<String>, Option<String>)>,
-    /// the state of the check boxes by level ("on", "off" or "mixed"), given at each frame
-    states: HashMap<String, String>,
 }
 
 #[pymethods]
@@ -304,15 +300,9 @@ impl TagTreeView {
     #[new]
     #[pyo3(signature = (selected=None, folded=None))]
     fn new(selected: Option<String>, folded: Option<Vec<String>>) -> Self {
-        TagTreeView {
-            selected: selected.map(|s| normalize(&s)).filter(|s| !s.is_empty()),
-            folded: folded.unwrap_or_default().iter().map(|s| normalize(s)).collect(),
-            dragging: None,
-            armed: None,
-            deleted: vec![],
-            moved: None,
-            states: HashMap::new(),
-        }
+        let mut state = TagTreeState::default();
+        state.folded = folded.unwrap_or_default().iter().map(|s| normalize(s)).collect();
+        TagTreeView { selected: selected.map(|s| normalize(&s)).filter(|s| !s.is_empty()), state, deleted: vec![], moved: None }
     }
 
     /// The levels deleted with the trash since the last call (see `deletable` of tag_tree_view): the app
@@ -332,19 +322,19 @@ impl TagTreeView {
     /// replaces them.
     #[getter]
     fn get_folded(&self) -> Vec<String> {
-        let mut folded: Vec<String> = self.folded.iter().cloned().collect();
+        let mut folded: Vec<String> = self.state.folded.iter().cloned().collect();
         folded.sort();
         folded
     }
 
     #[setter]
     fn set_folded(&mut self, folded: Vec<String>) {
-        self.folded = folded.iter().map(|s| normalize(s)).collect();
+        self.state.folded = folded.iter().map(|s| normalize(s)).collect();
     }
 
     /// Opens every level
     fn expand_all(&mut self) {
-        self.folded.clear();
+        self.state.folded.clear();
     }
 
     /// Folds every level that has children, among the levels of tags
@@ -354,7 +344,7 @@ impl TagTreeView {
     fn collapse_all(&mut self, tags: &Tags) {
         for tag in &tags.tags {
             let levels = level_paths(tag);
-            self.folded.extend(levels[..levels.len() - 1].iter().cloned());
+            self.state.folded.extend(levels[..levels.len() - 1].iter().cloned());
         }
     }
 }
@@ -380,302 +370,35 @@ fn tag_children(tags: &[String], keep_order: bool) -> BTreeMap<String, Vec<Strin
     children
 }
 
-/// What the right click on a node of the tree offers
-#[derive(Clone, Copy)]
-struct Menu {
-    editable: bool,
-    removable: bool,
-    /// a trash at the right of the row under the pointer: a first click arms it, a second one deletes the level
-    deletable: bool,
-    /// the rows can be dragged to move a level
-    movable: bool,
-    /// the tag icon in the color of the level instead of a dot
-    icon: bool,
-    /// a check box per row (see `checks` of tag_tree_view)
-    check: bool,
-}
-
-/// What can be done to a node of the tree
-enum NodeAction {
-    Select(String),
-    Toggle(String),
-    Color(String, Option<Color32>),
-    Remove(String),
-    DragStart(String),
-    Arm(String),
-    Disarm,
-    Delete(String),
-}
-
-/// The rows drawn, in order, with their depth: where a level being moved can be dropped
-type Rows = Vec<(String, Rect, usize)>;
-
-/// A row of the tree: the arrow of a level with children, the dot, the name, the count at the right
-#[allow(clippy::too_many_arguments)]
-fn tree_row(
-    ui: &mut egui::Ui,
+/// The rows of the tree, flat in the order of the tree, for `pyegui_core::tag_tree`
+fn flat_rows(
     tags: &Tags,
-    view: &TagTreeView,
-    path: &str,
-    depth: usize,
-    has_children: bool,
-    count: Option<i64>,
-    menu: Menu,
-    actions: &mut Vec<NodeAction>,
-    rows: &mut Rows,
-) {
-    let font = TextStyle::Body.resolve(ui.style());
-    let height = ui.text_style_height(&TextStyle::Body) + 8.0;
-    let sense = if menu.movable { Sense::click_and_drag() } else { Sense::click() };
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), sense);
-    rows.push((path.to_owned(), rect, depth));
-    if response.drag_started() && menu.movable {
-        actions.push(NodeAction::DragStart(path.to_owned()));
-    }
-    // the trash: seen while the row is under the pointer (or armed), not while a level is being moved
-    let armed = view.armed.as_deref() == Some(path);
-    let moving = view.dragging.is_some();
-    let trash_rect = Rect::from_center_size(egui::pos2(rect.right() - 16.0, rect.center().y), vec2(24.0, 22.0));
-    let show_trash = menu.deletable && ((ui.rect_contains_pointer(rect) && !moving) || armed);
-    let trash = show_trash.then(|| ui.interact(trash_rect, response.id.with("trash"), Sense::click()));
-    let over_trash = trash.as_ref().is_some_and(|t| t.hovered());
-    let indent = 14.0 * depth as f32;
-    let arrow_rect = Rect::from_center_size(egui::pos2(rect.left() + indent + 8.0, rect.center().y), vec2(14.0, height));
-    let arrow = has_children.then(|| ui.interact(arrow_rect, response.id.with("arrow"), Sense::click()));
-    let color = tags.color_of(path);
-    let selected = view.selected.as_deref() == Some(path);
-    let folded = view.folded.contains(path);
-
-    if ui.is_rect_visible(rect) {
-        let visuals = ui.visuals();
-        let painter = ui.painter();
-        if selected {
-            painter.rect_filled(rect, 5.0, visuals.selection.bg_fill);
-        } else if response.hovered() {
-            painter.rect_filled(rect, 5.0, visuals.widgets.hovered.weak_bg_fill);
-        }
-        let text_color = if selected { visuals.selection.stroke.color } else { visuals.text_color() };
-        if has_children {
-            // a triangle, pointing right when folded, down when open
-            let c = arrow_rect.center();
-            let r = 3.5;
-            let points = if folded {
-                vec![c + vec2(-r * 0.6, -r), c + vec2(r * 0.9, 0.0), c + vec2(-r * 0.6, r)]
-            } else {
-                vec![c + vec2(-r, -r * 0.6), c + vec2(r, -r * 0.6), c + vec2(0.0, r * 0.9)]
-            };
-            let arrow_color = text_color.gamma_multiply(if arrow.as_ref().is_some_and(|a| a.hovered()) { 1.0 } else { 0.6 });
-            painter.add(egui::Shape::convex_polygon(points, arrow_color, Stroke::NONE));
-        }
-        let pre = if menu.check { 20.0 } else { 0.0 };
-        if menu.check {
-            let state = view.states.get(path).map(String::as_str).unwrap_or("off");
-            let boxed = Rect::from_center_size(egui::pos2(rect.left() + indent + 22.0, rect.center().y), vec2(14.0, 14.0));
-            if state == "off" {
-                painter.rect_stroke(boxed, 3.0, Stroke::new(1.3, text_color.gamma_multiply(0.7)), egui::StrokeKind::Inside);
-            } else {
-                painter.rect_filled(boxed, 3.0, visuals.hyperlink_color);
-                let (c, white) = (boxed.center(), Stroke::new(1.6, Color32::WHITE));
-                if state == "mixed" {
-                    painter.line_segment([c + vec2(-3.5, 0.0), c + vec2(3.5, 0.0)], white);
-                } else {
-                    painter.line_segment([c + vec2(-3.5, 0.5), c + vec2(-1.0, 3.0)], white);
-                    painter.line_segment([c + vec2(-1.0, 3.0), c + vec2(3.8, -3.0)], white);
-                }
-            }
-        }
-        let dot_center = egui::pos2(rect.left() + indent + 22.0 + pre, rect.center().y);
-        if menu.icon {
-            paint_tag_icon(ui, dot_center, 14.0, color);
-        } else {
-            painter.circle_filled(dot_center, 4.5, color);
-        }
-        let galley = painter.layout_no_wrap(last_level(path).to_owned(), font.clone(), text_color);
-        let text_pos = egui::pos2(dot_center.x + if menu.icon { 12.0 } else { 10.0 }, rect.center().y - galley.size().y / 2.0);
-        let mut right = rect.right() - 8.0;
-        if let Some(count) = count.filter(|_| !show_trash) {
-            let weak = if selected { text_color.gamma_multiply(0.7) } else { visuals.weak_text_color() };
-            let count_galley = painter.layout_no_wrap(count.to_string(), font, weak);
-            right -= count_galley.size().x;
-            painter.galley(egui::pos2(right, rect.center().y - count_galley.size().y / 2.0), count_galley, weak);
-            right -= 8.0;
-        }
-        // the name is cut where the count (or the trash) begins
-        if show_trash {
-            right = trash_rect.left() - 4.0;
-        }
-        painter.with_clip_rect(Rect::from_min_max(rect.min, egui::pos2(right, rect.max.y))).galley(text_pos, galley, text_color);
-        if view.dragging.as_deref() == Some(path) {
-            painter.rect_filled(rect, 5.0, visuals.panel_fill.gamma_multiply(0.6));
-        }
-        if show_trash {
-            let red = Color32::from_rgb(230, 60, 60);
-            let tint = if armed { red } else { visuals.weak_text_color() };
-            if armed || over_trash {
-                let fill = if armed { Color32::from_rgba_unmultiplied(230, 60, 60, 36) } else { Color32::from_rgba_unmultiplied(127, 127, 127, 40) };
-                painter.rect_filled(trash_rect, 6.0, fill);
-            }
-            // a trash can drawn with lines: a lid, a handle and a body
-            let c = trash_rect.center();
-            let stroke = Stroke::new(1.3, tint);
-            painter.line_segment([c + vec2(-5.0, -3.5), c + vec2(5.0, -3.5)], stroke);
-            painter.line_segment([c + vec2(-1.8, -3.5), c + vec2(-1.8, -5.5)], stroke);
-            painter.line_segment([c + vec2(1.8, -3.5), c + vec2(1.8, -5.5)], stroke);
-            painter.line_segment([c + vec2(-1.8, -5.5), c + vec2(1.8, -5.5)], stroke);
-            painter.line_segment([c + vec2(-4.0, -3.5), c + vec2(-3.3, 5.5)], stroke);
-            painter.line_segment([c + vec2(4.0, -3.5), c + vec2(3.3, 5.5)], stroke);
-            painter.line_segment([c + vec2(-3.3, 5.5), c + vec2(3.3, 5.5)], stroke);
-        }
-    }
-    if let Some(trash) = &trash {
-        if trash.clicked() {
-            actions.push(if armed { NodeAction::Delete(path.to_owned()) } else { NodeAction::Arm(path.to_owned()) });
-        }
-        let tip = if armed { "Click again to delete" } else { "Delete" };
-        trash.clone().on_hover_text(tip);
-    }
-    if armed && !over_trash {
-        actions.push(NodeAction::Disarm);
-    }
-
-    if arrow.as_ref().is_some_and(|a| a.clicked()) {
-        actions.push(NodeAction::Toggle(path.to_owned()));
-    } else if response.double_clicked() && has_children {
-        actions.push(NodeAction::Toggle(path.to_owned()));
-    } else if response.clicked() && !over_trash {
-        actions.push(NodeAction::Select(path.to_owned()));
-    }
-    let response = response.on_hover_ui(|ui| path_ui(ui, tags, path));
-    if menu.editable {
-        response.context_menu(|ui| {
-            if let Some(color) = color_row(ui, tags, path) {
-                actions.push(NodeAction::Color(path.to_owned(), color));
-            }
-            if !menu.removable {
-                return;
-            }
-            ui.separator();
-            let label = if has_children { "Remove with its children" } else { "Remove" };
-            if ui.button(label).clicked() {
-                actions.push(NodeAction::Remove(path.to_owned()));
-                ui.close();
-            }
-        });
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn tree_rows(
-    ui: &mut egui::Ui,
-    tags: &Tags,
-    view: &TagTreeView,
     children: &BTreeMap<String, Vec<String>>,
     counts: &HashMap<String, i64>,
+    checks: &HashMap<String, String>,
     parent: &str,
     depth: usize,
-    menu: Menu,
-    actions: &mut Vec<NodeAction>,
-    rows: &mut Rows,
+    out: &mut Vec<TagRow<String>>,
 ) {
     for path in children.get(parent).into_iter().flatten() {
         let has_children = children.contains_key(path);
-        tree_row(ui, tags, view, path, depth, has_children, counts.get(path).copied(), menu, actions, rows);
-        if has_children && !view.folded.contains(path) {
-            tree_rows(ui, tags, view, children, counts, path, depth + 1, menu, actions, rows);
+        out.push(
+            TagRow::new(path.clone(), last_level(path), depth, tags.color_of(path))
+                .children(has_children)
+                .count(counts.get(path).copied())
+                .check(checks.get(path).map_or(CheckState::Off, |s| CheckState::parse(s))),
+        );
+        if has_children {
+            flat_rows(tags, children, counts, checks, path, depth + 1, out);
         }
-    }
-}
-
-/// The parent of a path: "a/b/c" -> Some("a/b"), "a" -> None
-fn parent_of(path: &str) -> Option<String> {
-    path.rsplit_once('/').map(|(parent, _)| parent.to_owned())
-}
-
-/// Moving a level with the mouse: dropped on the middle of another it goes under it, on its upper or lower edge
-/// it goes before or after it (same level), below the last row it goes to the top. Draws where it goes and
-/// returns the move once the button is let go
-fn dragging(ui: &mut egui::Ui, view: &mut TagTreeView, rows: &Rows, area: Rect) {
-    let Some(moving) = view.dragging.clone() else { return };
-    let Some(from) = rows.iter().position(|(p, _, _)| *p == moving) else {
-        view.dragging = None;
-        return;
-    };
-    let depth = rows[from].2;
-    // the level and what is under it cannot receive it
-    let end = rows[from + 1..].iter().position(|(_, _, d)| *d <= depth).map_or(rows.len(), |n| from + 1 + n);
-    let inside = |i: usize| i >= from && i < end;
-    enum Drop {
-        Into(usize),
-        Before(usize),
-        After(usize),
-        TopEnd,
-    }
-    let pointer = ui.ctx().pointer_latest_pos();
-    let mut drop = None;
-    if let Some(p) = pointer.filter(|p| area.x_range().contains(p.x)) {
-        if let Some((i, (_, rect, _))) = rows.iter().enumerate().find(|(_, (_, r, _))| r.y_range().contains(p.y)) {
-            if !inside(i) {
-                let f = (p.y - rect.top()) / rect.height();
-                drop = Some(if f < 0.25 { Drop::Before(i) } else if f > 0.75 { Drop::After(i) } else { Drop::Into(i) });
-            }
-        } else if rows.last().is_some_and(|(_, r, _)| p.y > r.bottom() && p.y < r.bottom() + 60.0) {
-            drop = Some(Drop::TopEnd);
-        }
-    }
-    if ui.ctx().input(|i| i.pointer.primary_down()) {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-        let stroke = Stroke::new(2.0, ui.visuals().selection.bg_fill);
-        let indent = |i: usize| 6.0 + 14.0 * rows[i].2 as f32;
-        match &drop {
-            Some(Drop::Into(i)) => {
-                ui.painter().rect_stroke(rows[*i].1, 5.0, stroke, StrokeKind::Inside);
-            }
-            Some(Drop::Before(i)) => {
-                let r = rows[*i].1;
-                ui.painter().line_segment([egui::pos2(r.left() + indent(*i), r.top()), egui::pos2(r.right() - 6.0, r.top())], stroke);
-            }
-            Some(Drop::After(i)) => {
-                let r = rows[*i].1;
-                ui.painter().line_segment([egui::pos2(r.left() + indent(*i), r.bottom()), egui::pos2(r.right() - 6.0, r.bottom())], stroke);
-            }
-            Some(Drop::TopEnd) => {
-                if let Some((_, r, _)) = rows.last() {
-                    ui.painter().line_segment([egui::pos2(r.left() + 6.0, r.bottom() + 2.0), egui::pos2(r.right() - 6.0, r.bottom() + 2.0)], stroke);
-                }
-            }
-            None => {}
-        }
-        if let Some(p) = pointer {
-            // the name follows the pointer
-            let layer = egui::LayerId::new(egui::Order::Tooltip, Id::unique("tag-tree-ghost"));
-            let font = TextStyle::Body.resolve(ui.style());
-            ui.ctx().layer_painter(layer).text(p + vec2(14.0, 0.0), egui::Align2::LEFT_CENTER, last_level(&moving), font, ui.visuals().text_color());
-        }
-        return;
-    }
-    // let go: the level goes where the line was
-    view.dragging = None;
-    let Some(drop) = drop else { return };
-    // the next level of the same parent, after a level and what is under it
-    let after = |i: usize| {
-        let stop = rows[i + 1..].iter().position(|(_, _, d)| *d <= rows[i].2).map_or(rows.len(), |n| i + 1 + n);
-        rows.get(stop).filter(|(p, _, d)| *d == rows[i].2 && parent_of(p) == parent_of(&rows[i].0)).map(|(p, _, _)| p.clone())
-    };
-    let (parent, before) = match drop {
-        Drop::Into(i) => (Some(rows[i].0.clone()), None),
-        Drop::Before(i) => (parent_of(&rows[i].0), Some(rows[i].0.clone())),
-        Drop::After(i) => (parent_of(&rows[i].0), after(i)),
-        Drop::TopEnd => (None, None),
-    };
-    if parent_of(&moving) != parent || before.is_some() || parent.is_some() {
-        view.moved = Some((moving, parent, before));
     }
 }
 
 /// Shows the tags as a tree: a node for every level, its last level in the color of its path,
-/// the full path on hover. A click selects a level, the arrow (or a double click) folds or opens
-/// it. A right click changes the color of the level or removes it from the tags, with the tags
-/// under it.
+/// the full path on hover. A click selects a level, the chevron folds or opens it (the `grid.chevron*`
+/// tokens, like the other trees). A right click changes the color of the level or removes it from the
+/// tags, with the tags under it. The tree is the one of finder-rs (`pyegui_core::tag_tree`): the same rows,
+/// trash, check boxes and moves in both Finders.
 ///
 /// Args:
 ///     view (TagTreeView): the state: the folded levels and the selection
@@ -707,6 +430,21 @@ fn dragging(ui: &mut egui::Ui, view: &mut TagTreeView, rows: &Rows, area: Rect) 
 ///         "on", "off" or "mixed" (a level that is not in the dict is off). The tree then picks tags, e.g. for the
 ///         selected items: a click on a row is returned like a selection, the app puts the tag on or takes it off.
 ///
+///     row_height (float): the height of a row. Default is 26
+///
+///     indent (float): the indentation of a level. Default is 14
+///
+///     rounding (float): the rounding of the fills of the rows. Default is the rounding of the widgets
+///
+///     selected_fill (color), hover_fill (color): the fills of the selected row and of the row under the pointer.
+///         Default is the selection color and the hovered fill of the theme
+///
+///     accent (color): the check boxes that are on and the line where a level is dropped. Default is the selection
+///
+///     danger (color): the armed trash. Default is the error color of the theme
+///
+///     delete_tip (str), armed_tip (str): the tooltips of the trash. Default is French, like the Finder
+///
 /// Returns:
 ///     str | None: the path of the level clicked during the frame (it is now view.selected)
 ///
@@ -717,7 +455,7 @@ fn dragging(ui: &mut egui::Ui, view: &mut TagTreeView, rows: &Rows, area: Rect) 
 ///
 ///     def update_func(ctx):
 ///         def sidebar():
-///             clicked = tag_tree_view(tree, library, counts={"projet": 12, "projet/web": 5})
+///             clicked = tag_tree_view(tree, library, counts={"projet": 12, "projet/web": 5}, icon=True)
 ///             if clicked:
 ///                 print("show", clicked)
 ///         left_panel("tags", sidebar)
@@ -736,69 +474,86 @@ unsafe fn tag_tree_view(
         .collect::<HashMap<_, _>>();
     let editable = kwarg::<bool>(kwargs, "editable")?.unwrap_or(true);
     let removable = kwarg::<bool>(kwargs, "removable")?.unwrap_or(true);
-    let deletable = kwarg::<bool>(kwargs, "deletable")?.unwrap_or(false);
-    let movable = kwarg::<bool>(kwargs, "movable")?.unwrap_or(false);
     let keep_order = kwarg::<bool>(kwargs, "keep_order")?.unwrap_or(false);
-    let icon = kwarg::<bool>(kwargs, "icon")?.unwrap_or(false);
     let checks = kwarg::<HashMap<String, String>>(kwargs, "checks")?;
-    let check = checks.is_some();
-    view.borrow_mut().states = checks.unwrap_or_default().into_iter().map(|(path, state)| (normalize(&path), state)).collect();
-    let mut actions = vec![];
-    let mut rows: Rows = vec![];
-    let area;
-    {
+    let defaults = TagTreeOptions::default();
+    let options = TagTreeOptions {
+        id: Id::unique(("pyegui-tag-tree", view.as_ptr() as usize)),
+        deletable: kwarg::<bool>(kwargs, "deletable")?.unwrap_or(false),
+        movable: kwarg::<bool>(kwargs, "movable")?.unwrap_or(false),
+        icon: kwarg::<bool>(kwargs, "icon")?.unwrap_or(false),
+        checks: checks.is_some(),
+        fold_on_double_click: true,
+        row_height: kwarg::<f32>(kwargs, "row_height")?.unwrap_or(defaults.row_height),
+        indent: kwarg::<f32>(kwargs, "indent")?.unwrap_or(defaults.indent),
+        rounding: kwarg::<f32>(kwargs, "rounding")?,
+        selected_fill: kwarg_color(kwargs, "selected_fill")?,
+        hover_fill: kwarg_color(kwargs, "hover_fill")?,
+        accent: kwarg_color(kwargs, "accent")?,
+        danger: kwarg_color(kwargs, "danger")?,
+        delete_tip: kwarg::<String>(kwargs, "delete_tip")?.unwrap_or(defaults.delete_tip),
+        armed_tip: kwarg::<String>(kwargs, "armed_tip")?.unwrap_or(defaults.armed_tip),
+    };
+    let checks: HashMap<String, String> = checks.unwrap_or_default().into_iter().map(|(path, state)| (normalize(&path), state)).collect();
+
+    let mut actions: Vec<(String, Option<Color32>)> = vec![];
+    let mut removed: Option<String> = None;
+    let out = {
         let state = tags.borrow();
-        let tree = view.borrow();
+        let mut tree = view.borrow_mut();
         let children = tag_children(&state.tags, keep_order);
-        let inner = ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 1.0;
-            let menu = Menu { editable, removable, deletable, movable, icon, check };
-            tree_rows(ui, &state, &tree, &children, &counts, "", 0, menu, &mut actions, &mut rows);
-        });
-        area = inner.response.rect;
-    }
-    dragging(ui, &mut view.borrow_mut(), &rows, area);
+        let mut rows = vec![];
+        flat_rows(&state, &children, &counts, &checks, "", 0, &mut rows);
+        let selected = tree.selected.clone();
+        let out = tag_tree::show(ui, &rows, selected.as_ref(), &mut tree.state, &options);
+        for (path, response) in &out.rows {
+            let has_children = children.contains_key(path);
+            let response = response.clone().on_hover_ui(|ui| path_ui(ui, &state, path));
+            if editable {
+                response.context_menu(|ui| {
+                    if let Some(color) = color_row(ui, &state, path) {
+                        actions.push((path.clone(), color));
+                    }
+                    if !removable {
+                        return;
+                    }
+                    ui.separator();
+                    let label = if has_children { "Remove with its children" } else { "Remove" };
+                    if ui.button(label).clicked() {
+                        removed = Some(path.clone());
+                        ui.close();
+                    }
+                });
+            }
+        }
+        out.events
+    };
 
     let mut clicked = None;
     let mut state = tags.borrow_mut();
     let mut tree = view.borrow_mut();
-    for action in actions {
-        match action {
-            NodeAction::Select(path) => {
+    for event in out {
+        match event {
+            TagTreeEvent::Select(path) => {
                 tree.selected = Some(path.clone());
                 clicked = Some(path);
             }
-            NodeAction::Toggle(path) => {
-                if !tree.folded.remove(&path) {
-                    tree.folded.insert(path);
-                }
-            }
-            NodeAction::Color(path, Some(color)) => {
-                state.colors.insert(path, color);
-            }
-            NodeAction::Color(path, None) => {
-                state.colors.remove(&path);
-            }
-            NodeAction::DragStart(path) => {
-                tree.dragging = Some(path);
-            }
-            NodeAction::Arm(path) => {
-                tree.armed = Some(path);
-            }
-            NodeAction::Disarm => {
-                tree.armed = None;
-            }
-            NodeAction::Delete(path) => {
-                tree.armed = None;
-                tree.deleted.push(path);
-            }
-            NodeAction::Remove(path) => {
-                let below = format!("{path}/");
-                state.tags.retain(|t| *t != path && !t.starts_with(&below));
-                if tree.selected.as_deref().is_some_and(|s| s == path || s.starts_with(&below)) {
-                    tree.selected = None;
-                }
-            }
+            TagTreeEvent::Toggle(_) => {}
+            TagTreeEvent::Delete(path) => tree.deleted.push(path),
+            TagTreeEvent::Move { key, parent, before } => tree.moved = Some((key, parent, before)),
+        }
+    }
+    for (path, color) in actions {
+        match color {
+            Some(color) => state.colors.insert(path, color),
+            None => state.colors.remove(&path),
+        };
+    }
+    if let Some(path) = removed {
+        let below = format!("{path}/");
+        state.tags.retain(|t| *t != path && !t.starts_with(&below));
+        if tree.selected.as_deref().is_some_and(|s| s == path || s.starts_with(&below)) {
+            tree.selected = None;
         }
     }
     Ok(clicked)

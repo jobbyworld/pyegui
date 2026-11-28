@@ -853,7 +853,7 @@ fn new_property_form(ui: &mut egui::Ui, manager: &mut Manager, store: &mut crate
     ui.add_space(8.0);
     let taken = store.meta_defs().iter().any(|d| d.name.to_lowercase() == manager.new_name.trim().to_lowercase());
     if taken && !manager.new_name.trim().is_empty() {
-        ui.colored_label(Color32::from_rgb(220, 90, 90), "Une propriété porte déjà ce nom");
+        ui.colored_label(crate::app::ERROR_COLOR, "Une propriété porte déjà ce nom");
     }
     ui.horizontal(|ui| {
         let ok = !manager.new_name.trim().is_empty() && !taken;
@@ -901,12 +901,12 @@ const RULES_HELP: &str = "Sous un dossier, chaque niveau de sous-dossiers rempli
 fn rule_check(ui: &mut egui::Ui, pattern: &str, names: &[String]) {
     match pyegui_core::meta::Pattern::parse(pattern) {
         None => {
-            ui.colored_label(Color32::from_rgb(220, 90, 90), "Aucun {nom} dans le motif");
+            ui.colored_label(crate::app::ERROR_COLOR, "Aucun {nom} dans le motif");
         }
         Some(p) => {
             let missing: Vec<&str> = p.names().into_iter().filter(|n| !names.contains(&n.to_lowercase())).collect();
             if !missing.is_empty() {
-                ui.colored_label(Color32::from_rgb(220, 90, 90), format!("Propriété inconnue : {}", missing.join(", ")));
+                ui.colored_label(crate::app::ERROR_COLOR, format!("Propriété inconnue : {}", missing.join(", ")));
             }
         }
     }

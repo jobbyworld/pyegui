@@ -30,6 +30,51 @@ pub struct TabSet {
     /// space between the side of a tab and its title
     pub title_spacing: Option<f32>,
     pub bar_height: Option<f32>,
+    /// how the outline of a tab meets its pane: see [`TabOutline`]
+    pub outline: Option<TabOutline>,
+    /// radius of the top corners of a tab
+    pub radius: Option<f32>,
+    /// radius of the concave feet that join an active tab to its pane (`Joined`); none: from the radius
+    pub foot: Option<f32>,
+    /// space between the top of the bar and the top of the tabs
+    pub top_gap: Option<f32>,
+    /// size of the icon before the title
+    pub icon_size: Option<f32>,
+    /// the cross of a closable tab when the mouse is not on it
+    pub close_stroke: Option<Stroke>,
+    /// fill of the scroll arrows of a bar too narrow for its tabs, under the mouse and pressed
+    pub arrow_hovered_fill: Option<Color32>,
+    pub arrow_active_fill: Option<Color32>,
+}
+
+/// How the outline of a tab meets the outline of its pane
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum TabOutline {
+    /// two open lines that meet at the bottom of the bar, the sides of the tab going straight down (the `Dock`
+    /// of the Python extension)
+    #[default]
+    Separate,
+    /// one line around the active tab and its pane, joined by concave feet, the corners smoothed over a pixel
+    /// (the dock of finder-rs)
+    Joined,
+}
+
+impl TabOutline {
+    /// "separate" or "joined"
+    pub fn parse(name: &str) -> Option<TabOutline> {
+        match name {
+            "separate" => Some(TabOutline::Separate),
+            "joined" => Some(TabOutline::Joined),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            TabOutline::Separate => "separate",
+            TabOutline::Joined => "joined",
+        }
+    }
 }
 
 /// `[theme][style]`: theme 0 is light, 1 dark; style 0 is classic, 1 pill
@@ -49,6 +94,14 @@ impl TabSet {
             spacing: None,
             title_spacing: None,
             bar_height: None,
+            outline: None,
+            radius: None,
+            foot: None,
+            top_gap: None,
+            icon_size: None,
+            close_stroke: None,
+            arrow_hovered_fill: None,
+            arrow_active_fill: None,
         }
     }
 
@@ -66,6 +119,14 @@ impl TabSet {
             spacing: self.spacing.or(fallback.spacing),
             title_spacing: self.title_spacing.or(fallback.title_spacing),
             bar_height: self.bar_height.or(fallback.bar_height),
+            outline: self.outline.or(fallback.outline),
+            radius: self.radius.or(fallback.radius),
+            foot: self.foot.or(fallback.foot),
+            top_gap: self.top_gap.or(fallback.top_gap),
+            icon_size: self.icon_size.or(fallback.icon_size),
+            close_stroke: self.close_stroke.or(fallback.close_stroke),
+            arrow_hovered_fill: self.arrow_hovered_fill.or(fallback.arrow_hovered_fill),
+            arrow_active_fill: self.arrow_active_fill.or(fallback.arrow_active_fill),
         }
     }
 }
@@ -128,27 +189,87 @@ pub struct TabLook {
     pub spacing: f32,
     pub title_spacing: f32,
     pub bar_height: f32,
+    pub outline: TabOutline,
+    pub radius: f32,
+    /// none: [`tab_foot`] of the radius of the tab
+    pub foot: Option<f32>,
+    pub top_gap: f32,
+    pub icon_size: f32,
+    /// none: the stroke of the widgets of the theme for the state of the cross
+    pub close_stroke: Option<Stroke>,
+    /// none: the fills of the buttons of the theme
+    pub arrow_hovered_fill: Option<Color32>,
+    pub arrow_active_fill: Option<Color32>,
 }
 
+impl TabLook {
+    /// The radius of the feet of a tab whose corners have the radius `r`
+    pub fn foot(&self, r: u8) -> f32 {
+        self.foot.unwrap_or_else(|| tab_foot(r))
+    }
+}
+
+/// The look of the tabs: the `given` set (options of a call) wins over the tokens of the theme, which win over
+/// the defaults. The defaults depend on the outline (`tabs.outline`, `Separate` when nothing gives it):
+/// `Separate` gives the look of the `Dock` of the Python extension, `Joined` the one of the dock of finder-rs
+/// (no tint on the inactive tabs, a light hover, the corners rounded by at least 6, a gap above the tabs).
 pub fn look(visuals: &egui::Visuals, pill: bool, given: TabSet) -> TabLook {
     let dark = visuals.dark_mode;
     let set = given.or(tokens(dark, pill));
+    let outline = set.outline.unwrap_or_default();
+    let joined = outline == TabOutline::Joined && !pill;
     let text = visuals.widgets.noninteractive.text_color();
+    // pill: the active tab is the selection color and the others are bare; classic: the active tab has the
+    // background of its pane (transparent), the others a dark tint. Joined: the active tab is the sheet of its
+    // pane, the others show the bar through
+    let active_fill = set.active_fill.unwrap_or(if pill {
+        visuals.selection.bg_fill
+    } else if joined {
+        visuals.panel_fill
+    } else {
+        Color32::TRANSPARENT
+    });
+    let default_hovered = if pill {
+        visuals.widgets.hovered.weak_bg_fill
+    } else if joined {
+        if dark { Color32::from_white_alpha(14) } else { active_fill.gamma_multiply(0.4) }
+    } else {
+        inactive_tint(dark, true)
+    };
+    let default_inactive_text = if joined {
+        visuals.weak_text_color().gamma_multiply(if dark { 1.0 } else { 0.7 })
+    } else {
+        text.gamma_multiply(0.75)
+    };
+    let default_active_text = if pill {
+        visuals.selection.stroke.color
+    } else if joined {
+        visuals.text_color()
+    } else {
+        visuals.widgets.active.text_color()
+    };
+    let theme_radius = f32::from(visuals.widgets.inactive.corner_radius.nw);
     TabLook {
         pill,
         bar_fill: set.bar_fill.unwrap_or(Color32::TRANSPARENT),
-        // pill: the active tab is the selection color and the others are bare; classic: the active tab has the
-        // background of its pane (transparent), the others a dark tint
-        active_fill: set.active_fill.unwrap_or(if pill { visuals.selection.bg_fill } else { Color32::TRANSPARENT }),
-        inactive_fill: set.inactive_fill.unwrap_or(if pill { Color32::TRANSPARENT } else { inactive_tint(dark, false) }),
-        hovered_fill: set.hovered_fill.unwrap_or(if pill { visuals.widgets.hovered.weak_bg_fill } else { inactive_tint(dark, true) }),
-        active_text: set.active_text.unwrap_or(if pill { visuals.selection.stroke.color } else { visuals.widgets.active.text_color() }),
-        inactive_text: set.inactive_text.unwrap_or(text.gamma_multiply(0.75)),
+        active_fill,
+        inactive_fill: set.inactive_fill.unwrap_or(if pill || joined { Color32::TRANSPARENT } else { inactive_tint(dark, false) }),
+        hovered_fill: set.hovered_fill.unwrap_or(default_hovered),
+        active_text: set.active_text.unwrap_or(default_active_text),
+        inactive_text: set.inactive_text.unwrap_or(default_inactive_text),
         active_stroke: set.active_stroke.unwrap_or(if pill { Stroke::NONE } else { Stroke::new(1.0, border(dark, 45)) }),
         inactive_stroke: set.inactive_stroke.unwrap_or(if pill { Stroke::NONE } else { Stroke::new(1.0, border(dark, 25)) }),
         spacing: set.spacing.unwrap_or(if pill { 4.0 } else { 2.0 }),
         title_spacing: set.title_spacing.unwrap_or(8.0),
         bar_height: set.bar_height.unwrap_or(24.0),
+        outline,
+        radius: set.radius.unwrap_or(if joined { theme_radius.max(6.0) } else { theme_radius }),
+        foot: set.foot,
+        top_gap: set.top_gap.unwrap_or(if joined { crate::columns::TAB_TOP_GAP } else { 0.0 }),
+        icon_size: set.icon_size.unwrap_or(14.0),
+        close_stroke: set.close_stroke,
+        arrow_hovered_fill: set.arrow_hovered_fill.or(joined.then(|| Color32::from_white_alpha(20))),
+        arrow_active_fill: set.arrow_active_fill.or(joined.then(|| Color32::from_white_alpha(32))),
     }
 }
 
@@ -281,7 +402,7 @@ mod tests {
     use super::*;
 
     /// the tokens are global: the tests that change them run one after the other
-    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use crate::TOKENS_TEST_LOCK as ONE_AT_A_TIME;
 
     #[test]
     fn tokens_are_per_theme_and_style() {
@@ -305,6 +426,64 @@ mod tests {
         assert_eq!(look(&visuals, false, TabSet::default()).spacing, 7.0);
         let given = TabSet { spacing: Some(11.0), ..TabSet::default() };
         assert_eq!(look(&visuals, false, given).spacing, 11.0);
+        reset_tokens();
+    }
+
+    #[test]
+    fn the_outline_token_picks_the_defaults_of_its_variant() {
+        let _guard = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        reset_tokens();
+        let dark = egui::Visuals::dark();
+        let separate = look(&dark, false, TabSet::default());
+        assert_eq!(separate.outline, TabOutline::Separate);
+        assert_eq!(separate.top_gap, 0.0);
+        assert_eq!(separate.inactive_fill, inactive_tint(true, false));
+        assert_eq!(separate.arrow_hovered_fill, None);
+        update_tokens(true, false, |t| t.outline = Some(TabOutline::Joined));
+        let joined = look(&dark, false, TabSet::default());
+        assert_eq!(joined.outline, TabOutline::Joined);
+        assert_eq!(joined.inactive_fill, Color32::TRANSPARENT);
+        assert_eq!(joined.hovered_fill, Color32::from_white_alpha(14));
+        assert_eq!(joined.arrow_hovered_fill, Some(Color32::from_white_alpha(20)));
+        assert_eq!(joined.arrow_active_fill, Some(Color32::from_white_alpha(32)));
+        assert_eq!(joined.top_gap, crate::columns::TAB_TOP_GAP);
+        assert!(joined.radius >= 6.0);
+        // light: the hover is the sheet of the active tab, fainter
+        let light = egui::Visuals::light();
+        let given = TabSet { outline: Some(TabOutline::Joined), active_fill: Some(Color32::from_rgb(200, 100, 50)), ..TabSet::default() };
+        assert_eq!(look(&light, false, given).hovered_fill, Color32::from_rgb(200, 100, 50).gamma_multiply(0.4));
+        // the option of a call wins over the token
+        let given = TabSet { outline: Some(TabOutline::Separate), ..TabSet::default() };
+        assert_eq!(look(&dark, false, given).outline, TabOutline::Separate);
+        reset_tokens();
+    }
+
+    #[test]
+    fn the_new_tokens_follow_the_lookup_order() {
+        let _guard = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        reset_tokens();
+        let v = egui::Visuals::light();
+        assert_eq!(look(&v, false, TabSet::default()).icon_size, 14.0);
+        assert_eq!(look(&v, false, TabSet::default()).foot, None);
+        assert_eq!(look(&v, false, TabSet::default()).foot(6), tab_foot(6));
+        update_tokens(false, false, |t| {
+            t.radius = Some(10.0);
+            t.foot = Some(5.0);
+            t.top_gap = Some(3.0);
+            t.icon_size = Some(16.0);
+            t.close_stroke = Some(Stroke::new(1.5, Color32::RED));
+        });
+        let l = look(&v, false, TabSet::default());
+        assert_eq!((l.radius, l.foot(6), l.top_gap, l.icon_size), (10.0, 5.0, 3.0, 16.0));
+        assert_eq!(l.close_stroke, Some(Stroke::new(1.5, Color32::RED)));
+        let given = TabSet { radius: Some(2.0), icon_size: Some(12.0), ..TabSet::default() };
+        let l = look(&v, false, given);
+        assert_eq!((l.radius, l.icon_size, l.top_gap), (2.0, 12.0, 3.0));
+        // the pill tabs have their own tokens
+        assert_eq!(look(&v, true, TabSet::default()).radius, f32::from(v.widgets.inactive.corner_radius.nw));
+        assert_eq!(TabOutline::parse("joined"), Some(TabOutline::Joined));
+        assert_eq!(TabOutline::parse(TabOutline::Separate.name()), Some(TabOutline::Separate));
+        assert_eq!(TabOutline::parse("other"), None);
         reset_tokens();
     }
 }

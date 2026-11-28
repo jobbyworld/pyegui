@@ -114,9 +114,9 @@ pub fn look(visuals: &Visuals) -> GridLook {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
-    static LOCK: Mutex<()> = Mutex::new(());
+    /// the tokens are global: the tests that change them (here and in other modules) run one after the other
+    use crate::TOKENS_TEST_LOCK as LOCK;
 
     #[test]
     fn a_token_wins_over_the_default_and_reset_forgets_it() {

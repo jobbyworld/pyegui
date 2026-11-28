@@ -22,9 +22,7 @@ pub const SUN: Glyph = glyph!("sun");
 pub const MOON: Glyph = glyph!("moon");
 pub const THEME_SYSTEM: Glyph = glyph!("theme-system");
 pub const GEAR: Glyph = glyph!("gear");
-pub const LINK: Glyph = glyph!("link");
 pub const FOLDER_ENTER: Glyph = glyph!("folder-enter");
-pub const REFRESH: Glyph = glyph!("refresh");
 pub const CLOSE: Glyph = glyph!("close");
 pub const DRIVE: Glyph = glyph!("drive");
 pub const OPEN: Glyph = glyph!("open");
@@ -170,12 +168,18 @@ pub fn action_button(ui: &egui::Ui, icon: &str, label: &str) -> egui::Button<'st
     egui::Button::image_and_text(image(by_name(icon), 16.0, ui.visuals().text_color()), label.to_string())
 }
 
-/// A popup. In the light theme its window is darker than the glass of the bars, so that it stands out
+/// A dialog, like the `modal` of finder.py: the `dialog_fill` and the `dialog_rounding` of the style sheet (the
+/// popup of the framework without one), a margin of 14
 pub fn popup_frame(ctx: &egui::Context) -> egui::Frame {
-    let style = ctx.global_style();
-    let mut frame = egui::Frame::popup(&style);
-    if !style.visuals.dark_mode {
-        frame = frame.fill(Color32::from_rgb(222, 224, 233)).stroke(egui::Stroke::new(1.0, Color32::from_rgb(140, 143, 160)));
+    let mut style = (*ctx.global_style()).clone();
+    pyegui_core::popup_style::apply(&mut style, pyegui_core::popup_style::Kind::Window);
+    let dark = style.visuals.dark_mode;
+    let mut frame = egui::Frame::popup(&style).inner_margin(14.0);
+    if let Some(fill) = crate::sheets::dialog_fill(dark) {
+        frame = frame.fill(fill);
+    }
+    if let Some(r) = crate::sheets::try_number("dialog_rounding", dark) {
+        frame = frame.corner_radius(r);
     }
     frame
 }
@@ -184,45 +188,18 @@ pub fn modal(ctx: &egui::Context, id: &'static str) -> egui::Modal {
     egui::Modal::new(egui::Id::unique(id)).frame(popup_frame(ctx))
 }
 
-/// The fields and buttons of a popup get visible fills and outlines (the glass style makes them transparent).
-/// Light: opaque fills and marked outlines. Dark: white at 10 % (14 % outline), 18 % / 24 % when hovered.
-pub fn modal_style(v: &mut egui::Visuals) {
-    if v.dark_mode {
-        let white = |a: u8| Color32::from_white_alpha(a);
-        v.extreme_bg_color = Color32::from_white_alpha(12);
-        v.text_edit_bg_color = Some(Color32::from_black_alpha(70));
-        v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, white(28));
-        for (w, fill, stroke) in [(&mut v.widgets.inactive, 26, 36), (&mut v.widgets.hovered, 46, 61), (&mut v.widgets.active, 60, 80)] {
-            w.bg_fill = white(fill);
-            w.weak_bg_fill = white(fill);
-            w.bg_stroke = egui::Stroke::new(1.0, white(stroke));
-        }
-        return;
-    }
-    let field = Color32::WHITE;
-    v.extreme_bg_color = field;
-    v.text_edit_bg_color = Some(field);
-    v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, Color32::from_rgb(150, 153, 170));
-    for (w, fill, stroke) in [
-        (&mut v.widgets.inactive, Color32::from_rgb(246, 247, 251), Color32::from_rgb(110, 113, 130)),
-        (&mut v.widgets.hovered, Color32::from_rgb(255, 255, 255), Color32::from_rgb(70, 73, 95)),
-    ] {
-        w.bg_fill = fill;
-        w.weak_bg_fill = fill;
-        w.bg_stroke = egui::Stroke::new(1.0, stroke);
-    }
-}
-
-/// `modal_style` on the `Ui` of a popup
+/// The widgets of a popup (`window.*` tokens of the style sheet) on the `Ui` of a popup
 pub fn modal_visuals(ui: &mut egui::Ui) {
-    modal_style(ui.visuals_mut());
+    pyegui_core::context_style::apply_ui(ui, pyegui_core::context_style::Context::Window);
 }
 
 /// Runs `f` with the style of the popups on the whole context (for the parts a library draws itself, such as
 /// the buttons of `settings_window`), then puts the style back
 pub fn with_modal_style<R>(ctx: &egui::Context, f: impl FnOnce() -> R) -> R {
     let saved = ctx.global_style();
-    ctx.global_style_mut(|s| modal_style(&mut s.visuals));
+    ctx.global_style_mut(|s| {
+        pyegui_core::context_style::apply(s, pyegui_core::context_style::Context::Window);
+    });
     let r = f();
     ctx.set_global_style(saved);
     r

@@ -30,6 +30,10 @@ fn has_selection(app: &FinderApp) -> bool {
 fn one_selected(app: &FinderApp) -> bool {
     app.selected.len() == 1
 }
+/// the terminals are shown (the Actions pane has the focus when it is used, not a terminal)
+fn terminal_shown(app: &FinderApp) -> bool {
+    app.terminals_shown()
+}
 fn can_paste(app: &FinderApp) -> bool {
     app.clipboard.as_ref().is_some_and(|(paths, _)| !paths.is_empty()) || pyegui_core::clipboard::has_files()
 }
@@ -150,6 +154,10 @@ pub static ACTIONS: &[Action] = &[
     Action { category: "Affichage", label: "Barre latérale", icon: "sidebar", shortcut: cmd(Key::B), enabled: always, run: |app, _| app.toggle_sidebar() },
     Action { category: "Affichage", label: "Terminal", icon: "terminal", shortcut: cmd(Key::T), enabled: always, run: |app, _| app.toggle_terminal() },
     Action { category: "Affichage", label: "Volets", icon: "panes", shortcut: cmd(Key::J), enabled: always, run: |app, _| app.toggle_dock() },
+    Action { category: "Terminal", label: "Suivre le dossier du Finder (oui/non)", icon: "link", shortcut: None, enabled: terminal_shown, run: |app, _| app.toggle_follow_terminal() },
+    Action { category: "Terminal", label: "cd ici : aller au dossier affiché", icon: "folder-enter", shortcut: None, enabled: terminal_shown, run: |app, _| app.terminal_cd_here() },
+    Action { category: "Terminal", label: "Redémarrer le shell", icon: "refresh", shortcut: None, enabled: terminal_shown, run: |app, _| app.restart_shell() },
+    Action { category: "Terminal", label: "Redémarrer Python", icon: "refresh", shortcut: None, enabled: terminal_shown, run: |app, _| app.restart_python() },
 ];
 
 pub fn enabled_flags(app: &FinderApp) -> Vec<bool> {

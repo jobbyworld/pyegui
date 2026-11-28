@@ -76,7 +76,11 @@ Colors are "#rrggbbaa" strings, a stroke is (width, color), a shadow is (offset_
 The dict has the keys `theme`, `colors` (panel, window, text edit and code backgrounds, links, selection, ...),
 `widgets` (for `noninteractive`, `inactive`, `hovered`, `active` and `open`: `fill`, `weak_fill`, `stroke`,
 `fg_stroke` (the color of the text and icons), `rounding`, `expansion`), `window` (stroke, rounding, shadows),
-`fonts` (the name of a text style to (size, family)) and `spacing`.
+`fonts` (the name of a text style to (size, family)) and `spacing`, `tabs` and `pill_tabs` (the look of the tabs
+of a `Dock` or a `tab_view`: fills, texts, strokes, sizes, `outline` ("separate" or "joined"), `radius`, `foot`,
+`top_gap`, `icon_size`, `close_stroke`, `arrow_hovered_fill`, `arrow_active_fill`; None where the theme decides),
+`layout` (the regions whose resize handle has style tokens: `resize_stroke`, `resize_hover_stroke`,
+`resize_active_stroke`, None where not given).
 
 **Example:**
 
@@ -90,8 +94,24 @@ print(s["widgets"]["hovered"]["weak_fill"], s["colors"]["text_edit_bg"])
 
 Changes any value of the style of a theme by its path, the same paths as the dict of `style_snapshot`
 (`colors.panel`, `widgets.hovered.weak_fill`, `widgets.active.stroke`, `window.rounding`, `fonts.Body`,
-`spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`, `popups.dropdown_fill`...). The widgets of a context (`menu`, `dropdown`, `sidebar`, `topbar`, `bottombar`, `window`) have their own tokens `<context>.<state>.<field>`, e.g. `menu.hovered.weak_fill`, looked up before `widgets.<state>.<field>`; `<context>.button_padding` (x, y) and `<context>.button_padding_radius` give the padding of their buttons, `spacing.button_padding_radius` does it for the whole app: a factor of the rounding of the buttons that the padding at the left and at the right is at least (a round button needs room for its corners). The fill of the popups is an RGBA color whose alpha is the transparency: `popups.dropdown_fill` (the list of a combo box), `popups.menu_fill` (menus and context menus) `popups.tooltip_fill` (tooltips) and `popups.window_fill` (windows and modals, while `colors.window` is the fill under the whole window of the app), e.g. `{"popups.dropdown_fill": "#1e1e2e80"}` for a half transparent dropdown. The sheet of a region of the layout is a token too: `layout.sidebar.sheet` (also `topbar`, `bottombar`, `central`, `dock`) and `layout.sheet` for all of them, RGBA colors like `"#1e1e2ecc"`; the sheet of a call or of the rules of the region (`set_layout`) comes first. The tabs of a `Dock` and of a `tab_view` read the
-`tabs.*` (classic tabs) and `pill_tabs.*` tokens. Only the given paths are changed. Colors are "#rrggbb[aa]", (r, g, b[, a]);
+`spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`, `popups.dropdown_fill`...). The widgets of a context (`menu`, `dropdown`, `sidebar`, `topbar`, `bottombar`, `window`) have their own tokens `<context>.<state>.<field>`, e.g. `menu.hovered.weak_fill`, looked up before `widgets.<state>.<field>`; `<context>.button_padding` (x, y) and `<context>.button_padding_radius` give the padding of their buttons, `spacing.button_padding_radius` does it for the whole app: a factor of the rounding of the buttons that the padding at the left and at the right is at least (a round button needs room for its corners). The fill of the popups is an RGBA color whose alpha is the transparency: `popups.dropdown_fill` (the list of a combo box), `popups.menu_fill` (menus and context menus) `popups.tooltip_fill` (tooltips) and `popups.window_fill` (windows and modals, while `colors.window` is the fill under the whole window of the app), e.g. `{"popups.dropdown_fill": "#1e1e2e80"}` for a half transparent dropdown. The sheet of a region of the layout is a token too: `layout.sidebar.sheet` (also `topbar`, `bottombar`, `central`, `dock`) and `layout.sheet` for all of them, RGBA colors like `"#1e1e2ecc"`; the sheet of a call or of the rules of the region (`set_layout`) comes first. The outline and the rounding of a region are tokens too:
+`layout.<region>.outline` (a stroke, or "none") and `layout.<region>.rounding` (`layout.outline` and `layout.rounding` for
+all of them); a top or bottom bar is a box only when its sheet is given (`layout.topbar.sheet`), else it is the glass with
+no box (the look of finder.py), and the line between a `top_panel`/`bottom_panel`/`left_panel` and the rest is
+`layout.<region>.outline` when the call gives no `separator_stroke`. The edge that resizes a panel of a region
+is drawn with `layout.<region>.resize_stroke` at rest (a stroke, or "none" for no line), `layout.<region>.resize_hover_stroke`
+under the mouse and `layout.<region>.resize_active_stroke` while dragged (`layout.resize_stroke`... for all the regions;
+not given, the strokes of the hovered and active widgets of the theme). The titles of `sidebar_section` read `section.text`,
+`section.font_size`, `section.height`, `section.gap`, `section.uppercase`, `section.chevron` ("hover", "always", "none")
+and `section.chevron_size`. The tabs of a `Dock` and of a `tab_view` read the
+`tabs.*` (classic tabs) and `pill_tabs.*` tokens: the fills, texts and strokes of the tabs (`active_fill`, `inactive_fill`,
+`hovered_fill`, `active_text`, `inactive_text`, `active_stroke`, `inactive_stroke`, `bar_fill`), their sizes (`spacing`,
+`title_spacing`, `bar_height`, `radius` of the top corners, `top_gap` above the tabs, `icon_size`), `close_stroke` (the
+close cross when the mouse is not on it), `arrow_hovered_fill` and `arrow_active_fill` (the scroll arrows of a full bar),
+and `outline`: `"separate"` (the tab and its pane are two lines that meet at the bottom of the bar, the look of a
+`Dock`) or `"joined"` (one line around the active tab and its pane with concave feet of radius `foot`, the look of the
+dock of finder-rs); the defaults of the other tab tokens follow the outline. A `Dock` draws the `"separate"` outline.
+Only the given paths are changed. Colors are "#rrggbb[aa]", (r, g, b[, a]);
 a stroke is (width, color); a rounding or a size is a float; a font is (size, family) or a size.
 
 **Args**

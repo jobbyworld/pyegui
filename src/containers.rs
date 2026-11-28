@@ -43,6 +43,16 @@ unsafe fn show_panel(
         .then(|| crate::layout::token_sheet("sidebar", ui.style().visuals.dark_mode))
         .flatten();
     let glass = token.or_else(|| style::surface_fill(&ui.style().visuals, surface));
+    // the region of the tokens of the style sheet: a top or bottom bar is a box only when the sheet gives it a
+    // sheet (`layout.topbar.sheet`), with the outline and the rounding of its tokens; otherwise it is the glass
+    let region = match side {
+        't' => "topbar",
+        'b' => "bottombar",
+        _ => "sidebar",
+    };
+    let dark = ui.style().visuals.dark_mode;
+    let bar_box = matches!(side, 't' | 'b').then(|| pyegui_core::sheet::bar_box(region, dark)).flatten();
+    let glass = bar_box.map(|b| b.fill).or(glass);
     // the color under the separator line: the line takes a strip of the outer margin that the fill of
     // the frame does not cover, and a line that is not opaque would show the window behind it
     let strip_fill = if kwarg_color(kwargs, "fill")?.is_some() { kwarg_color(kwargs, "fill")? } else { glass };
@@ -51,52 +61,89 @@ unsafe fn show_panel(
         if let Some(fill) = glass {
             frame = frame.fill(fill);
         }
+        if let Some(b) = bar_box {
+            frame = frame.stroke(b.outline).corner_radius(b.rounding.round().clamp(0.0, 255.0) as u8);
+            // a box has its outline: no separator line too, unless the call asks for one
+            if kwarg::<bool>(kwargs, "show_separator_line")?.is_none() {
+                panel = panel.show_separator_line(false);
+            }
+        }
         panel = panel.frame(apply_frame_kwargs(frame, kwargs)?);
     }
 
     // the line between the panel and the rest is drawn with the stroke of the noninteractive
-    // widgets: given, it is that stroke while the panel is shown (its content draws with it too)
-    let separator = kwarg_stroke(kwargs, "separator_stroke")?;
+    // widgets: given, it is that stroke while the panel is shown (its content draws with it too).
+    // Not given, the token `layout.<region>.outline` of the style sheet gives it ("none": no line)
+    let given_separator = kwarg_stroke(kwargs, "separator_stroke")?;
+    let separator = match given_separator {
+        Some(stroke) => Some(stroke),
+        None => pyegui_core::sheet::layout_outline(region, dark),
+    };
     let previous = ui.visuals().widgets.noninteractive.bg_stroke;
     if let Some(stroke) = separator {
         ui.visuals_mut().widgets.noninteractive.bg_stroke = stroke;
     }
+    // the resize handle: `layout.<region>.resize_stroke` (the line at rest, after `separator_stroke`),
+    // `resize_hover_stroke` and `resize_active_stroke` of the style sheet. egui draws it with the strokes of the
+    // parent ui; the content gets the strokes it had back
+    let resize = pyegui_core::sheet::resize_strokes(region, dark).map(|mut r| {
+        if given_separator.is_some() {
+            r.idle = None;
+        }
+        r
+    });
+    let separator_kwarg = kwarg::<bool>(kwargs, "show_separator_line")?;
+    if let (Some(r), None) = (resize, separator_kwarg) {
+        panel = r.panel(panel);
+    }
+    let saved = resize.map(|r| r.apply(ui.visuals_mut()));
+    let line = ui.visuals().widgets.noninteractive.bg_stroke;
+    let shows_line = separator_kwarg
+        .or_else(|| resize.and_then(|r| r.idle).map(|s| s.width > 0.0))
+        .unwrap_or(bar_box.is_none());
+    // the strip under the line is painted under what the panel draws (its line at rest, under the mouse or dragged)
+    let strip_slot = ui.painter().add(egui::Shape::Noop);
     let mut rect = None;
     let result = match kwarg::<Py<Bool>>(kwargs, "expanded")? {
         Some(expanded) => with_bool_copy(update_fun.py(), &expanded, |is_expanded| {
             panel
-                .show_collapsible(ui, is_expanded, |ui| run_nested_update_func(ui, update_fun))
+                .show_collapsible(ui, is_expanded, |ui| {
+                    if let Some(saved) = saved {
+                        saved.restore(ui.visuals_mut());
+                    }
+                    run_nested_update_func(ui, update_fun)
+                })
                 .map_or(Ok(()), |r| {
                     rect = Some(r.response.rect);
                     r.inner
                 })
         }),
         None => {
-            let response = panel.show(ui, |ui| run_nested_update_func(ui, update_fun));
+            let response = panel.show(ui, |ui| {
+                if let Some(saved) = saved {
+                    saved.restore(ui.visuals_mut());
+                }
+                run_nested_update_func(ui, update_fun)
+            });
             rect = Some(response.response.rect);
             response.inner
         }
     };
+    if let Some(saved) = saved {
+        saved.restore(ui.visuals_mut());
+    }
     if let (Some(rect), Some(fill)) = (rect, strip_fill) {
-        let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
-        let shows_line = kwarg::<bool>(kwargs, "show_separator_line")?.unwrap_or(true);
-        if shows_line && stroke.width > 0.0 && fill.a() < 255 {
-            // the strip of the line, at the outer edge of the panel, under the line
-            let w = stroke.width.round().max(1.0);
+        if shows_line && line.width > 0.0 && fill.a() < 255 {
+            // the strip of the line, at the outer edge of the panel, under the line: the line takes a strip of
+            // the outer margin that the fill of the frame does not cover
+            let w = line.width.round().max(1.0);
             let strip = match side {
                 'l' => egui::Rect::from_min_max(egui::pos2(rect.right() - w, rect.top()), rect.right_bottom()),
                 'r' => egui::Rect::from_min_max(rect.left_top(), egui::pos2(rect.left() + w, rect.bottom())),
                 't' => egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - w), rect.right_bottom()),
                 _ => egui::Rect::from_min_max(rect.left_top(), egui::pos2(rect.right(), rect.top() + w)),
             };
-            let painter = ui.painter();
-            painter.rect_filled(strip, 0.0, fill);
-            let line = match side {
-                'l' => [strip.center_top(), strip.center_bottom()],
-                'r' => [strip.center_top(), strip.center_bottom()],
-                _ => [strip.left_center(), strip.right_center()],
-            };
-            painter.line_segment(line, stroke);
+            ui.painter().set(strip_slot, egui::Shape::rect_filled(strip, 0.0, fill));
         }
     }
     if separator.is_some() {
@@ -115,8 +162,21 @@ unsafe fn show_panel(
 ///
 ///     show_separator_line (bool): show a line between the panel and the rest of the window
 ///
-///     separator_stroke (tuple[float, color]): width and color of that line. Default is the line of
-///         the theme
+///     separator_stroke (tuple[float, color]): width and color of that line. Default is the token
+///         `layout.<region>.resize_stroke` of the style sheet, then `layout.<region>.outline` (the region is "sidebar"
+///         for left_panel and right_panel, "topbar" for top_panel, "bottombar" for bottom_panel; "none" removes the
+///         line), else the line of the theme
+///
+///     The style sheet gives the line of the edge that resizes the panel: `layout.<region>.resize_stroke` at rest
+///     (a stroke, or "none" for no line; it also shows or hides the separator line when show_separator_line is not
+///     given), `layout.<region>.resize_hover_stroke` under the mouse and `layout.<region>.resize_active_stroke` while
+///     it is dragged (`layout.resize_stroke`... for all the regions). Not given, the line is the stroke of the
+///     widgets of the theme (`widgets.hovered.fg_stroke`, `widgets.active.fg_stroke`); the widgets inside the panel
+///     keep the strokes of the theme.
+///
+///     The style sheet can make a top or bottom panel a box: with `layout.topbar.sheet` (or `layout.bottombar.sheet`)
+///     its fill is that color, its outline `layout.topbar.outline` and its rounding `layout.topbar.rounding`. Without
+///     a sheet token the panel keeps its glass, with no box. The keyword args of the call win over the tokens.
 ///
 ///     default_size (float): the initial width of the panel
 ///

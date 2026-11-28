@@ -12,7 +12,12 @@ with fullsize_content the room of the window buttons is kept at its top.
 - `id` (str): id of the panel. Default is "sidebar"
 - default_size (float), min_size (float), max_size (float), exact_size (float), resizable (bool): the width, see left_panel
 - `expanded` (Bool): the panel is shown when expanded.value is True
-- gap, rounding, outline, sheet, opacity, inner_margin: the layout rules of this region, see Context.set_layout. They are looked up in the call, then in the rules of the sidebar, then in the global rules
+- gap, rounding, outline, sheet, opacity, inner_margin: the layout rules of this region, see Context.set_layout. They are looked up in the call, then in the rules of the sidebar, then in the global rules, then in the style tokens (`layout.sidebar.outline`, `layout.sidebar.rounding`, `layout.sidebar.sheet`; "none" is no outline)
+- The line of the edge that resizes the sidebar is given by the style sheet: `layout.sidebar.resize_stroke`
+- at rest (no line by default, "none" for none), `layout.sidebar.resize_hover_stroke` under the mouse and
+- `layout.sidebar.resize_active_stroke` while it is dragged (`layout.resize_stroke`... for all the regions).
+- Not given, it is the stroke of the hovered and active widgets of the theme. The same tokens with `topbar`
+- and `bottombar` are read by topbar_panel and bottombar_panel.
 
 **Example:**
 
@@ -21,6 +26,45 @@ def update_func(ctx):
     sidebar_panel(lambda: label("Files"), default_size=200)
     topbar_panel(lambda: label("Title"))
     heading("Content")
+```
+
+
+## `sidebar_section(title, update_func, **kwargs)`
+
+A section of a sidebar that folds: a small title (like Favoris, Emplacements, Étiquettes of the Finder) that a
+click folds or opens, a chevron at its right while the title is under the pointer, the content under it when it
+is open, then a gap. It is the section of finder-rs (`pyegui_core::section`), drawn the same in both Finders.
+
+The look comes from the style tokens (see Context.set_style_tokens): `section.text` (color of the title),
+`section.font_size` (the size of the Small text by default), `section.height` (22), `section.gap` (12, the space
+after the section), `section.uppercase` (False), `section.chevron` ("hover", "always" or "none") and
+`section.chevron_size` (16).
+
+**Args**
+
+- `title` (str): the title of the section
+- `update_func` (Callable[[], None]): draws the content of the section, called only when it is open
+
+**Keyword args**
+
+- `open` (Bool): the open state, kept by the app (to save it); a click on the title changes open.value. Without it, the state is kept by egui under `id` (and saved with the memory of egui)
+- `id` (str): the id of the section when `open` is not given. Default is the title
+- `default_open` (bool): the state of a section that was never clicked, when `open` is not given. Default is True
+
+**Returns**
+
+- `bool`: the section is open
+
+**Example:**
+
+```python
+favorites_open = Bool(True)
+
+def sidebar():
+    if sidebar_section("Favoris", favorites_ui, open=favorites_open):
+        pass
+    sidebar_section("Emplacements", locations_ui)
+    sidebar_section("Étiquettes", tags_ui, default_open=False)
 ```
 
 
@@ -166,7 +210,16 @@ Panels must be added before any other widget in update_func, otherwise they are 
 
 - `resizable` (bool): whether the user can resize the panel. Default is True
 - `show_separator_line` (bool): show a line between the panel and the rest of the window
-- `separator_stroke` (tuple[float, color]): width and color of that line. Default is the line of the theme
+- `separator_stroke` (tuple[float, color]): width and color of that line. Default is the token `layout.<region>.resize_stroke` of the style sheet, then `layout.<region>.outline` (the region is "sidebar" for left_panel and right_panel, "topbar" for top_panel, "bottombar" for bottom_panel; "none" removes the line), else the line of the theme
+- The style sheet gives the line of the edge that resizes the panel: `layout.<region>.resize_stroke` at rest
+- (a stroke, or "none" for no line; it also shows or hides the separator line when show_separator_line is not
+- given), `layout.<region>.resize_hover_stroke` under the mouse and `layout.<region>.resize_active_stroke` while
+- it is dragged (`layout.resize_stroke`... for all the regions). Not given, the line is the stroke of the
+- widgets of the theme (`widgets.hovered.fg_stroke`, `widgets.active.fg_stroke`); the widgets inside the panel
+- keep the strokes of the theme.
+- The style sheet can make a top or bottom panel a box: with `layout.topbar.sheet` (or `layout.bottombar.sheet`)
+- its fill is that color, its outline `layout.topbar.outline` and its rounding `layout.topbar.rounding`. Without
+- a sheet token the panel keeps its glass, with no box. The keyword args of the call win over the tokens.
 - `default_size` (float): the initial width of the panel
 - `min_size` (float): min width of the panel
 - `max_size` (float): max width of the panel

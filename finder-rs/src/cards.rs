@@ -5,6 +5,8 @@ use std::path::Path;
 
 use eframe::egui::{self, Align, Layout, RichText};
 
+use crate::sheets;
+
 /// The date as the views of the Finder say it (`pyegui_core::human_date`): "à l'instant", "il y a 5 min",
 /// "Aujourd'hui à 14:32", "Hier à 09:10", "lundi dernier à 09:10", "12 mars à 09:10", "12 mars 2025".
 /// `when` and `now` are seconds since the epoch, the days are the ones of the local time zone.
@@ -37,15 +39,15 @@ const ICON: f32 = 20.0;
 /// Draws the card and returns its response (click, double click, hover). `height` fixes the height of the
 /// card, for the lists that only draw the cards in view.
 pub fn show(ui: &mut egui::Ui, card: &Card, selected: bool, height: Option<f32>) -> egui::Response {
-    let visuals = ui.visuals();
-    let text = visuals.text_color();
-    let fill = text.gamma_multiply(if selected { 0.16 } else { 0.07 });
-    let stroke = visuals.widgets.noninteractive.bg_stroke;
+    // the fills and the rounding of the look of the app (the style sheet), as the cards of finder.py: no outline
+    let dark = ui.visuals().dark_mode;
+    let rounding = sheets::number("card_rounding", dark);
+    let fill = sheets::color(if selected { "card_selected_fill" } else { "card_fill" }, dark).unwrap_or_default();
     let width = ui.available_width();
-    let shown = egui::Frame::new().fill(fill).stroke(stroke).corner_radius(8.0).inner_margin(MARGIN).show(ui, |ui| {
-        ui.set_width(width - 2.0 * MARGIN - 2.0 * stroke.width);
+    let shown = egui::Frame::new().fill(fill).corner_radius(rounding).inner_margin(MARGIN).show(ui, |ui| {
+        ui.set_width(width - 2.0 * MARGIN);
         if let Some(h) = height {
-            ui.set_height(h - 2.0 * MARGIN - 2.0 * stroke.width);
+            ui.set_height(h - 2.0 * MARGIN);
         }
         ui.horizontal(|ui| {
             if let Some(uri) = pyegui_core::icons::entry_icon_uri(ui.ctx(), card.path, card.is_dir, ICON) {
@@ -69,7 +71,7 @@ pub fn show(ui: &mut egui::Ui, card: &Card, selected: bool, height: Option<f32>)
         ui.ctx().stop_dragging();
     }
     if response.hovered() {
-        ui.painter().rect_filled(shown.response.rect, 8.0, text.gamma_multiply(0.06));
+        ui.painter().rect_filled(shown.response.rect, rounding, sheets::color("card_hover_fill", dark).unwrap_or_default());
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     response
@@ -77,16 +79,17 @@ pub fn show(ui: &mut egui::Ui, card: &Card, selected: bool, height: Option<f32>)
 
 /// An empty card with a text, clickable ("Charger plus")
 pub fn empty(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+    let dark = ui.visuals().dark_mode;
+    let (edge, edge_color) = sheets::stroke("edge", dark);
+    let rounding = sheets::number("card_rounding", dark);
     let width = ui.available_width();
-    let shown = egui::Frame::new().stroke(stroke).corner_radius(8.0).inner_margin(MARGIN).show(ui, |ui| {
-        ui.set_width(width - 2.0 * MARGIN - 2.0 * stroke.width);
+    let shown = egui::Frame::new().stroke(egui::Stroke::new(edge, edge_color)).corner_radius(rounding).inner_margin(MARGIN).show(ui, |ui| {
+        ui.set_width(width - 2.0 * MARGIN - 2.0 * edge);
         ui.vertical_centered(|ui| ui.label(RichText::new(text).weak()));
     });
     let response = ui.interact(shown.response.rect, ui.make_persistent_id(("empty-card", text)), egui::Sense::click());
     if response.hovered() {
-        let color = ui.visuals().text_color().gamma_multiply(0.06);
-        ui.painter().rect_filled(shown.response.rect, 8.0, color);
+        ui.painter().rect_filled(shown.response.rect, rounding, sheets::color("card_hover_fill", dark).unwrap_or_default());
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     response

@@ -683,9 +683,10 @@ def update_func(ctx):
 ## `tag_tree_view(view, tags, **kwargs)`
 
 Shows the tags as a tree: a node for every level, its last level in the color of its path,
-the full path on hover. A click selects a level, the arrow (or a double click) folds or opens
-it. A right click changes the color of the level or removes it from the tags, with the tags
-under it.
+the full path on hover. A click selects a level, the chevron folds or opens it (the `grid.chevron*`
+tokens, like the other trees). A right click changes the color of the level or removes it from the
+tags, with the tags under it. The tree is the one of finder-rs (`pyegui_core::tag_tree`): the same rows,
+trash, check boxes and moves in both Finders.
 
 **Args**
 
@@ -702,6 +703,13 @@ under it.
 - `keep_order` (bool): the levels stay in the order of the tags instead of being sorted by name, so that a move before or after another level shows. False by default
 - `icon` (bool): the tag icon in the color of the level instead of a dot. False by default
 - `checks` (dict[str, str]): a check box at the left of every row, in the state given by the path of the level: "on", "off" or "mixed" (a level that is not in the dict is off). The tree then picks tags, e.g. for the selected items: a click on a row is returned like a selection, the app puts the tag on or takes it off.
+- `row_height` (float): the height of a row. Default is 26
+- `indent` (float): the indentation of a level. Default is 14
+- `rounding` (float): the rounding of the fills of the rows. Default is the rounding of the widgets
+- selected_fill (color), hover_fill (color): the fills of the selected row and of the row under the pointer. Default is the selection color and the hovered fill of the theme
+- `accent` (color): the check boxes that are on and the line where a level is dropped. Default is the selection
+- `danger` (color): the armed trash. Default is the error color of the theme
+- delete_tip (str), armed_tip (str): the tooltips of the trash. Default is French, like the Finder
 
 **Returns**
 
@@ -715,7 +723,7 @@ tree = TagTreeView()
 
 def update_func(ctx):
     def sidebar():
-        clicked = tag_tree_view(tree, library, counts={"projet": 12, "projet/web": 5})
+        clicked = tag_tree_view(tree, library, counts={"projet": 12, "projet/web": 5}, icon=True)
         if clicked:
             print("show", clicked)
     left_panel("tags", sidebar)

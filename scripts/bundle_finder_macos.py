@@ -57,6 +57,10 @@ def main() -> int:
     if ICON.is_file():
         shutil.copy2(ICON, app / "Contents" / "Resources" / "finder.icns")
         plist["CFBundleIconFile"] = "finder"
+    # the style sheets the app can be themed with (it embeds a copy too; this folder lets one add or edit sheets)
+    sheets = REPO / "examples" / "style_sheets"
+    if sheets.is_dir():
+        shutil.copytree(sheets, app / "Contents" / "Resources" / "style_sheets")
     with open(app / "Contents" / "Info.plist", "wb") as f:
         plistlib.dump(plist, f)
     subprocess.run(["codesign", "--force", "--deep", "-s", "-", str(app)], check=True)

@@ -156,6 +156,18 @@ The repository is a Cargo workspace of three crates:
   and attaches the executables of Windows (x64, ARM64), macOS (x86_64, aarch64) and Linux to the release.
   Not done compared with `finder.py`: Windows Explorer integration.
 
+  **Rule: finder-rs conforms to the framework.** It draws with the widgets, styles and tokens of `pyegui-core` and takes its
+  look from the style sheets, like `finder.py`. A value drawn by hand, hard-coded, or a widget rebuilt in `finder-rs/` instead of
+  using the core is a **deviation**: it is never kept silently. Either the framework evolves (a new token, option or widget in
+  `core/`) or the deviation is arbitrated by the owner and written down here with its reason. Finder-rs uses the framework the way `finder.py` does: the same widgets and painters of the core (the dock tabs, the rows, the segmented
+  controls...), evolving the core when something is missing, instead of drawing by hand. Rule of arbitration: **follow `finder.py`** (its sheet values, its `app(...)` table, its constants). Deviations accepted so far,
+  because `finder.py` has the same value hard-coded or no value at all: the drop overlay (`from_black_alpha(110)`), the faded row of a
+  tag being dragged (`panel_fill * 0.6`), the accent strokes of the drop outline and line (2 px), the plain background colors
+  (22,24,30) and (235,235,240), the glass base alpha 60 of the secondary windows, the accent palette, the option color fallback
+  `from_gray(150)`, the background of the PDF viewer, and the file list selection fill (drawn in `core/`, the same in both apps).
+  Not accepted, to be brought to the value of `finder.py`: the error text (`finder.py`: 220,90,90), the dock roundings and
+  margins (`dock_rounding`, `pane_margin`, `unified_gap` of the sheet) and everything of the dock tabs.
+
 ## Source map (`src/`)
 
 | File | Content |

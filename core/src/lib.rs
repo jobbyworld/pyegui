@@ -35,9 +35,17 @@ pub mod terminal;
 pub mod tags;
 pub mod property_set;
 pub mod settings;
+pub mod sheet;
 pub mod dock_draw;
 pub mod tabs;
+pub mod tab_paint;
 pub mod segmented;
+pub mod section;
+pub mod tag_tree;
 pub mod markdown;
 #[cfg(feature = "pdf")]
 pub mod pdf_view;
+
+/// The style tokens are globals: the tests that change them, in any module, take this lock
+#[cfg(test)]
+pub(crate) static TOKENS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

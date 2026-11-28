@@ -118,7 +118,11 @@ impl Context {
     /// The dict has the keys `theme`, `colors` (panel, window, text edit and code backgrounds, links, selection, ...),
     /// `widgets` (for `noninteractive`, `inactive`, `hovered`, `active` and `open`: `fill`, `weak_fill`, `stroke`,
     /// `fg_stroke` (the color of the text and icons), `rounding`, `expansion`), `window` (stroke, rounding, shadows),
-    /// `fonts` (the name of a text style to (size, family)) and `spacing`.
+    /// `fonts` (the name of a text style to (size, family)) and `spacing`, `tabs` and `pill_tabs` (the look of the tabs
+    /// of a `Dock` or a `tab_view`: fills, texts, strokes, sizes, `outline` ("separate" or "joined"), `radius`, `foot`,
+    /// `top_gap`, `icon_size`, `close_stroke`, `arrow_hovered_fill`, `arrow_active_fill`; None where the theme decides),
+    /// `layout` (the regions whose resize handle has style tokens: `resize_stroke`, `resize_hover_stroke`,
+    /// `resize_active_stroke`, None where not given).
     ///
     /// Example::
     ///
@@ -219,6 +223,17 @@ impl Context {
             d.set_item("spacing", l.spacing)?;
             d.set_item("title_spacing", l.title_spacing)?;
             d.set_item("bar_height", l.bar_height)?;
+            d.set_item("outline", l.outline.name())?;
+            d.set_item("radius", l.radius)?;
+            // None: the radius of the corners of the tab, between 4 and 8
+            d.set_item("foot", l.foot)?;
+            d.set_item("top_gap", l.top_gap)?;
+            d.set_item("icon_size", l.icon_size)?;
+            // None: the stroke of the widgets of the theme
+            d.set_item("close_stroke", l.close_stroke.map(stroke))?;
+            // None: the fills of the buttons of the theme
+            d.set_item("arrow_hovered_fill", l.arrow_hovered_fill.map(hex))?;
+            d.set_item("arrow_active_fill", l.arrow_active_fill.map(hex))?;
             out.set_item(key, d)?;
         }
 
@@ -234,6 +249,18 @@ impl Context {
         d.set_item("chevron_hover_color", hex(g.chevron_hover_color))?;
         d.set_item("chevron_size", g.chevron_size)?;
         out.set_item("grid", d)?;
+
+        // the titles of the sections of a sidebar (`sidebar_section`)
+        let l = pyegui_core::section::look(&style);
+        let d = PyDict::new(py);
+        d.set_item("text", hex(l.text))?;
+        d.set_item("font_size", l.font_size)?;
+        d.set_item("height", l.height)?;
+        d.set_item("gap", l.gap)?;
+        d.set_item("uppercase", l.uppercase)?;
+        d.set_item("chevron", l.chevron.name())?;
+        d.set_item("chevron_size", l.chevron_size)?;
+        out.set_item("section", d)?;
 
         // the fill of the popups: the token, or the window fill when there is none
         let d = PyDict::new(py);
@@ -270,13 +297,43 @@ impl Context {
             }
         }
         out.set_item("contexts", contexts)?;
+
+        // the resize handles of the panels given by the tokens (only the regions that have one):
+        // layout.<region>.resize_stroke / resize_hover_stroke / resize_active_stroke, None where not given
+        let layout = PyDict::new(py);
+        for region in pyegui_core::sheet::REGIONS {
+            if let Some(r) = pyegui_core::sheet::resize_strokes(region, dark) {
+                let d = PyDict::new(py);
+                d.set_item("resize_stroke", r.idle.map(stroke))?;
+                d.set_item("resize_hover_stroke", r.hover.map(stroke))?;
+                d.set_item("resize_active_stroke", r.active.map(stroke))?;
+                layout.set_item(region, d)?;
+            }
+        }
+        out.set_item("layout", layout)?;
         Ok(out)
     }
 
     /// Changes any value of the style of a theme by its path, the same paths as the dict of `style_snapshot`
     /// (`colors.panel`, `widgets.hovered.weak_fill`, `widgets.active.stroke`, `window.rounding`, `fonts.Body`,
-    /// `spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`, `popups.dropdown_fill`...). The widgets of a context (`menu`, `dropdown`, `sidebar`, `topbar`, `bottombar`, `window`) have their own tokens `<context>.<state>.<field>`, e.g. `menu.hovered.weak_fill`, looked up before `widgets.<state>.<field>`; `<context>.button_padding` (x, y) and `<context>.button_padding_radius` give the padding of their buttons, `spacing.button_padding_radius` does it for the whole app: a factor of the rounding of the buttons that the padding at the left and at the right is at least (a round button needs room for its corners). The fill of the popups is an RGBA color whose alpha is the transparency: `popups.dropdown_fill` (the list of a combo box), `popups.menu_fill` (menus and context menus) `popups.tooltip_fill` (tooltips) and `popups.window_fill` (windows and modals, while `colors.window` is the fill under the whole window of the app), e.g. `{"popups.dropdown_fill": "#1e1e2e80"}` for a half transparent dropdown. The sheet of a region of the layout is a token too: `layout.sidebar.sheet` (also `topbar`, `bottombar`, `central`, `dock`) and `layout.sheet` for all of them, RGBA colors like `"#1e1e2ecc"`; the sheet of a call or of the rules of the region (`set_layout`) comes first. The tabs of a `Dock` and of a `tab_view` read the
-    /// `tabs.*` (classic tabs) and `pill_tabs.*` tokens. Only the given paths are changed. Colors are "#rrggbb[aa]", (r, g, b[, a]);
+    /// `spacing.item_spacing`, `tabs.active_fill`, `pill_tabs.spacing`, `grid.guide_line`, `grid.chevron`, `popups.dropdown_fill`...). The widgets of a context (`menu`, `dropdown`, `sidebar`, `topbar`, `bottombar`, `window`) have their own tokens `<context>.<state>.<field>`, e.g. `menu.hovered.weak_fill`, looked up before `widgets.<state>.<field>`; `<context>.button_padding` (x, y) and `<context>.button_padding_radius` give the padding of their buttons, `spacing.button_padding_radius` does it for the whole app: a factor of the rounding of the buttons that the padding at the left and at the right is at least (a round button needs room for its corners). The fill of the popups is an RGBA color whose alpha is the transparency: `popups.dropdown_fill` (the list of a combo box), `popups.menu_fill` (menus and context menus) `popups.tooltip_fill` (tooltips) and `popups.window_fill` (windows and modals, while `colors.window` is the fill under the whole window of the app), e.g. `{"popups.dropdown_fill": "#1e1e2e80"}` for a half transparent dropdown. The sheet of a region of the layout is a token too: `layout.sidebar.sheet` (also `topbar`, `bottombar`, `central`, `dock`) and `layout.sheet` for all of them, RGBA colors like `"#1e1e2ecc"`; the sheet of a call or of the rules of the region (`set_layout`) comes first. The outline and the rounding of a region are tokens too:
+    /// `layout.<region>.outline` (a stroke, or "none") and `layout.<region>.rounding` (`layout.outline` and `layout.rounding` for
+    /// all of them); a top or bottom bar is a box only when its sheet is given (`layout.topbar.sheet`), else it is the glass with
+    /// no box (the look of finder.py), and the line between a `top_panel`/`bottom_panel`/`left_panel` and the rest is
+    /// `layout.<region>.outline` when the call gives no `separator_stroke`. The edge that resizes a panel of a region
+    /// is drawn with `layout.<region>.resize_stroke` at rest (a stroke, or "none" for no line), `layout.<region>.resize_hover_stroke`
+    /// under the mouse and `layout.<region>.resize_active_stroke` while dragged (`layout.resize_stroke`... for all the regions;
+    /// not given, the strokes of the hovered and active widgets of the theme). The titles of `sidebar_section` read `section.text`,
+    /// `section.font_size`, `section.height`, `section.gap`, `section.uppercase`, `section.chevron` ("hover", "always", "none")
+    /// and `section.chevron_size`. The tabs of a `Dock` and of a `tab_view` read the
+    /// `tabs.*` (classic tabs) and `pill_tabs.*` tokens: the fills, texts and strokes of the tabs (`active_fill`, `inactive_fill`,
+    /// `hovered_fill`, `active_text`, `inactive_text`, `active_stroke`, `inactive_stroke`, `bar_fill`), their sizes (`spacing`,
+    /// `title_spacing`, `bar_height`, `radius` of the top corners, `top_gap` above the tabs, `icon_size`), `close_stroke` (the
+    /// close cross when the mouse is not on it), `arrow_hovered_fill` and `arrow_active_fill` (the scroll arrows of a full bar),
+    /// and `outline`: `"separate"` (the tab and its pane are two lines that meet at the bottom of the bar, the look of a
+    /// `Dock`) or `"joined"` (one line around the active tab and its pane with concave feet of radius `foot`, the look of the
+    /// dock of finder-rs); the defaults of the other tab tokens follow the outline. A `Dock` draws the `"separate"` outline.
+    /// Only the given paths are changed. Colors are "#rrggbb[aa]", (r, g, b[, a]);
     /// a stroke is (width, color); a rounding or a size is a float; a font is (size, family) or a size.
     ///
     /// Args:
@@ -289,217 +346,17 @@ impl Context {
     ///
     ///     ctx.set_style_tokens("dark", {"widgets.hovered.weak_fill": "#3a3a4aff", "widgets.inactive.rounding": 8})
     fn set_style_tokens(&self, theme: &str, tokens: &Bound<'_, PyDict>) -> PyResult<Vec<String>> {
-        use crate::style::extract_color;
         let theme = match theme {
             "light" => egui::Theme::Light,
             "dark" => egui::Theme::Dark,
             other => return Err(PyValueError::new_err(format!("Unknown theme '{other}', expected light or dark"))),
         };
-        let mut style: egui::Style = (*self.0.style_of(theme)).clone();
-        let mut unknown = Vec::new();
+        // one implementation for Python and Rust: the dict becomes JSON values, read by pyegui_core::sheet
+        let mut map = serde_json::Map::new();
         for (key, value) in tokens.iter() {
-            let path: String = key.extract()?;
-            let color = |v: &Bound<'_, PyAny>| extract_color(v);
-            let stroke = |v: &Bound<'_, PyAny>| -> PyResult<egui::Stroke> {
-                let (w, c) = v.extract::<(f32, Bound<'_, PyAny>)>()?;
-                Ok(egui::Stroke::new(w, extract_color(&c)?))
-            };
-            let shadow = |v: &Bound<'_, PyAny>| -> PyResult<egui::Shadow> {
-                let (x, y, blur, spread, c) = v.extract::<(i8, i8, u8, u8, Bound<'_, PyAny>)>()?;
-                Ok(egui::Shadow { offset: [x, y], blur, spread, color: extract_color(&c)? })
-            };
-            let radius = |v: &Bound<'_, PyAny>| -> PyResult<egui::CornerRadius> { Ok(egui::CornerRadius::same(v.extract::<f32>()?.round().clamp(0.0, 255.0) as u8)) };
-            let parts: Vec<&str> = path.split('.').collect();
-            let v = &mut style.visuals;
-            match parts.as_slice() {
-                ["colors", name] => match *name {
-                    "panel" => v.panel_fill = color(&value)?,
-                    "window" => v.window_fill = color(&value)?,
-                    "text_edit_bg" => v.extreme_bg_color = color(&value)?,
-                    "striped_bg" => v.faint_bg_color = color(&value)?,
-                    "code_bg" => v.code_bg_color = color(&value)?,
-                    "text" => v.widgets.noninteractive.fg_stroke.color = color(&value)?,
-                    "hyperlink" => v.hyperlink_color = color(&value)?,
-                    "selection_bg" => v.selection.bg_fill = color(&value)?,
-                    "selection_stroke" => v.selection.stroke.color = color(&value)?,
-                    "warn" => v.warn_fg_color = color(&value)?,
-                    "error" => v.error_fg_color = color(&value)?,
-                    "cursor" => v.text_cursor.stroke.color = color(&value)?,
-                    "separator" => v.widgets.noninteractive.bg_stroke.color = color(&value)?,
-                    _ => unknown.push(path.clone()),
-                },
-                ["widgets", state, field] => {
-                    let w = match *state {
-                        "noninteractive" => &mut v.widgets.noninteractive,
-                        "inactive" => &mut v.widgets.inactive,
-                        "hovered" => &mut v.widgets.hovered,
-                        "active" => &mut v.widgets.active,
-                        "open" => &mut v.widgets.open,
-                        _ => {
-                            unknown.push(path.clone());
-                            continue;
-                        }
-                    };
-                    match *field {
-                        "fill" => w.bg_fill = color(&value)?,
-                        "weak_fill" => w.weak_bg_fill = color(&value)?,
-                        "stroke" => w.bg_stroke = stroke(&value)?,
-                        "fg_stroke" => w.fg_stroke = stroke(&value)?,
-                        "rounding" => w.corner_radius = radius(&value)?,
-                        "expansion" => w.expansion = value.extract()?,
-                        _ => unknown.push(path.clone()),
-                    }
-                }
-                ["window", field] => match *field {
-                    "stroke" => v.window_stroke = stroke(&value)?,
-                    "rounding" => v.window_corner_radius = radius(&value)?,
-                    "menu_rounding" => v.menu_corner_radius = radius(&value)?,
-                    "shadow" => v.window_shadow = shadow(&value)?,
-                    "popup_shadow" => v.popup_shadow = shadow(&value)?,
-                    _ => unknown.push(path.clone()),
-                },
-                ["fonts", name] => {
-                    let found = style.text_styles.iter_mut().find(|(k, _)| k.to_string() == *name);
-                    match found {
-                        Some((_, font)) => {
-                            if let Ok(size) = value.extract::<f32>() {
-                                font.size = size;
-                            } else {
-                                font.size = value.extract::<(f32, String)>()?.0;
-                            }
-                        }
-                        None => unknown.push(path.clone()),
-                    }
-                }
-                [group @ ("tabs" | "pill_tabs"), field] => {
-                    let pill = *group == "pill_tabs";
-                    let dark = theme == egui::Theme::Dark;
-                    let mut bad = false;
-                    pyegui_core::tabs::update_tokens(dark, pill, |t| {
-                        let c = |v: &Bound<'_, PyAny>| extract_color(v).ok();
-                        let st = |v: &Bound<'_, PyAny>| v.extract::<(f32, Bound<'_, PyAny>)>().ok().and_then(|(w, col)| extract_color(&col).ok().map(|col| egui::Stroke::new(w, col)));
-                        match *field {
-                            "bar_fill" => t.bar_fill = c(&value),
-                            "active_fill" => t.active_fill = c(&value),
-                            "inactive_fill" => t.inactive_fill = c(&value),
-                            "hovered_fill" => t.hovered_fill = c(&value),
-                            "active_text" => t.active_text = c(&value),
-                            "inactive_text" => t.inactive_text = c(&value),
-                            "active_stroke" => t.active_stroke = st(&value),
-                            "inactive_stroke" => t.inactive_stroke = st(&value),
-                            "spacing" => t.spacing = value.extract().ok(),
-                            "title_spacing" => t.title_spacing = value.extract().ok(),
-                            "bar_height" => t.bar_height = value.extract().ok(),
-                            _ => bad = true,
-                        }
-                    });
-                    if bad {
-                        unknown.push(path.clone());
-                    }
-                }
-                ["grid", field] => {
-                    let dark = theme == egui::Theme::Dark;
-                    let mut bad = false;
-                    pyegui_core::grid_style::update_tokens(dark, |t| {
-                        let c = |v: &Bound<'_, PyAny>| extract_color(v).ok();
-                        let st = |v: &Bound<'_, PyAny>| v.extract::<(f32, Bound<'_, PyAny>)>().ok().and_then(|(w, col)| extract_color(&col).ok().map(|col| egui::Stroke::new(w, col)));
-                        match *field {
-                            "row_line" => t.row_line = st(&value),
-                            "column_line" => t.column_line = st(&value),
-                            "guide_line" => t.guide_line = st(&value),
-                            "guide_radius" => t.guide_radius = value.extract().ok(),
-                            "chevron" => t.chevron = value.extract::<String>().ok().and_then(|n| pyegui_core::grid_style::Chevron::parse(&n)),
-                            "chevron_color" => t.chevron_color = c(&value),
-                            "chevron_hover_color" => t.chevron_hover_color = c(&value),
-                            "chevron_size" => t.chevron_size = value.extract().ok(),
-                            _ => bad = true,
-                        }
-                    });
-                    if bad {
-                        unknown.push(path.clone());
-                    }
-                }
-                [context @ ("menu" | "dropdown" | "sidebar" | "topbar" | "bottombar" | "window"), state, field] => {
-                    let (Some(ctx_kind), Some(index)) = (pyegui_core::context_style::context_of(context), pyegui_core::context_style::state_index(state)) else {
-                        unknown.push(path.clone());
-                        continue;
-                    };
-                    let dark = theme == egui::Theme::Dark;
-                    let mut set = pyegui_core::context_style::tokens(dark, ctx_kind, index);
-                    match *field {
-                        "fill" => set.fill = Some(color(&value)?),
-                        "weak_fill" => set.weak_fill = Some(color(&value)?),
-                        "stroke" => set.stroke = Some(stroke(&value)?),
-                        "fg_stroke" => set.fg_stroke = Some(stroke(&value)?),
-                        "rounding" => set.rounding = Some(radius(&value)?),
-                        "expansion" => set.expansion = Some(value.extract()?),
-                        _ => {
-                            unknown.push(path.clone());
-                            continue;
-                        }
-                    }
-                    pyegui_core::context_style::update_tokens(dark, ctx_kind, index, |t| *t = set);
-                }
-                [context @ ("menu" | "dropdown" | "sidebar" | "topbar" | "bottombar"), field @ ("button_padding" | "button_padding_radius")] => {
-                    let Some(kind) = pyegui_core::context_style::context_of(context) else {
-                        continue;
-                    };
-                    let dark = theme == egui::Theme::Dark;
-                    if *field == "button_padding" {
-                        let (x, y) = value.extract::<(f32, f32)>()?;
-                        pyegui_core::context_style::update_padding(dark, Some(kind), |p| p.padding = Some((x, y)));
-                    } else {
-                        let factor: f32 = value.extract()?;
-                        pyegui_core::context_style::update_padding(dark, Some(kind), |p| p.radius_factor = Some(factor));
-                    }
-                }
-                ["layout", "sheet"] => {
-                    layout::set_sheet_token(theme == egui::Theme::Dark, None, extract_color(&value).ok());
-                }
-                ["layout", region, "sheet"] => {
-                    if !layout::set_sheet_token(theme == egui::Theme::Dark, Some(region), extract_color(&value).ok()) {
-                        unknown.push(path.clone());
-                    }
-                }
-                ["popups", field] => {
-                    let dark = theme == egui::Theme::Dark;
-                    let color = extract_color(&value).ok();
-                    let mut bad = false;
-                    pyegui_core::popup_style::update_tokens(dark, |t| match *field {
-                        "dropdown_fill" => t.dropdown_fill = color,
-                        "menu_fill" => t.menu_fill = color,
-                        "tooltip_fill" => t.tooltip_fill = color,
-                        "window_fill" => t.window_fill = color,
-                        _ => bad = true,
-                    });
-                    if bad {
-                        unknown.push(path.clone());
-                    }
-                }
-                ["spacing", name] => {
-                    let pair = |v: &Bound<'_, PyAny>| -> PyResult<egui::Vec2> {
-                        let (x, y) = v.extract::<(f32, f32)>()?;
-                        Ok(egui::vec2(x, y))
-                    };
-                    match *name {
-                        "item_spacing" => style.spacing.item_spacing = pair(&value)?,
-                        "button_padding" => style.spacing.button_padding = pair(&value)?,
-                        "button_padding_radius" => {
-                            let factor: f32 = value.extract()?;
-                            pyegui_core::context_style::update_padding(theme == egui::Theme::Dark, None, |p| p.radius_factor = Some(factor));
-                        }
-                        "interact_size" => style.spacing.interact_size = pair(&value)?,
-                        "slider_width" => style.spacing.slider_width = value.extract()?,
-                        "icon_width" => style.spacing.icon_width = value.extract()?,
-                        _ => unknown.push(path.clone()),
-                    }
-                }
-                _ => unknown.push(path.clone()),
-            }
+            map.insert(key.extract::<String>()?, style::py_to_json(&value)?);
         }
-        pyegui_core::context_style::fit_padding(&mut style, None);
-        self.0.set_style_of(theme, style);
-        Ok(unknown)
+        pyegui_core::sheet::try_apply_tokens(&self.0, theme, &map).map_err(PyValueError::new_err)
     }
 
     /// Sets light theme. Default is system's
@@ -717,11 +574,7 @@ impl Context {
 
     /// Restores the default style of both themes, and forgets the tokens of the tabs (`tabs.*`, `pill_tabs.*`) of the grids (`grid.*`) of the popups (`popups.*`) and of the layout (`layout.*`).
     fn reset_style(&self) {
-        pyegui_core::tabs::reset_tokens();
-        pyegui_core::grid_style::reset_tokens();
-        pyegui_core::popup_style::reset_tokens();
-        layout::reset_sheet_tokens();
-        pyegui_core::context_style::reset_tokens();
+        pyegui_core::sheet::reset_tokens();
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
             self.0.set_style_of(theme, style::default_style(theme));
         }
@@ -1660,6 +1513,7 @@ pub(crate) unsafe fn draw_frame(py: Python<'_>, ui: &mut egui::Ui, update_func: 
     ui_stack.push(&raw mut *ui);
 
     layout::begin_frame();
+    layout::set_region_theme(ui.visuals().dark_mode);
     // set_backdrop_image: the picture under everything
     backdrop_image::paint(ui.ctx(), ui.max_rect());
     // set_glass_style(background=...): glass under everything, seen between the boxes

@@ -1,5 +1,5 @@
 use eframe::egui;
-use egui::{Color32, CornerRadius, Id, Response, Role, Sense, Stroke, TextStyle, Ui, Vec2, Visuals, WidgetInfo};
+use egui::{Color32, CornerRadius, Id, Response, Role, Sense, Stroke, TextStyle, Ui, Visuals, WidgetInfo};
 use egui_tiles::{
     Container, ResizeState, SimplificationOptions, TabState, Tile, TileId, Tiles, UiResponse,
 };
@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::style::{kwarg_color, kwarg_stroke};
 use crate::style::Surface;
+use pyegui_core::dock_draw::{corner_mesh, dedup, minus, pane_outline, separate_pane_outline, snap, square_top_corners};
 use crate::{current_ui, kwarg, run_nested_call, run_nested_update_func, UI};
 
 /// a dock was drawn this frame, see take_drawn
@@ -49,9 +50,14 @@ const INACTIVE_SHEET: f32 = 0.45;
 ///         The title stays the identity of the pane: for `set_active`, `remove_pane`, `save` and `load`.
 ///         Default is the title
 ///
+///     icon (str): an image shown before the title of the tab, e.g. "icons/tag.svg" or "file://icons/tag.svg":
+///         drawn in the color of the title (a white SVG takes it), in a square of the `tabs.icon_size` token
+///         (14 by default), like the tabs of finder-rs. Default is no icon
+///
 /// Usage::
 ///
 ///     DockPane("Editor", editor_ui, closable=True)
+///     DockPane("Tags", tags_ui, icon="icons/tag.svg")
 ///     DockPane("tab 2", files_ui, label=lambda: current_folder().name)  # the tab shows the folder
 ///     DockPane("Notes", notes_ui, sheet=(59, 130, 246, 200))  # a blue sheet, with layout rules
 #[pyclass]
@@ -69,12 +75,15 @@ pub(crate) struct DockPane {
     central: bool,
     #[pyo3(get, set)]
     label: Option<Py<PyAny>>,
+    #[pyo3(get, set)]
+    icon: Option<String>,
 }
 
 #[pymethods]
 impl DockPane {
     #[new]
-    #[pyo3(signature = (title, update_func, closable=false, hide_tab=false, sheet=None, central=false, label=None))]
+    #[pyo3(signature = (title, update_func, closable=false, hide_tab=false, sheet=None, central=false, label=None, icon=None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         title: String,
         update_func: Py<PyAny>,
@@ -83,9 +92,11 @@ impl DockPane {
         sheet: Option<Bound<'_, PyAny>>,
         central: bool,
         label: Option<Py<PyAny>>,
+        icon: Option<String>,
     ) -> PyResult<Self> {
         Ok(DockPane {
             label,
+            icon,
             title,
             update_func,
             closable,
@@ -130,6 +141,8 @@ struct Pane {
     sheet: Option<Color32>,
     central: bool,
     label: Option<Py<PyAny>>,
+    /// the uri of the icon of the tab
+    icon: Option<String>,
 }
 
 impl Pane {
@@ -142,6 +155,7 @@ impl Pane {
             sheet: self.sheet,
             central: self.central,
             label: self.label.as_ref().map(|l| l.clone_ref(py)),
+            icon: self.icon.clone(),
         }
     }
 
@@ -154,7 +168,18 @@ impl Pane {
             sheet: pane.sheet,
             central: pane.central,
             label: pane.label.as_ref().map(|l| l.clone_ref(py)),
+            icon: pane.icon.as_deref().map(icon_uri),
         }
+    }
+}
+
+/// The uri of the icon of a tab: a path is made a `file://` uri
+fn icon_uri(icon: &str) -> String {
+    if icon.contains("://") {
+        icon.to_owned()
+    } else {
+        let path = std::path::absolute(icon).unwrap_or_else(|_| icon.into());
+        format!("file://{}", path.to_string_lossy().replace('\\', "/"))
     }
 }
 
@@ -662,6 +687,13 @@ impl DockStyle {
 ///
 /// Colors are (r, g, b), (r, g, b, a) or "#rrggbb[aa]".
 ///
+/// The options not given are read from the style tokens `tabs.*` (classic) or `pill_tabs.*` (pill) of
+/// ctx.set_style_tokens(), e.g. `tabs.radius` (corners of the tabs), `tabs.top_gap`, `tabs.close_stroke`. The tabs
+/// are drawn by the tab painter of pyegui-core with the "separate" outline: the tab and its pane are two lines
+/// that meet at the bottom of the bar. The token `tabs.outline = "joined"` of the style sheet gives the look of
+/// finder-rs instead: a gap above the tabs, round tops, concave feet and one piece for the active tab and its pane,
+/// the tint of the bar (`tabs.bar_fill`) laid under the dock and in the corners.
+///
 /// The tab bars can hold widgets, drawn by functions taking a DockTabBar. They are called for every
 /// tab bar of the dock:
 ///
@@ -743,28 +775,6 @@ fn add_pane_to_tabs(tree: &mut egui_tiles::Tree<Pane>, tabs_id: TileId, pane: Pa
     }
 }
 
-/// Points of the outline of a tab: left side, rounded top and right side, open at the bottom
-fn tab_outline(rect: egui::Rect, radius: f32) -> Vec<egui::Pos2> {
-    use std::f32::consts::FRAC_PI_2;
-
-    let radius = radius.min(rect.width() / 2.0).min(rect.height());
-    let steps = (radius.ceil() as usize).clamp(1, 8);
-    let mut points = vec![rect.left_bottom()];
-    let mut corner = |center: egui::Pos2, start: f32| {
-        for i in 0..=steps {
-            let angle = start + FRAC_PI_2 * i as f32 / steps as f32;
-            points.push(center + radius * egui::vec2(angle.cos(), angle.sin()));
-        }
-    };
-    // angles grow clockwise on screen, as y points down
-    corner(rect.left_top() + egui::vec2(radius, radius), 2.0 * FRAC_PI_2);
-    corner(rect.right_top() + egui::vec2(-radius, radius), 3.0 * FRAC_PI_2);
-    points.push(rect.right_bottom());
-    // the end of an arc is the start of the next one when the tab is as wide as two radii: a stroke of egui
-    // doubles its width at a repeated point, which shows as a dot when the color is semi transparent
-    pyegui_core::dock_draw::dedup(points, false)
-}
-
 /// The sheet of a pane: its own color if it has one, else the one of the dock, with the opacity of the dock
 fn pane_sheet(rules: &crate::layout::Resolved, own: Option<Color32>, visuals: &Visuals) -> Color32 {
     own.map_or_else(|| rules.sheet_fill(visuals), |color| color.gamma_multiply(rules.opacity))
@@ -777,6 +787,10 @@ fn glass_pane_fill(central: bool, visuals: &Visuals) -> Option<Color32> {
         return None;
     }
     let surface = if central { Surface::Central } else { Surface::Dock };
+    // the token `layout.central.sheet` / `layout.dock.sheet` of the style sheet comes first
+    if let Some(color) = pyegui_core::sheet::layout_sheet(if central { "central" } else { "dock" }, visuals.dark_mode) {
+        return Some(color);
+    }
     Some(
         crate::style::surface_fill(visuals, surface)
             .or_else(|| crate::style::sheet_fill(visuals))
@@ -790,83 +804,6 @@ fn glass_tile_fill(tiles: &Tiles<Pane>, tile_id: TileId, visuals: &Visuals) -> O
         Some(Tile::Pane(pane)) => glass_pane_fill(pane.central, visuals),
         _ => None,
     }
-}
-
-/// The top corners of a pane that stay square: those under a tab of its bar (active or not), so
-/// the tabs sit on a straight edge, without a notch of background between a tab and a rounded corner
-fn square_top_corners(tabs: &[egui::Rect], rect: egui::Rect, radius: f32) -> (bool, bool) {
-    let mut square = (false, false);
-    for tab in tabs {
-        let on_top = tab.width() > 0.0 && tab.max.y <= rect.min.y + 0.5 && tab.max.y >= rect.min.y - 2.0;
-        if !on_top || tab.right() <= rect.left() || tab.left() >= rect.right() {
-            continue;
-        }
-        square.0 |= tab.left() - rect.left() < radius;
-        square.1 |= rect.right() - tab.right() < radius;
-    }
-    square
-}
-
-/// Points of the outline of a pane: rounded corners, open at the top under its tab.
-/// A top corner touched by the tab stays square, so the sides of the tab continue into the pane
-fn pane_outline(
-    rect: egui::Rect,
-    tab: Option<egui::Rect>,
-    square: (bool, bool),
-    radius: f32,
-    width: f32,
-) -> Vec<egui::Pos2> {
-    use egui::pos2;
-    use std::f32::consts::FRAC_PI_2;
-
-    let inner = rect.shrink(width / 2.0);
-    // concentric with the corners of the fill (radius on rect): the line is half its width inside
-    let radius = (radius - width / 2.0).min(inner.width() / 2.0).min(inner.height() / 2.0).max(0.0);
-    let steps = (radius.ceil() as usize).clamp(1, 8);
-    let mut points = vec![];
-
-    // y points down, so the angles of the arcs decrease to go counterclockwise on screen
-    let arc = |points: &mut Vec<egui::Pos2>, center: egui::Pos2, start: f32| {
-        for i in 0..=steps {
-            let angle = start - FRAC_PI_2 * i as f32 / steps as f32;
-            points.push(center + radius * egui::vec2(angle.cos(), angle.sin()));
-        }
-    };
-
-    // without a tab the outline is closed: it starts and ends in the middle of the top side
-    let (gap_left, gap_right) = match tab {
-        Some(tab) => (
-            (tab.left() + width / 2.0).clamp(inner.left(), inner.right()),
-            (tab.right() - width / 2.0).clamp(inner.left(), inner.right()),
-        ),
-        None => (inner.center().x, inner.center().x),
-    };
-    let round_left = !square.0 && gap_left - inner.left() >= radius;
-    let round_right = !square.1 && inner.right() - gap_right >= radius;
-
-    if tab.is_some() {
-        // joins the bottom of the left side of the tab
-        points.push(pos2(gap_left, rect.top() - width / 2.0));
-    }
-    points.push(pos2(gap_left, inner.top()));
-    if round_left {
-        arc(&mut points, inner.left_top() + egui::vec2(radius, radius), 3.0 * FRAC_PI_2);
-    } else {
-        points.push(inner.left_top());
-    }
-    arc(&mut points, inner.left_bottom() + egui::vec2(radius, -radius), 2.0 * FRAC_PI_2);
-    arc(&mut points, inner.right_bottom() + egui::vec2(-radius, -radius), FRAC_PI_2);
-    if round_right {
-        arc(&mut points, inner.right_top() + egui::vec2(-radius, radius), 0.0);
-    } else {
-        points.push(inner.right_top());
-    }
-    points.push(pos2(gap_right, inner.top()));
-    if tab.is_some() {
-        // joins the bottom of the right side of the tab
-        points.push(pos2(gap_right, rect.top() - width / 2.0));
-    }
-    pyegui_core::dock_draw::dedup(points, false)
 }
 
 /// Applies a change asked from a tab bar callback
@@ -1187,9 +1124,84 @@ struct Behavior<'py> {
     active_tabs: std::collections::HashMap<TileId, egui::Rect>,
     /// every tab drawn this frame, active or not: a corner of a pane under a tab stays square
     tab_rects: Vec<egui::Rect>,
+    /// `Joined` outline: what is painted with the sheet this frame (the panes, the active tabs and their feet), taken
+    /// out of the tint of the bar that is laid under the dock
+    sheets: Vec<egui::Rect>,
+    /// `Joined`: the corners that the round tops and feet leave clear, filled with the tint of the bar
+    corners: Vec<egui::Mesh>,
+    /// `Joined`: the fill of the active tabs and of their feet
+    fills: Vec<egui::Shape>,
+    /// `Joined`: the active tab of a pane (its rectangle and radius): one outline goes around tab and pane
+    joined_tabs: std::collections::HashMap<TileId, (egui::Rect, u8)>,
+    /// `Joined`: the panes drawn in one sheet; their outline is drawn once the tabs are known
+    joined_panes: Vec<(TileId, egui::Rect)>,
+    /// `Joined`: the panes under a bar of tabs, whose top left corner is square (the active tab stands there)
+    barred: std::collections::HashSet<TileId>,
 }
 
 impl Behavior<'_> {
+    /// Whether the tabs of this dock are drawn with the `Joined` outline (`tabs.outline` of the style sheet)
+    fn joined(&self, visuals: &Visuals) -> bool {
+        !self.style.pill && self.style.tokens(visuals.dark_mode).outline == Some(pyegui_core::tabs::TabOutline::Joined)
+    }
+
+    /// What is under the panes, the bars of tabs and the gaps with the `Joined` outline: `tabs.bar_fill`, else nothing
+    fn rest_tint(&self, visuals: &Visuals) -> Color32 {
+        self.style.tab_bar_color.or(self.style.tokens(visuals.dark_mode).bar_fill).unwrap_or(Color32::TRANSPARENT)
+    }
+
+    /// The look of a tab of this dock in its state: the colors and strokes of the dock (options, layout rules,
+    /// glass) given to the core painter, which takes the rest from the tokens (`tabs.*`, `pill_tabs.*`). The
+    /// Python dock draws the `Separate` outline.
+    fn tab_look(&self, ui: &Ui, tiles: &Tiles<Pane>, tile_id: TileId, state: &TabState) -> pyegui_core::tabs::TabLook {
+        use egui_tiles::Behavior as _;
+        let visuals = ui.visuals();
+        let own_sheet = match tiles.get(tile_id) {
+            Some(Tile::Pane(pane)) => pane.sheet,
+            _ => None,
+        };
+        let fill = self.tab_bg_color(visuals, tiles, tile_id, state);
+        let hovered = self
+            .style
+            .hovered_tab_fill
+            .or(self.style.tokens(visuals.dark_mode).hovered_fill)
+            .unwrap_or_else(|| {
+                if self.style.pill {
+                    visuals.widgets.hovered.weak_bg_fill
+                } else if let Some(rules) = crate::layout::dock_rules() {
+                    pane_sheet(&rules, own_sheet, visuals).gamma_multiply(0.5 * (1.0 + INACTIVE_SHEET))
+                } else if let Some(fill) = glass_tile_fill(tiles, tile_id, visuals) {
+                    fill.gamma_multiply(0.5 * (1.0 + INACTIVE_SHEET))
+                } else {
+                    DockStyle::inactive_tint(visuals, true)
+                }
+            });
+        let stroke = self.tab_outline_stroke(visuals, tiles, tile_id, state);
+        let text = self.tab_text_color(visuals, tiles, tile_id, state);
+        // the radius of the theme, set with ctx.set_style(rounding=...), or of the layout rules
+        let radius = self.style.tokens(visuals.dark_mode).radius.unwrap_or_else(|| {
+            crate::layout::dock_rules().map_or_else(|| f32::from(visuals.widgets.inactive.corner_radius.nw), |rules| rules.rounding)
+        });
+        let joined = self.joined(visuals);
+        let outline = if joined { pyegui_core::tabs::TabOutline::Joined } else { pyegui_core::tabs::TabOutline::Separate };
+        let given = pyegui_core::tabs::TabSet {
+            outline: Some(outline),
+            active_fill: Some(fill),
+            // joined: the other tabs show the bar through, unless the sheet gives them a fill
+            inactive_fill: if joined { self.style.inactive_tab_fill.or(self.style.tokens(visuals.dark_mode).inactive_fill) } else { Some(fill) },
+            hovered_fill: if joined { self.style.hovered_tab_fill.or(self.style.tokens(visuals.dark_mode).hovered_fill) } else { Some(hovered) },
+            // joined: the colors of the text of finder-rs (the text color of the theme, the weak one for the others)
+            active_text: if joined { Some(self.style.active_tab_text_color.or(self.style.tokens(visuals.dark_mode).active_text).unwrap_or_else(|| visuals.strong_text_color())) } else { Some(text) },
+            inactive_text: if joined { self.style.inactive_tab_text_color.or(self.style.tokens(visuals.dark_mode).inactive_text) } else { Some(text) },
+            active_stroke: Some(stroke),
+            inactive_stroke: Some(stroke),
+            title_spacing: Some(self.tab_title_spacing(visuals)),
+            radius: Some(radius),
+            ..Default::default()
+        };
+        pyegui_core::tabs::look(visuals, self.style.pill, given)
+    }
+
     /// Calls a tab bar callback with the DockTabBar of these tabs
     fn tab_bar_ui(
         &mut self,
@@ -1246,7 +1258,30 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
             .pane_margin
             .unwrap_or_else(|| crate::layout::dock_rules().map_or(6.0, |rules| rules.inner_margin));
 
-        if let Some(rules) = crate::layout::dock_rules() {
+        if self.joined(ui.visuals()) {
+            // `Joined`: the pane is one piece with its active tab, drawn with the sheet; the tint of the bar is laid
+            // under it and in its corners by `dock_area`
+            let visuals = ui.visuals();
+            let rules = crate::layout::dock_rules();
+            let fill = match &rules {
+                Some(rules) => pane_sheet(rules, pane.sheet, visuals),
+                None => glass_pane_fill(pane.central, visuals).unwrap_or(visuals.panel_fill),
+            };
+            let rr = rules.as_ref().map_or_else(|| f32::from(visuals.widgets.inactive.corner_radius.sw), |r| r.rounding);
+            let area = snap(ui, ui.max_rect());
+            let square_tl = self.barred.contains(&tile_id);
+            let r = rr.round().clamp(0.0, 255.0) as u8;
+            let tint = self.rest_tint(visuals);
+            ui.painter().rect_filled(area, CornerRadius { nw: if square_tl { 0 } else { r }, ne: r, sw: r, se: r }, fill);
+            if !square_tl {
+                self.corners.push(corner_mesh(area.left_top(), 1.0, 1.0, rr, tint));
+            }
+            self.corners.push(corner_mesh(area.right_top(), -1.0, 1.0, rr, tint));
+            self.corners.push(corner_mesh(area.left_bottom(), 1.0, -1.0, rr, tint));
+            self.corners.push(corner_mesh(area.right_bottom(), -1.0, -1.0, rr, tint));
+            self.sheets.push(area);
+            self.joined_panes.push((tile_id, area));
+        } else if let Some(rules) = crate::layout::dock_rules() {
             // the pane is a box of the rules: filled with the opacity of the region, with its corners
             let fill = pane_sheet(&rules, pane.sheet, ui.visuals());
             let rect = ui.max_rect();
@@ -1302,34 +1337,23 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         tile_id: TileId,
         state: &TabState,
     ) -> Response {
+        use pyegui_core::tab_paint;
         let text = self.tab_title_for_tile(tiles, tile_id);
-        let close_btn_size = Vec2::splat(self.close_button_outer_size());
-        let close_btn_left_padding = 4.0;
         let font_id = TextStyle::Button.resolve(ui.style());
         let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, font_id);
-
-        let x_margin = if self.style.pill {
-            self.tab_title_spacing(ui.visuals())
-        } else {
-            // the title keeps clear of the rounded corners and of the outline, however thick:
-            // with a large rounding or a thick outline it would touch the sides of the tab
-            let radius = crate::layout::dock_rules()
-                .map_or_else(|| f32::from(ui.visuals().widgets.inactive.corner_radius.nw), |rules| rules.rounding);
-            let stroke = self.tab_outline_stroke(ui.visuals(), tiles, tile_id, state).width;
-            let radius = radius.min(ui.available_height() / 2.0);
-            self.tab_title_spacing(ui.visuals()).max(radius * 0.6) + stroke
-        };
+        let look = self.tab_look(ui, tiles, tile_id, state);
+        let joined = look.outline == pyegui_core::tabs::TabOutline::Joined;
+        let stroke = if state.active { look.active_stroke } else { look.inactive_stroke };
+        let x_margin = tab_paint::x_margin(&look, ui.available_height(), if joined { 0.0 } else { stroke.width });
         let spacing = self.style.tab_spacing(ui.visuals().dark_mode);
-
-        let button_width = galley.size().x
-            + 2.0 * x_margin
-            + f32::from(state.closable) * (close_btn_left_padding + close_btn_size.x);
+        let icon = match tiles.get(tile_id) {
+            Some(Tile::Pane(pane)) => pane.icon.clone(),
+            _ => None,
+        };
+        let button_width = tab_paint::tab_width(&look, galley.size().x, icon.is_some(), state.closable, x_margin);
         let (_, outer_rect) = ui.allocate_space(egui::vec2(button_width + spacing, ui.available_height()));
         // the spacing is on the right, so the first tab stays aligned with the panes
-        let tab_rect = egui::Rect::from_min_size(
-            outer_rect.min,
-            egui::vec2(button_width, outer_rect.height()),
-        );
+        let tab_rect = tab_paint::place(ui, &look, outer_rect, button_width);
 
         let draggable = self.is_tile_draggable(tiles, tile_id);
         let sense = if draggable {
@@ -1347,7 +1371,10 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
             WidgetInfo::selected(Role::Button, ui.is_enabled(), state.active, galley.text())
         });
 
-        if state.active && !self.style.pill {
+        if joined {
+            self.barred.insert(tile_id);
+        }
+        if state.active && !self.style.pill && !joined {
             // the outline of the pane is open under its tab, clipped to the visible part of the bar
             self.active_tabs
                 .insert(tile_id, tab_rect.intersect(ui.clip_rect()));
@@ -1356,97 +1383,52 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
             self.tab_rects.push(tab_rect.intersect(ui.clip_rect()));
         }
 
-        // show a gap when dragged
+        // nothing is drawn where a dragged tab was
         if ui.is_rect_visible(tab_rect) && !state.is_being_dragged {
-            let own_sheet = match tiles.get(tile_id) {
-                Some(Tile::Pane(pane)) => pane.sheet,
-                _ => None,
-            };
-            let mut bg_color = self.tab_bg_color(ui.visuals(), tiles, tile_id, state);
-            if !state.active && tab_response.hovered() {
-                bg_color = self
-                    .style
-                    .hovered_tab_fill
-                    .or(self.style.tokens(ui.visuals().dark_mode).hovered_fill)
-                    .unwrap_or(if self.style.pill {
-                        ui.visuals().widgets.hovered.weak_bg_fill
-                    } else if let Some(rules) = crate::layout::dock_rules() {
-                        pane_sheet(&rules, own_sheet, ui.visuals()).gamma_multiply(0.5 * (1.0 + INACTIVE_SHEET))
-                    } else if let Some(fill) = glass_tile_fill(tiles, tile_id, ui.visuals()) {
-                        fill.gamma_multiply(0.5 * (1.0 + INACTIVE_SHEET))
-                    } else {
-                        DockStyle::inactive_tint(ui.visuals(), true)
-                    });
-            }
-            let stroke = self.tab_outline_stroke(ui.visuals(), tiles, tile_id, state);
-            if self.style.pill {
-                // a capsule floating in the bar
-                let pill = tab_rect.shrink2(egui::vec2(0.0, 3.0));
-                let radius = (pill.height() / 2.0).min(255.0) as u8;
-                ui.painter().rect(
-                    pill,
-                    CornerRadius::same(radius),
-                    bg_color,
-                    stroke,
-                    egui::StrokeKind::Inside,
-                );
-            } else {
-                // the radius of the theme, set with ctx.set_style(rounding=...)
-                let radius = crate::layout::dock_rules().map_or(ui.visuals().widgets.inactive.corner_radius.nw, |rules| {
-                    rules.rounding.round().clamp(0.0, 255.0) as u8
-                });
-                // egui rounds a rectangle at most by half its smaller side: the outline uses the
-                // same radius, so a rounding larger than the tab keeps the fill and the line together
-                let radius = (f32::from(radius)).min(tab_rect.width() / 2.0).min(tab_rect.height() / 2.0).floor() as u8;
-                let corners = CornerRadius {
-                    nw: radius,
-                    ne: radius,
-                    sw: 0,
-                    se: 0,
-                };
-                ui.painter().rect_filled(tab_rect, corners, bg_color);
-                if stroke.width > 0.0 {
-                    // open at the bottom, so the tab connects with its pane
-                    ui.painter().add(egui::Shape::line(
-                        // the line runs half its width inside the fill: its corners are concentric with
-                        // the ones of the fill, else the fill shows outside a thick outline
-                        tab_outline(
-                            tab_rect.shrink(stroke.width / 2.0),
-                            (f32::from(radius) - stroke.width / 2.0).max(0.0),
-                        ),
-                        stroke,
-                    ));
-                }
-            }
-
-            let text_color = self.tab_text_color(ui.visuals(), tiles, tile_id, state);
-            let text_position = egui::Align2::LEFT_CENTER
-                .align_size_within_rect(galley.size(), tab_rect.shrink(x_margin))
-                .min;
-            ui.painter().galley(text_position, galley, text_color);
-
-            if state.closable {
-                let close_btn_rect = egui::Align2::RIGHT_CENTER
-                    .align_size_within_rect(close_btn_size, tab_rect.shrink(x_margin));
+            let close = state.closable.then(|| {
                 let close_btn_id = ui.auto_id_with("tab_close_btn");
-                let close_btn_response = ui
-                    .interact(close_btn_rect, close_btn_id, Sense::click_and_drag())
+                let response = ui
+                    .interact(tab_paint::close_rect(tab_rect, x_margin), close_btn_id, Sense::click_and_drag())
                     .on_hover_cursor(egui::CursorIcon::Default);
-                close_btn_response
-                    .widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), "Close"));
-
-                let visuals = ui.style().interact(&close_btn_response);
-                let rect = close_btn_rect
-                    .shrink(self.close_button_inner_margin())
-                    .expand(visuals.expansion);
-                let stroke = visuals.fg_stroke;
-                ui.painter()
-                    .line_segment([rect.left_top(), rect.right_bottom()], stroke);
-                ui.painter()
-                    .line_segment([rect.right_top(), rect.left_bottom()], stroke);
-
-                if (close_btn_response.clicked()
-                    || tab_response.clicked_by(egui::PointerButton::Middle))
+                response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), "Close"));
+                response
+            });
+            let size = look.icon_size;
+            let paint_icon = |ui: &Ui, spot: egui::Rect, color: Color32| {
+                if let Some(uri) = &icon {
+                    egui::Image::new(uri.as_str()).tint(color).fit_to_exact_size(egui::vec2(size, size)).paint_at(ui, spot);
+                }
+            };
+            let bar_tint = if joined { self.rest_tint(ui.visuals()) } else { Color32::TRANSPARENT };
+            let painted = tab_paint::paint_tab(
+                ui,
+                &tab_paint::TabPaint {
+                    rect: tab_rect,
+                    look: &look,
+                    state: tab_paint::TabState {
+                        active: state.active,
+                        hovered: tab_response.hovered(),
+                        dragging: state.is_being_dragged,
+                        closable: state.closable,
+                    },
+                    galley,
+                    icon: icon.is_some().then_some(&paint_icon as &dyn Fn(&Ui, egui::Rect, Color32)),
+                    x_margin,
+                    close: close.as_ref(),
+                    bar_tint,
+                },
+            );
+            if joined {
+                // the active tab, its feet and its corners are drawn with the sheet of its pane
+                if let Some(active) = painted.active {
+                    self.joined_tabs.insert(tile_id, active);
+                }
+                self.sheets.extend(painted.sheets);
+                self.fills.extend(painted.fills);
+                self.corners.extend(painted.corners);
+            }
+            if let Some(close) = close {
+                if (close.clicked() || tab_response.clicked_by(egui::PointerButton::Middle))
                     && self.on_tab_close(tiles, tile_id)
                 {
                     tiles.remove(tile_id);
@@ -1531,8 +1513,8 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         tile_id: TileId,
         rect: egui::Rect,
     ) {
-        if !self.panes.contains(&tile_id) {
-            return;
+        if !self.panes.contains(&tile_id) || self.joined(&style.visuals) {
+            return; // `Joined`: the outline of tab and pane is drawn once for all by `dock_area`
         }
         let stroke = self.style.pane_stroke(&style.visuals);
         if stroke.width <= 0.0 {
@@ -1551,7 +1533,7 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
             rect.expand2(egui::vec2(0.0, stroke.width)),
         );
         painter.add(egui::Shape::line(
-            pane_outline(rect, tab.copied(), square_top_corners(&self.tab_rects, rect, radius), radius, stroke.width),
+            separate_pane_outline(rect, tab.copied(), square_top_corners(&self.tab_rects, rect, radius), radius, stroke.width),
             stroke,
         ));
     }
@@ -1600,6 +1582,10 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
 
     fn tab_bar_color(&self, _visuals: &Visuals) -> Color32 {
         // transparent, so the active tab shows the same background as its pane
+        // (`Joined`: the tint of the bar is laid under the whole dock, around the sheets)
+        if self.joined(_visuals) {
+            return Color32::TRANSPARENT;
+        }
         self.style.tab_bar_color.or(self.style.tokens(_visuals.dark_mode).bar_fill).unwrap_or(Color32::TRANSPARENT)
     }
 
@@ -1751,8 +1737,37 @@ unsafe fn dock_area(py: Python<'_>, dock: Py<Dock>) -> PyResult<()> {
         hidden_alone,
         active_tabs: Default::default(),
         tab_rects: Default::default(),
+        sheets: Vec::new(),
+        corners: Vec::new(),
+        fills: Vec::new(),
+        joined_tabs: Default::default(),
+        joined_panes: Vec::new(),
+        barred: Default::default(),
     };
+    // `Joined`: the tint of the bar is laid under what is drawn, once the sheets are known
+    let joined = behavior.joined(ui.visuals());
+    let dock_rect = snap(ui, ui.max_rect());
+    let slot = ui.painter().add(egui::Shape::Noop);
     tree.ui(&mut behavior, ui);
+    if joined {
+        let tint = behavior.rest_tint(ui.visuals());
+        let mut rest = vec![dock_rect];
+        for hole in &behavior.sheets {
+            rest = rest.into_iter().flat_map(|r| minus(r, *hole)).collect();
+        }
+        let mut shapes: Vec<egui::Shape> = rest.into_iter().map(|r| egui::Shape::rect_filled(r, 0.0, tint)).collect();
+        shapes.extend(behavior.corners.drain(..).map(egui::Shape::mesh));
+        shapes.extend(behavior.fills.drain(..));
+        ui.painter().set(slot, egui::Shape::Vec(shapes));
+        let stroke = behavior.style.pane_stroke(&ui.style().visuals);
+        if stroke.width > 0.0 {
+            let radius = crate::layout::dock_rules().map_or_else(|| f32::from(ui.visuals().widgets.inactive.corner_radius.sw), |rules| rules.rounding);
+            for (tile, area) in &behavior.joined_panes {
+                let pts = pane_outline(*area, behavior.joined_tabs.get(tile).copied(), behavior.barred.contains(tile), radius);
+                ui.painter().add(egui::Shape::closed_line(dedup(pts, true), stroke));
+            }
+        }
+    }
 
     let actions = std::mem::take(&mut *actions.lock().unwrap_or_else(|e| e.into_inner()));
     for (tabs_id, action) in actions {

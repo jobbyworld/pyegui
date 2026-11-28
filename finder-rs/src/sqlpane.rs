@@ -162,7 +162,7 @@ pub fn pane(state: &mut SqlState, ui: &mut egui::Ui) {
     let db = match open() {
         Ok(db) => db,
         Err(e) => {
-            ui.colored_label(egui::Color32::from_rgb(239, 68, 68), e.to_string());
+            ui.colored_label(crate::app::ERROR_COLOR, e.to_string());
             return;
         }
     };
@@ -200,7 +200,7 @@ pub fn pane(state: &mut SqlState, ui: &mut egui::Ui) {
         }
     });
     if !state.error.is_empty() {
-        ui.colored_label(egui::Color32::from_rgb(239, 68, 68), &state.error);
+        ui.colored_label(crate::app::ERROR_COLOR, &state.error);
         return;
     }
     ui.weak(format!("{}{} lignes · {:.0} ms", state.rows.len(), if state.more { "+" } else { "" }, state.ms));

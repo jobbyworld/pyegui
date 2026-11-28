@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Color32, FontFamily};
 
-use crate::glyphs;
 use pyegui_core::terminal::{self, Scheme, Terminal, TerminalOptions};
 
 pub struct Terminals {
@@ -27,6 +26,19 @@ fn scheme(background: &str, foreground: &str, cursor: &str, selection: &str, pal
     let mut s = Scheme { background: hex(background), foreground: hex(foreground), cursor: hex(cursor), selection: hex(selection), ..Default::default() };
     for (i, c) in palette.iter().enumerate() {
         s.palette[i] = hex(c);
+    }
+    s
+}
+
+/// The colors of a terminal given by a style sheet: {"background", "foreground", "cursor", "selection", "palette"}.
+/// What the sheet does not give is the color of the theme of egui, like `Terminal.set_colors` of finder.py.
+fn scheme_of(value: &serde_json::Value) -> Scheme {
+    let color = |key: &str| value.get(key).and_then(|v| pyegui_core::sheet::color(v).ok());
+    let mut s = Scheme { background: color("background"), foreground: color("foreground"), cursor: color("cursor"), selection: color("selection"), ..Default::default() };
+    if let Some(palette) = value.get("palette").and_then(|p| p.as_array()) {
+        for (i, c) in palette.iter().take(16).enumerate() {
+            s.palette[i] = pyegui_core::sheet::color(c).ok();
+        }
     }
     s
 }
@@ -120,6 +132,17 @@ impl Terminals {
         }
     }
 
+    /// The colors of the terminals: the ones of the style sheet (its "app" section, key "terminal"), else One Light
+    /// and One Dark
+    pub fn apply_sheet(&mut self) {
+        let light = crate::sheets::terminal(false).map(|v| scheme_of(&v)).unwrap_or_else(light);
+        let dark = crate::sheets::terminal(true).map(|v| scheme_of(&v)).unwrap_or_else(dark);
+        for term in [&mut self.shell, &mut self.python] {
+            term.light = light.clone();
+            term.dark = dark.clone();
+        }
+    }
+
     /// The shell follows the folder of the Finder while the option is on
     pub fn follow(&mut self, folder: &Path) {
         if self.follow && folder != self.shell_folder {
@@ -135,61 +158,31 @@ impl Terminals {
         options
     }
 
-    /// The pane of the shell: the terminal, with its buttons (small icons) floating at the top right
-    pub fn shell_ui(&mut self, ui: &mut egui::Ui, folder: &Path, opacity: f32) {
-        let area = ui.available_rect_before_wrap();
+    /// The pane of the shell: the terminal alone (its commands are the actions of the "Terminal" category)
+    pub fn shell_ui(&mut self, ui: &mut egui::Ui, opacity: f32) {
         let options = self.options(opacity);
         if let Err(error) = terminal::show(ui, &mut self.shell, options) {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
-        // drawn after the terminal: over it, and they get the clicks of their place
-        floating_buttons(ui, area, |ui| {
-            // from the right: restart, go to the folder once, follow the folder (a toggle)
-            if icon_button(ui, glyphs::REFRESH, false, "Redémarrer le shell").clicked() {
-                self.shell.restart(Some(folder.to_path_buf()));
-                self.shell_folder = folder.to_path_buf();
-            }
-            if icon_button(ui, glyphs::FOLDER_ENTER, false, "cd ici : aller au dossier affiché").clicked() {
-                self.shell.run(&cd_command(folder));
-                self.shell_folder = folder.to_path_buf();
-            }
-            if icon_button(ui, glyphs::LINK, self.follow, "Suivre le dossier du Finder").clicked() {
-                self.follow = !self.follow;
-            }
-        });
     }
 
     /// The pane of the Python prompt
     pub fn python_ui(&mut self, ui: &mut egui::Ui, opacity: f32) {
-        let area = ui.available_rect_before_wrap();
         let options = self.options(opacity);
         if let Err(error) = terminal::show(ui, &mut self.python, options) {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
-        floating_buttons(ui, area, |ui| {
-            if icon_button(ui, glyphs::REFRESH, false, "Redémarrer Python").clicked() {
-                self.python.restart(None);
-            }
-        });
     }
-}
 
-/// Small buttons in a rounded frame floating at the top right of an area (right to left)
-fn floating_buttons(ui: &mut egui::Ui, area: egui::Rect, add: impl FnOnce(&mut egui::Ui)) {
-    let corner = egui::Rect::from_min_max(area.min, egui::pos2(area.right() - 14.0, area.top() + 40.0));
-    let mut child = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(corner.shrink2(egui::vec2(0.0, 0.0)))
-            .layout(egui::Layout::right_to_left(egui::Align::Min)),
-    );
-    let fill = ui.visuals().extreme_bg_color.gamma_multiply(0.85);
-    egui::Frame::new().fill(fill).corner_radius(8.0).inner_margin(2.0).show(&mut child, |ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), add);
-    });
-}
+    /// `cd` to the folder shown, once
+    pub fn cd_here(&mut self, folder: &Path) {
+        self.shell.run(&cd_command(folder));
+        self.shell_folder = folder.to_path_buf();
+    }
 
-/// A small icon button with its tooltip and the hand of a click
-fn icon_button(ui: &mut egui::Ui, glyph: glyphs::Glyph, on: bool, tip: &str) -> egui::Response {
-    glyphs::button(ui, glyph, 14.0, on, tip).on_hover_cursor(egui::CursorIcon::PointingHand)
+    /// A new shell in the folder shown
+    pub fn restart_shell(&mut self, folder: &Path) {
+        self.shell.restart(Some(folder.to_path_buf()));
+        self.shell_folder = folder.to_path_buf();
+    }
 }

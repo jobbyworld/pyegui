@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::actions::{self, ACTIONS};
 use crate::app::FinderApp;
-use pyegui_core::dock_draw::{corner_mesh, dedup, feathered_fan, minus, pane_outline, snap, tab_foot, tab_outline, SEAM};
+use pyegui_core::dock_draw::{corner_mesh, dedup, minus, pane_outline, snap};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Pane {
@@ -37,9 +37,6 @@ pub const PANES: [Pane; 11] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::P
 const SIDE: [Pane; 8] = [Pane::Preview, Pane::Actions, Pane::Tags, Pane::Properties, Pane::Recent, Pane::Search, Pane::Index, Pane::Activity];
 const TERMINALS: [Pane; 2] = [Pane::Shell, Pane::Python];
 
-/// The size of the icon in a tab, and the space after it
-const TAB_ICON: f32 = 14.0;
-const TAB_ICON_GAP: f32 = 5.0;
 
 impl Pane {
     /// The icon of the tab of a pane
@@ -118,21 +115,62 @@ pub fn restore(saved: Option<&str>) -> Tree<Pane> {
     tree
 }
 
+/// with the layout rules, the share of the opacity of the sheet kept by the tabs that are not active (finder.py)
+const INACTIVE_SHEET: f32 = 0.45;
+
 /// The sheet of the dock: what the panes and their active tab are filled with
 fn sheet(visuals: &egui::Visuals) -> egui::Color32 {
     // the active tab and its pane are one piece; the rest (bars, inactive tabs, gaps) is the tint of the bands
     // the glass of the active content
-    pyegui_core::style::layer_fill(pyegui_core::style::Layer::Active, visuals)
+    // like finder.py (set_glass_style(dock=...)): the glass level of the docks, else the glass of the active layer
+    crate::sheets::layout_sheet("dock", visuals.dark_mode)
+        .or_else(|| pyegui_core::style::surface_fill(visuals, pyegui_core::style::Surface::Dock))
+        .unwrap_or_else(|| crate::app::region_fill(pyegui_core::style::Layer::Active, "dock", visuals))
+}
+
+/// The sheet of a pane of the files (the central area): `layout.central.sheet`, else the glass level of the central
+/// area, else the sheet of the dock
+fn central_sheet(visuals: &egui::Visuals) -> egui::Color32 {
+    crate::sheets::layout_sheet("central", visuals.dark_mode)
+        .or_else(|| pyegui_core::style::surface_fill(visuals, pyegui_core::style::Surface::Central))
+        .unwrap_or_else(|| sheet(visuals))
+}
+
+/// The sheet of the pane of a tab: the one of the files for a folder, else the one of the dock
+fn pane_sheet(visuals: &egui::Visuals, tiles: &Tiles<Pane>, tile: TileId) -> egui::Color32 {
+    // the tile of a tab is the pane itself
+    match tiles.get(tile) {
+        Some(Tile::Pane(Pane::Central(_))) => central_sheet(visuals),
+        _ => sheet(visuals),
+    }
+}
+
+/// The tokens `tabs.*` of the style sheet (like finder.py: they win over the defaults of the app)
+fn tab_tokens(visuals: &egui::Visuals) -> pyegui_core::tabs::TabSet {
+    pyegui_core::tabs::tokens(visuals.dark_mode, false)
+}
+
+/// What is under the panes, the bars of tabs and the gaps: `tabs.bar_fill` of the style sheet, else nothing (the
+/// background of the window shows, like finder.py)
+fn rest_tint(visuals: &egui::Visuals) -> egui::Color32 {
+    tab_tokens(visuals).bar_fill.unwrap_or(egui::Color32::TRANSPARENT)
 }
 
 
 
-/// The corners of the sheets of the panes
-const PANE_RADIUS: f32 = 8.0;
-/// Space kept at the left, right and bottom of the sheet of a pane
-const PANE_MARGIN: f32 = 3.0;
+/// The corners of the outline of the panes (`dock_rounding` of the sheet, like finder.py)
+fn pane_radius(dark: bool) -> f32 {
+    crate::sheets::number("dock_rounding", dark)
+}
+/// Space between the outline of a pane and its contents (`pane_margin`)
+fn pane_margin(dark: bool) -> i8 {
+    crate::sheets::number("pane_margin", dark).round().clamp(0.0, 127.0) as i8
+}
+/// Gap around the dock and between its panes (`unified_gap`)
+fn unified_gap(dark: bool) -> f32 {
+    crate::sheets::number("unified_gap", dark)
+}
 
-const TAB_TOP_GAP: f32 = pyegui_core::columns::TAB_TOP_GAP;
 
 
 struct Behavior<'a> {
@@ -185,19 +223,14 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         10.0
     }
 
-    fn gap_width(&self, _style: &egui::Style) -> f32 {
-        1.0
+    fn gap_width(&self, style: &egui::Style) -> f32 {
+        unified_gap(style.visuals.dark_mode)
     }
 
     // the bar behind the tabs is darkened: the active tab, in the fill of its pane, stands out of it
     // the tint of the bands, so the bars of the docks and the bands are one
     fn tab_bar_color(&self, _visuals: &egui::Visuals) -> egui::Color32 {
         egui::Color32::TRANSPARENT // the tint of the content behind is the one of the bands
-    }
-
-    // the tabs start where the sheet of the pane does, not at the edge of its tile
-    fn tab_bar_left_ui(&mut self, _tiles: &Tiles<Pane>, ui: &mut egui::Ui, _tile_id: TileId, _tabs: &egui_tiles::Tabs) {
-        ui.add_space(PANE_MARGIN);
     }
 
     // the scroll arrows of a bar of tabs are buttons of the size of the bar: made flat and small here,
@@ -210,17 +243,24 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         }
         w.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
         w.inactive.bg_fill = egui::Color32::TRANSPARENT;
-        w.hovered.weak_bg_fill = egui::Color32::from_white_alpha(20);
-        w.active.weak_bg_fill = egui::Color32::from_white_alpha(32);
+        let look = pyegui_core::tabs::look(ui.visuals(), false, self.tab_set(ui.visuals()));
+        let w = &mut ui.visuals_mut().widgets;
+        if let Some(fill) = look.arrow_hovered_fill {
+            w.hovered.weak_bg_fill = fill;
+        }
+        if let Some(fill) = look.arrow_active_fill {
+            w.active.weak_bg_fill = fill;
+        }
     }
 
-    fn tab_bg_color(&self, visuals: &egui::Visuals, _tiles: &Tiles<Pane>, _tile_id: TileId, state: &egui_tiles::TabState) -> egui::Color32 {
-        // the sheet of the dock for the active tab, a fainter one for the others, like finder.py
-        let sheet = sheet(visuals);
+    fn tab_bg_color(&self, visuals: &egui::Visuals, tiles: &Tiles<Pane>, tile_id: TileId, state: &egui_tiles::TabState) -> egui::Color32 {
+        // the sheet of the pane of the tab for the active tab, a fainter one for the others, like finder.py
+        let sheet = pane_sheet(visuals, tiles, tile_id);
+        let tokens = tab_tokens(visuals);
         if state.active {
-            sheet
+            tokens.active_fill.unwrap_or(sheet)
         } else {
-            egui::Color32::TRANSPARENT // the darkened bar shows through
+            tokens.inactive_fill.unwrap_or_else(|| sheet.gamma_multiply(INACTIVE_SHEET)) // a fainter sheet, like finder.py
         }
     }
 
@@ -230,97 +270,56 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
     }
 
     fn tab_ui(&mut self, tiles: &mut Tiles<Pane>, ui: &mut egui::Ui, id: egui::Id, tile_id: TileId, state: &egui_tiles::TabState) -> egui::Response {
-        use egui::{CornerRadius, Sense};
+        use egui::Sense;
+        use pyegui_core::tab_paint;
         let text = self.tab_title_for_tile(tiles, tile_id);
-        let close = egui::Vec2::splat(self.close_button_outer_size());
         let font_id = egui::TextStyle::Button.resolve(ui.style());
         let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, font_id);
-        let radius = f32::from(ui.visuals().widgets.inactive.corner_radius.nw).max(6.0);
-        let x_margin = self.tab_title_spacing(ui.visuals()).max(radius * 0.6);
+        let look = self.tab_look(ui.visuals(), tiles, tile_id, state);
+        let x_margin = tab_paint::x_margin(&look, ui.available_height(), 0.0);
         let icon = match tiles.get(tile_id) {
             Some(Tile::Pane(p)) => Some(p.icon(self.app)),
             _ => None,
         };
-        let icon_room = if icon.is_some() { TAB_ICON + TAB_ICON_GAP } else { 0.0 };
-        let width = galley.size().x + icon_room + 2.0 * x_margin + if state.closable { 4.0 + close.x } else { 0.0 };
-        let (_, outer) = ui.allocate_space(egui::vec2(width + 2.0, ui.available_height()));
-        // the tab stands on the bottom edge of the bar, with a margin above
-        let rect = snap(ui, egui::Rect::from_min_max(egui::pos2(outer.min.x, outer.min.y + TAB_TOP_GAP), egui::pos2(outer.min.x + width, outer.max.y)));
+        let width = tab_paint::tab_width(&look, galley.size().x, icon.is_some(), state.closable, x_margin);
+        let (_, outer) = ui.allocate_space(egui::vec2(width + look.spacing, ui.available_height()));
+        // the tab stands on the bottom edge of the bar, with a margin above (`top_gap`), on the pixels
+        let rect = tab_paint::place(ui, &look, outer, width);
         let draggable = self.is_tile_draggable(tiles, tile_id);
         let response = ui.interact(rect, id, if draggable { Sense::click_and_drag() } else { Sense::click() });
         let response = if draggable { response.on_hover_cursor(self.tab_hover_cursor_icon()) } else { response };
         if ui.is_rect_visible(rect) && !state.is_being_dragged {
-            let mut fill = self.tab_bg_color(ui.visuals(), tiles, tile_id, state);
-            if !state.active && response.hovered() {
-                fill = if ui.visuals().dark_mode { egui::Color32::from_white_alpha(14) } else { sheet(ui.visuals()).gamma_multiply(0.4) };
-            }
-            let r = radius.min(rect.width() / 2.0).min(rect.height() / 2.0).floor() as u8;
-            if !state.active {
-                ui.painter().rect_filled(rect, CornerRadius { nw: r, ne: r, sw: 0, se: 0 }, fill);
-            }
-            // an active tab scrolled out of the bar (partly hidden) is drawn as the part that is seen: a narrower
-            // tab, so its feet, corners and outline stay inside the bar and join the pane
-            if state.active {
-                let rect = rect.intersect(ui.clip_rect());
-                let rect = if rect.width() < 2.0 * f32::from(r) { egui::Rect::from_min_size(rect.min, egui::vec2(2.0 * f32::from(r), rect.height())) } else { rect };
-                self.sheets.push(rect);
-                self.fills.push(egui::Shape::rect_filled(rect, CornerRadius { nw: r, ne: r, sw: 0, se: 0 }, fill));
-                self.active_tabs.insert(tile_id, (rect, r));
-                let flush = rect.min.x - tab_foot(r) < ui.max_rect().left() - 0.01;
-                let tint = crate::app::bar_tint(ui.visuals());
-                let foot = tab_foot(r);
-                let rf = f32::from(r);
-                // the squares of the feet and of the round top corners are left to the glass of the bands
-                // too: it is laid back where the curves leave them clear
-                for (corner, dir) in [(rect.left_bottom(), -1.0f32), (rect.right_bottom(), 1.0f32)] {
-                    if dir < 0.0 && flush {
-                        continue; // the first tab is flush with the side of the pane: no foot on that side
-                    }
-                    let center = corner + egui::vec2(dir * foot, -foot);
-                    self.sheets.push(egui::Rect::from_two_pos(corner, center));
-                    // the quarter of disc on the far side of the curve
-                    self.corners.push(feathered_fan(center, foot, false, SEAM, tint, |rad, i| {
-                        let a = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
-                        egui::pos2(center.x - dir * rad * a.cos(), center.y + rad * a.sin())
-                    }));
+            let close = state.closable.then(|| ui.interact(tab_paint::close_rect(rect, x_margin), ui.auto_id_with("tab_close_btn"), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::Default));
+            let size = look.icon_size;
+            let paint_icon = move |ui: &egui::Ui, spot: egui::Rect, color: egui::Color32| {
+                if let Some(icon) = icon {
+                    crate::glyphs::image(icon, size, color).paint_at(ui, spot);
                 }
-                for (outer, dir) in [(rect.left_top(), 1.0f32), (rect.right_top(), -1.0f32)] {
-                    self.corners.push(corner_mesh(outer, dir, 1.0, rf, tint));
-                }
-                // concave feet at both bottom corners join the tab to its pane
-                for (corner, dir) in [(rect.left_bottom(), -1.0f32), (rect.right_bottom(), 1.0f32)] {
-                    if dir < 0.0 && flush {
-                        continue; // the first tab is flush with the side of the pane: no foot on that side
-                    }
-                    let center = corner + egui::vec2(dir * foot, -foot);
-                    self.fills.push(egui::Shape::mesh(feathered_fan(corner, foot, true, 0.0, fill, |rad, i| {
-                        let a = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
-                        egui::pos2(center.x - dir * rad * a.cos(), center.y + rad * a.sin())
-                    })));
-                }
+            };
+            let painted = tab_paint::paint_tab(
+                ui,
+                &tab_paint::TabPaint {
+                    rect,
+                    look: &look,
+                    state: tab_paint::TabState { active: state.active, hovered: response.hovered(), dragging: state.is_being_dragged, closable: state.closable },
+                    galley,
+                    icon: icon.is_some().then_some(&paint_icon as &dyn Fn(&egui::Ui, egui::Rect, egui::Color32)),
+                    x_margin,
+                    close: close.as_ref(),
+                    // the squares of the feet and of the round top corners are left to the glass of the bands too:
+                    // it is laid back where the curves leave them clear
+                    bar_tint: rest_tint(ui.visuals()),
+                },
+            );
+            // the active tab, its feet and its corners are drawn with the sheet of its pane
+            if let Some(active) = painted.active {
+                self.active_tabs.insert(tile_id, active);
             }
-            let stroke = self.tab_outline_stroke(ui.visuals(), tiles, tile_id, state);
-            let foot = if state.active { tab_foot(r) } else { 0.0 };
-            if !state.active {
-                ui.painter().add(egui::Shape::line(dedup(tab_outline(rect, f32::from(r), foot), false), stroke));
-            }
-            let color = self.tab_text_color(ui.visuals(), tiles, tile_id, state);
-            let inner = rect.shrink(x_margin);
-            if let Some(icon) = icon {
-                let spot = egui::Rect::from_center_size(egui::pos2(inner.min.x + TAB_ICON / 2.0, inner.center().y), egui::Vec2::splat(TAB_ICON));
-                crate::glyphs::image(icon, TAB_ICON, color).paint_at(ui, spot);
-            }
-            let text_area = egui::Rect::from_min_max(inner.min + egui::vec2(icon_room, 0.0), inner.max);
-            let at = egui::Align2::LEFT_CENTER.align_size_within_rect(galley.size(), text_area).min;
-            ui.painter().galley(at, galley, color);
-            if state.closable {
-                let button = egui::Align2::RIGHT_CENTER.align_size_within_rect(close, rect.shrink(x_margin));
-                let click = ui.interact(button, ui.auto_id_with("tab_close_btn"), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::Default);
-                let visuals = ui.style().interact(&click);
-                let cross = button.shrink(self.close_button_inner_margin()).expand(visuals.expansion);
-                ui.painter().line_segment([cross.left_top(), cross.right_bottom()], visuals.fg_stroke);
-                ui.painter().line_segment([cross.right_top(), cross.left_bottom()], visuals.fg_stroke);
-                if (click.clicked() || response.clicked_by(egui::PointerButton::Middle)) && self.on_tab_close(tiles, tile_id) {
+            self.sheets.extend(painted.sheets);
+            self.fills.extend(painted.fills);
+            self.corners.extend(painted.corners);
+            if let Some(close) = close {
+                if (close.clicked() || response.clicked_by(egui::PointerButton::Middle)) && self.on_tab_close(tiles, tile_id) {
                     tiles.remove(tile_id);
                 }
             }
@@ -338,13 +337,11 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
     }
 
     fn pane_ui(&mut self, ui: &mut egui::Ui, tile: TileId, pane: &mut Pane) -> UiResponse {
-        let fill = sheet(ui.visuals());
+        let fill = if matches!(*pane, Pane::Central(_)) { central_sheet(ui.visuals()) } else { sheet(ui.visuals()) };
         // the sheet and its outline keep a few pixels from the sides of the pane: two neighbours do not touch
         let full_area = snap(ui, ui.max_rect());
-        let area = egui::Rect::from_min_max(
-            egui::pos2(full_area.left() + PANE_MARGIN, full_area.top()),
-            egui::pos2(full_area.right() - PANE_MARGIN, full_area.bottom() - PANE_MARGIN),
-        );
+        // the gap between two panes (and around the dock) is the unified gap: the sheet fills its tile
+        let area = full_area;
         // the sheet is laid down under what is drawn, once the header of the columns (if any) is known.
         // A folder with its title shown: the active tab, the header and the view are one sheet. Without
         // a title the header is transparent (the tint of the bands) until the rows scroll under it: then
@@ -383,9 +380,9 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
             None => vec![area],
         };
         self.sheets.extend(rects.iter().copied());
-        let tint = crate::app::bar_tint(ui.visuals());
+        let tint = rest_tint(ui.visuals());
         let full = rects.len() == 1;
-        let rr = PANE_RADIUS;
+        let rr = pane_radius(ui.visuals().dark_mode);
         let mut shapes: Vec<egui::Shape> = Vec::new();
         for (i, r) in rects.iter().enumerate() {
             // a sheet in one piece has its four corners round, one with the header left clear only the bottom ones
@@ -428,12 +425,37 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
 }
 
 impl Behavior<'_> {
+    /// What the app gives to the look of its tabs: the `Joined` outline, the sheet of the dock for the active tab,
+    /// the outlines and the spacings of the app. The rest (the hover, the inactive tabs, the texts, the radius, the
+    /// gap above the tabs, the icon) comes from the tokens of the sheet, else from the defaults of `Joined`.
+    fn tab_set(&self, visuals: &egui::Visuals) -> pyegui_core::tabs::TabSet {
+        let (active_width, active_color) = self.app.outline(visuals, true);
+        let (width, color) = self.app.outline(visuals, false);
+        pyegui_core::tabs::TabSet {
+            outline: Some(pyegui_core::tabs::TabOutline::Joined),
+            active_fill: Some(tab_tokens(visuals).active_fill.unwrap_or_else(|| sheet(visuals))),
+            active_stroke: Some(egui::Stroke::new(active_width, active_color)),
+            inactive_stroke: Some(egui::Stroke::new(width, color)),
+            title_spacing: Some(egui_tiles::Behavior::tab_title_spacing(self, visuals)),
+            spacing: Some(2.0),
+            ..Default::default()
+        }
+    }
+
+    fn tab_look(&self, visuals: &egui::Visuals, tiles: &Tiles<Pane>, tile_id: TileId, _state: &egui_tiles::TabState) -> pyegui_core::tabs::TabLook {
+        let mut set = self.tab_set(visuals);
+        // the active tab is the sheet of its pane (the files have their own), unless `tabs.active_fill` says otherwise
+        set.active_fill = Some(tab_tokens(visuals).active_fill.unwrap_or_else(|| pane_sheet(visuals, tiles, tile_id)));
+        pyegui_core::tabs::look(visuals, false, set)
+    }
+
     fn pane_content(&mut self, ui: &mut egui::Ui, pane: &mut Pane) -> UiResponse {
         if let Pane::Central(n) = *pane {
             // the state of this tab is the one of the app while it is drawn
             self.app.swap_tab(n);
             // the header of the columns is the first thing in the pane, at the top, like the tab bars
-            let margin = egui::Margin { left: 8, right: 8, top: 0, bottom: 8 };
+            let m = pane_margin(ui.visuals().dark_mode);
+            let margin = egui::Margin { left: m, right: m, top: 0, bottom: m };
             egui::Frame::NONE.inner_margin(margin).show(ui, |ui| self.app.central_pane(ui));
             return UiResponse::None;
         }
@@ -442,7 +464,7 @@ impl Behavior<'_> {
             self.app.terminal_pane(ui, *pane == Pane::Shell);
             return UiResponse::None;
         }
-        egui::Frame::NONE.inner_margin(egui::Margin::same(8)).show(ui, |ui| egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match pane {
+        egui::Frame::NONE.inner_margin(egui::Margin::same(pane_margin(ui.visuals().dark_mode))).show(ui, |ui| egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match pane {
             Pane::Preview => self.app.preview(ui),
             Pane::Actions => actions_pane(self.app, ui),
             Pane::Appearance => {}
@@ -466,7 +488,7 @@ pub fn show(app: &mut FinderApp, tree: &mut Tree<Pane>, ui: &mut egui::Ui) {
     let dock_rect = snap(ui, ui.max_rect());
     let slot = ui.painter().add(egui::Shape::Noop);
     if tree.root().is_none() {
-        ui.painter().set(slot, egui::Shape::rect_filled(dock_rect, 0.0, crate::app::bar_tint(ui.visuals())));
+        ui.painter().set(slot, egui::Shape::rect_filled(dock_rect, 0.0, rest_tint(ui.visuals())));
         return;
     }
     // the dock toggle hides the panes (not the folder), the terminal toggle the two terminals
@@ -499,8 +521,10 @@ pub fn show(app: &mut FinderApp, tree: &mut Tree<Pane>, ui: &mut egui::Ui) {
         _ => None,
     }).flatten().collect();
     let mut behavior = Behavior { app, hidden_bars, titled, sheets: Vec::new(), corners: Vec::new(), fills: Vec::new(), active_tabs: Default::default(), panes: Vec::new(), barred };
-    tree.ui(&mut behavior, ui);
-    let tint = crate::app::bar_tint(ui.visuals());
+    // the unified gap all around the dock, like the outer margin of finder.py
+    let gap = unified_gap(ui.visuals().dark_mode);
+    ui.scope_builder(egui::UiBuilder::new().max_rect(dock_rect.shrink(gap)), |ui| tree.ui(&mut behavior, ui));
+    let tint = rest_tint(ui.visuals());
     let mut rest = vec![dock_rect];
     for hole in &behavior.sheets {
         rest = rest.into_iter().flat_map(|r| minus(r, *hole)).collect();
@@ -511,7 +535,7 @@ pub fn show(app: &mut FinderApp, tree: &mut Tree<Pane>, ui: &mut egui::Ui) {
     {
         let (width, color) = behavior.app.outline(ui.visuals(), true);
         for (tile, area) in &behavior.panes {
-            let pts = pane_outline(*area, behavior.active_tabs.get(tile).copied(), behavior.barred.contains(tile), PANE_RADIUS);
+            let pts = pane_outline(*area, behavior.active_tabs.get(tile).copied(), behavior.barred.contains(tile), pane_radius(ui.visuals().dark_mode));
             ui.painter().add(egui::Shape::closed_line(dedup(pts, true), egui::Stroke::new(width, color)));
         }
     }

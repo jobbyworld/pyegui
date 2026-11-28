@@ -21,6 +21,7 @@ eframe = { version = "0.37.0", features = ["glow", "persistence"] }
 egui_extras = { version = "0.37.0", features = ["datepicker", "all_loaders", "serde"] }
 image = { version = "0.25", features = ["jpeg", "png", "ico", "gif", "webp", "bmp"] }
 chrono = "0.4.45"
+serde_json = "1"
 jiff = "0.2.42"
 egui_ltreeview = "0.10.0"
 egui_tiles = "0.18.0"

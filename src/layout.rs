@@ -16,7 +16,7 @@ use pyo3::types::{PyAny, PyDict};
 use crate::style::{kwarg_color, kwarg_stroke};
 use crate::{kwarg, panel_parent_ui, run_nested_update_func, with_bool_copy, Bool, UI};
 
-pub(crate) const REGIONS: [&str; 5] = ["sidebar", "central", "dock", "topbar", "bottombar"];
+pub(crate) use pyegui_core::sheet::REGIONS;
 
 /// The values a rule can set. A value that is None is not set at this level.
 #[derive(Clone, Default)]
@@ -85,34 +85,10 @@ pub(crate) struct Resolved {
     region: usize,
 }
 
-/// The sheet colors given by the style tokens `layout.sheet` and `layout.<region>.sheet`, per theme
-/// (`[theme]`: 0 is light, 1 dark) and per region (the last one is for the whole window)
-static SHEET_TOKENS: Mutex<[[Option<Color32>; REGIONS.len() + 1]; 2]> = Mutex::new([[None; REGIONS.len() + 1]; 2]);
-
-/// Sets a style token of the layout: `layout.sheet` (region None) or `layout.<region>.sheet`.
-/// Returns false if the region is unknown.
-pub(crate) fn set_sheet_token(dark: bool, region: Option<&str>, color: Option<Color32>) -> bool {
-    let index = match region {
-        None => REGIONS.len(),
-        Some(name) => match REGIONS.iter().position(|r| *r == name) {
-            Some(i) => i,
-            None => return false,
-        },
-    };
-    SHEET_TOKENS.lock().unwrap_or_else(|e| e.into_inner())[usize::from(dark)][index] = color;
-    true
-}
-
 /// The sheet given by the style tokens for a region, if any: `layout.<region>.sheet`, then `layout.sheet`
+/// (the tokens are kept by `pyegui_core::sheet`, set by `Context.set_style_tokens`)
 pub(crate) fn token_sheet(region: &str, dark: bool) -> Option<Color32> {
-    let tokens = SHEET_TOKENS.lock().unwrap_or_else(|e| e.into_inner())[usize::from(dark)];
-    let own = REGIONS.iter().position(|r| *r == region).and_then(|i| tokens[i]);
-    own.or(tokens[REGIONS.len()])
-}
-
-/// Forgets the style tokens of the layout
-pub(crate) fn reset_sheet_tokens() {
-    *SHEET_TOKENS.lock().unwrap_or_else(|e| e.into_inner()) = [[None; REGIONS.len() + 1]; 2];
+    pyegui_core::sheet::layout_sheet(region, dark)
 }
 
 impl Resolved {
@@ -120,8 +96,7 @@ impl Resolved {
     /// The order is: the call and the rules of the region, the style token of the region, the style
     /// token of the whole window, the global rules, the panel color.
     pub(crate) fn sheet_fill(&self, visuals: &egui::Visuals) -> Color32 {
-        let tokens = SHEET_TOKENS.lock().unwrap_or_else(|e| e.into_inner())[usize::from(visuals.dark_mode)];
-        let token = tokens.get(self.region).copied().flatten().or(tokens[REGIONS.len()]);
+        let token = pyegui_core::sheet::layout_sheet(REGIONS.get(self.region).copied().unwrap_or(""), visuals.dark_mode);
         self.sheet.or(token).or(self.global_sheet).unwrap_or(visuals.panel_fill).gamma_multiply(self.opacity)
     }
 }
@@ -155,6 +130,10 @@ pub(crate) fn resolve(region: &str, call: &Tokens) -> Resolved {
     }
     let own_sheet = tokens.sheet;
     tokens = tokens.or(&rules.global);
+    // then the tokens of the style sheet (`layout.<region>.outline`, `layout.<region>.rounding`)
+    let dark = REGION_DARK.load(Ordering::Relaxed);
+    tokens.outline = tokens.outline.or_else(|| pyegui_core::sheet::layout_outline(region, dark));
+    tokens.rounding = tokens.rounding.or_else(|| pyegui_core::sheet::layout_rounding(region, dark));
     Resolved {
         gap: tokens.gap.unwrap_or(DEFAULT_GAP),
         rounding: tokens.rounding.unwrap_or(DEFAULT_ROUNDING),
@@ -207,6 +186,13 @@ const TOP: u8 = 4;
 const BOTTOM: u8 = 8;
 
 static PLACED: AtomicU8 = AtomicU8::new(0);
+/// the theme of the frame being drawn, for the style tokens of the regions
+static REGION_DARK: AtomicBool = AtomicBool::new(false);
+
+/// The theme of the frame: the tokens of the regions are the ones of this theme
+pub(crate) fn set_region_theme(dark: bool) {
+    REGION_DARK.store(dark, Ordering::Relaxed);
+}
 static FULLSIZE: AtomicBool = AtomicBool::new(false);
 
 /// Called before the update function of every frame
@@ -341,9 +327,21 @@ unsafe fn show_region_panel(
     let panel_frame = Frame::new().inner_margin(margins(placed, Some(side), values.gap)).fill(backdrop);
     panel = panel.frame(panel_frame);
 
+    // the resize handle: the tokens `layout.<region>.resize_stroke` (the line at rest: shown when it is a visible
+    // stroke; the box has its outline, so there is no line by default), `resize_hover_stroke` and
+    // `resize_active_stroke`. egui draws it with the strokes of the parent ui; the content gets them back
+    let resize = pyegui_core::sheet::resize_strokes(region, ui.visuals().dark_mode);
+    if let Some(r) = resize {
+        panel = r.panel(panel);
+    }
+    let saved = resize.map(|r| r.apply(ui.visuals_mut()));
+
     let py = update_fun.py();
     let title_bar = region == "sidebar" && cfg!(target_os = "macos") && FULLSIZE.load(Ordering::Relaxed);
     let content = move |ui: &mut egui::Ui| -> PyResult<()> {
+        if let Some(saved) = saved {
+            saved.restore(ui.visuals_mut());
+        }
         let corners = box_corners(ui.ctx(), ui.max_rect(), values.rounding);
         let boxed = Frame::new()
             .inner_margin(values.inner_margin.round().clamp(0.0, 127.0) as i8)
@@ -372,14 +370,18 @@ unsafe fn show_region_panel(
             .inner
     };
 
-    match kwarg::<Py<Bool>>(kwargs, "expanded")? {
+    let result = match kwarg::<Py<Bool>>(kwargs, "expanded")? {
         Some(expanded) => with_bool_copy(py, &expanded, |is_expanded| {
             panel
                 .show_collapsible(ui, is_expanded, |ui| content(ui))
                 .map_or(Ok(()), |r| r.inner)
         }),
         None => panel.show(ui, |ui| content(ui)).inner,
+    };
+    if let Some(saved) = saved {
+        saved.restore(ui.visuals_mut());
     }
+    result
 }
 
 fn panel_id(kwargs: Option<&Bound<'_, PyDict>>, default: &str) -> PyResult<String> {
@@ -400,7 +402,14 @@ fn panel_id(kwargs: Option<&Bound<'_, PyDict>>, default: &str) -> PyResult<Strin
 ///
 ///     gap, rounding, outline, sheet, opacity, inner_margin: the layout rules of this region, see
 ///         Context.set_layout. They are looked up in the call, then in the rules of the sidebar,
-///         then in the global rules
+///         then in the global rules, then in the style tokens (`layout.sidebar.outline`,
+///         `layout.sidebar.rounding`, `layout.sidebar.sheet`; "none" is no outline)
+///
+///     The line of the edge that resizes the sidebar is given by the style sheet: `layout.sidebar.resize_stroke`
+///     at rest (no line by default, "none" for none), `layout.sidebar.resize_hover_stroke` under the mouse and
+///     `layout.sidebar.resize_active_stroke` while it is dragged (`layout.resize_stroke`... for all the regions).
+///     Not given, it is the stroke of the hovered and active widgets of the theme. The same tokens with `topbar`
+///     and `bottombar` are read by topbar_panel and bottombar_panel.
 ///
 /// Example::
 ///
@@ -443,7 +452,63 @@ unsafe fn bottombar_panel(update_fun: Bound<'_, PyAny>, kwargs: Option<&Bound<'_
     show_region_panel(egui::Panel::bottom(id), Side::Bottom, "bottombar", update_fun, kwargs)
 }
 
+/// A section of a sidebar that folds: a small title (like Favoris, Emplacements, Étiquettes of the Finder) that a
+/// click folds or opens, a chevron at its right while the title is under the pointer, the content under it when it
+/// is open, then a gap. It is the section of finder-rs (`pyegui_core::section`), drawn the same in both Finders.
+///
+/// The look comes from the style tokens (see Context.set_style_tokens): `section.text` (color of the title),
+/// `section.font_size` (the size of the Small text by default), `section.height` (22), `section.gap` (12, the space
+/// after the section), `section.uppercase` (False), `section.chevron` ("hover", "always" or "none") and
+/// `section.chevron_size` (16).
+///
+/// Args:
+///     title (str): the title of the section
+///
+///     update_func (Callable[[], None]): draws the content of the section, called only when it is open
+///
+/// Keyword args:
+///
+///     open (Bool): the open state, kept by the app (to save it); a click on the title changes open.value.
+///         Without it, the state is kept by egui under `id` (and saved with the memory of egui)
+///
+///     id (str): the id of the section when `open` is not given. Default is the title
+///
+///     default_open (bool): the state of a section that was never clicked, when `open` is not given. Default is True
+///
+/// Returns:
+///     bool: the section is open
+///
+/// Example::
+///
+///     favorites_open = Bool(True)
+///
+///     def sidebar():
+///         if sidebar_section("Favoris", favorites_ui, open=favorites_open):
+///             pass
+///         sidebar_section("Emplacements", locations_ui)
+///         sidebar_section("Étiquettes", tags_ui, default_open=False)
+#[pyfunction]
+#[pyo3(signature = (title, update_func, **kwargs))]
+unsafe fn sidebar_section(title: &str, update_func: Bound<'_, PyAny>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<bool> {
+    let ui = crate::current_ui(&UI)?;
+    let py = update_func.py();
+    let mut result = Ok(());
+    let open = match kwarg::<Py<Bool>>(kwargs, "open")? {
+        Some(holder) => with_bool_copy(py, &holder, |open| {
+            pyegui_core::section::show(ui, open, title, |ui| result = run_nested_update_func(ui, update_func)).open
+        }),
+        None => {
+            let id = kwarg::<String>(kwargs, "id")?.unwrap_or_else(|| title.to_owned());
+            let default_open = kwarg::<bool>(kwargs, "default_open")?.unwrap_or(true);
+            let id = egui::Id::unique(("pyegui-sidebar-section", id));
+            pyegui_core::section::show_remembered(ui, id, title, default_open, |ui| result = run_nested_update_func(ui, update_func)).open
+        }
+    };
+    result.map(|_| open)
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(sidebar_section, m)?)?;
     m.add_function(wrap_pyfunction!(sidebar_panel, m)?)?;
     m.add_function(wrap_pyfunction!(topbar_panel, m)?)?;
     m.add_function(wrap_pyfunction!(bottombar_panel, m)?)?;

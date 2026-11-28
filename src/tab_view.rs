@@ -121,6 +121,7 @@ fn tab_set_from_kwargs(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<TabSet> {
         spacing: kwarg(kwargs, "tab_spacing")?,
         title_spacing: kwarg(kwargs, "tab_title_spacing")?,
         bar_height: kwarg(kwargs, "tab_bar_height")?,
+        ..TabSet::default()
     })
 }
 

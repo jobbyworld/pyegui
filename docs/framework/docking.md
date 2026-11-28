@@ -53,6 +53,13 @@ widget_rounding options of ctx.set_style().
 
 Colors are (r, g, b), (r, g, b, a) or "#rrggbb[aa]".
 
+The options not given are read from the style tokens `tabs.*` (classic) or `pill_tabs.*` (pill) of
+ctx.set_style_tokens(), e.g. `tabs.radius` (corners of the tabs), `tabs.top_gap`, `tabs.close_stroke`. The tabs
+are drawn by the tab painter of pyegui-core with the "separate" outline: the tab and its pane are two lines
+that meet at the bottom of the bar. The token `tabs.outline = "joined"` of the style sheet gives the look of
+finder-rs instead: a gap above the tabs, round tops, concave feet and one piece for the active tab and its pane,
+the tint of the bar (`tabs.bar_fill`) laid under the dock and in the corners.
+
 The tab bars can hold widgets, drawn by functions taking a DockTabBar. They are called for every
 tab bar of the dock:
 
@@ -184,11 +191,13 @@ A pane of a Dock, shown as a tab.
 - `sheet` (color): with layout rules, the background of the pane and of its tab, instead of the sheet of the dock. Its opacity is multiplied by the opacity of the dock. Default is the sheet of the dock
 - `central` (bool): the pane is the main content of the window: with set_glass_style(dock=...), it is filled with the level of the central area, not the one of the dock. Default is False
 - `label` (str | Callable[[], str]): the text shown in the tab, when it is not the title. A function is called at each frame, so the tab can follow what the pane shows (the folder of a tab of files). The title stays the identity of the pane: for `set_active`, `remove_pane`, `save` and `load`. Default is the title
+- `icon` (str): an image shown before the title of the tab, e.g. "icons/tag.svg" or "file://icons/tag.svg": drawn in the color of the title (a white SVG takes it), in a square of the `tabs.icon_size` token (14 by default), like the tabs of finder-rs. Default is no icon
 
 **Usage:**
 
 ```python
 DockPane("Editor", editor_ui, closable=True)
+DockPane("Tags", tags_ui, icon="icons/tag.svg")
 DockPane("tab 2", files_ui, label=lambda: current_folder().name)  # the tab shows the folder
 DockPane("Notes", notes_ui, sheet=(59, 130, 246, 200))  # a blue sheet, with layout rules
 ```
@@ -197,6 +206,7 @@ DockPane("Notes", notes_ui, sheet=(59, 130, 246, 200))  # a blue sheet, with lay
 - `DockPane.central` (attribute)
 - `DockPane.closable` (attribute)
 - `DockPane.hide_tab` (attribute)
+- `DockPane.icon` (attribute)
 - `DockPane.label` (attribute)
 - `DockPane.title` (attribute)
 - `DockPane.update_func` (attribute)

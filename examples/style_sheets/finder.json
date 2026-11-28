@@ -75,7 +75,11 @@
     "spacing.button_padding_radius": 0.8,
     "menu.button_padding_radius": 0.8,
     "colors.text": "#1c1c1eff",
-    "layout.sidebar.sheet": "#ffffff66"
+    "layout.sidebar.outline": [
+      1,
+      "#7f7f7f46"
+    ],
+    "tabs.outline": "joined"
   },
   "dark": {
     "colors.panel": "#06070a54",
@@ -150,7 +154,6 @@
     "spacing.button_padding_radius": 0.8,
     "menu.button_padding_radius": 0.8,
     "colors.text": "#f2f2f7ff",
-    "layout.sidebar.sheet": "#0b0d1480",
     "window.inactive.weak_fill": "#ffffff1a",
     "window.hovered.weak_fill": "#ffffff2e",
     "window.active.weak_fill": "#ffffff3d",
@@ -165,7 +168,12 @@
     "window.hovered.stroke": [
       1.0,
       "#ffffff3d"
-    ]
+    ],
+    "layout.sidebar.outline": [
+      1,
+      "#7f7f7f46"
+    ],
+    "tabs.outline": "joined"
   },
   "app": {
     "light": {
@@ -193,7 +201,9 @@
       "glass_central": 0.3,
       "glass_dock": 0.3,
       "blur": 32,
-      "dialog_fill": "#ffffffff"
+      "dialog_fill": "#ffffffff",
+      "glass_sidebar": 0.0,
+      "glass_bars": 0.0
     },
     "dark": {
       "edge": [
@@ -220,7 +230,9 @@
       "glass_central": 0.3,
       "glass_dock": 0.3,
       "blur": 32,
-      "dialog_fill": "#232326ff"
+      "dialog_fill": "#232326ff",
+      "glass_sidebar": 0.0,
+      "glass_bars": 0.0
     }
   }
 }

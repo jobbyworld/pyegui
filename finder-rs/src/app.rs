@@ -61,7 +61,7 @@ impl Background {
     }
 }
 
-/// The look of one theme (light or dark): the background and the three glasses
+/// The look of one theme (light or dark): what is behind the glasses (the rest comes from the style sheet)
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Look {
@@ -73,20 +73,11 @@ pub struct Look {
     /// the contrast and the saturation of the glass or of the picture, in percent (100: unchanged)
     pub contrast: u32,
     pub saturation: u32,
-    pub layers: [LayerSetting; 3],
-    /// the outline of the tabs and of the panes: thickness and color with its alpha (None: the one of the theme)
-    /// [active tabs and panes, inactive tabs]
-    pub outline_width: [f32; 2],
-    pub outline: [Option<[u8; 4]>; 2],
-    /// the color of the text (None: the one of the theme)
-    pub text: Option<[u8; 3]>,
-    /// the color and the opacity of the odd rows of the lists and tables (None: the one of the theme)
-    pub stripe: Option<[u8; 4]>,
 }
 
 impl Default for Look {
     fn default() -> Self {
-        Look { background: Background::default_for_system(), color: None, image: None, blur: 0, contrast: 100, saturation: 100, layers: Default::default(), outline_width: [1.0; 2], outline: [None; 2], text: None, stripe: None }
+        Look { background: Background::default_for_system(), color: None, image: None, blur: 0, contrast: 100, saturation: 100 }
     }
 }
 
@@ -145,15 +136,6 @@ fn backdrop_name() -> Option<&'static str> {
     }
 }
 
-/// The tint and the opacity chosen for one glass, None for the default ones
-#[derive(Serialize, Deserialize, Clone, Copy, Default, PartialEq)]
-pub struct LayerSetting {
-    pub tint: Option<[u8; 3]>,
-    pub opacity: Option<f32>,
-}
-
-const LAYERS: [(style::Layer, &str); 3] = [(style::Layer::Sidebar, "Barre latérale"), (style::Layer::Inactive, "Contenu inactif"), (style::Layer::Active, "Contenu actif")];
-
 /// What is kept between two runs
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
@@ -195,6 +177,8 @@ struct Saved {
     closed_sections: Vec<String>,
     /// what the indexation of a folder leaves out
     index_ignore: crate::indexignore::IgnoreRules,
+    /// the style sheet (a name of `examples/style_sheets`, "" for none; nothing saved: `finder`)
+    sheet_name: Option<String>,
 }
 
 impl Default for Saved {
@@ -226,6 +210,7 @@ impl Default for Saved {
             open_folders: Vec::new(),
             closed_sections: Vec::new(),
             index_ignore: Default::default(),
+            sheet_name: None,
         }
     }
 }
@@ -260,6 +245,10 @@ pub struct FinderApp {
     /// the look of the panel of the appearance: the groups folded, the filter
     appearance_set: pyegui_core::property_set::PropertySetState,
     pub accent_custom: Option<[u8; 3]>,
+    /// the style sheet in use (a name of `examples/style_sheets`, "" for none)
+    pub sheet: String,
+    /// the theme the style was last built for (the sheet gives values for each theme)
+    applied_dark: Option<bool>,
     /// the picture behind the glasses, blurred: the file, the blur and its texture
     bg_texture: Option<(PathBuf, [u32; 3], egui::TextureHandle)>,
     applied_filter: [u32; 3],
@@ -328,7 +317,7 @@ pub struct FinderApp {
     /// the search or creation field of the tags pane
     pub tags_query: String,
     /// the tags folded in the tree of the sidebar
-    tag_folded: HashSet<i64>,
+    tag_state: pyegui_core::tag_tree::TagTreeState<i64>,
     pub meta: crate::metaui::MetaUi,
     /// the properties, their values and what they resolve to for the rows shown, until the store changes
     pub meta_cache: std::cell::RefCell<crate::metaui::MetaCache>,
@@ -360,10 +349,6 @@ pub struct FinderApp {
     fav_insert: Option<usize>,
     /// the favorite being moved with the mouse
     fav_drag: Option<i64>,
-    /// the tag being moved with the mouse in the sidebar
-    tag_drag: Option<i64>,
-    /// the tag whose trash was clicked once in the sidebar (red: a second click deletes it)
-    tag_armed: Option<i64>,
     viewer: Option<Viewer>,
     /// the tabs of folders that are not shown: their state, by number of tab
     parked_tabs: std::collections::HashMap<u64, TabState>,
@@ -519,11 +504,22 @@ impl FinderApp {
 
     pub fn new(cc: &eframe::CreationContext<'_>, start: Option<PathBuf>, custom_titlebar: bool) -> Self {
         egui_extras::install_image_loaders(&cc.egui_ctx);
-        let saved: Saved = cc
+        let mut saved: Saved = cc
             .storage
             .and_then(|s| s.get_string(STATE_KEY))
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
+        // FINDER_SHEET tries a sheet without choosing it in the panel
+        if let Ok(name) = std::env::var("FINDER_SHEET") {
+            saved.sheet_name = Some(name);
+        }
+        // FINDER_THEME=light|dark|system, to compare a theme without changing the saved one
+        match std::env::var("FINDER_THEME").as_deref() {
+            Ok("light") => saved.theme = ThemeChoice::Light,
+            Ok("dark") => saved.theme = ThemeChoice::Dark,
+            Ok("system") => saved.theme = ThemeChoice::System,
+            _ => {}
+        }
         cc.egui_ctx.set_fonts(fonts(terminals::nerd_font().as_deref(), saved.font_ui.as_deref(), saved.font_terminal.as_deref()));
         Self::build(&cc.egui_ctx, saved, start, custom_titlebar)
     }
@@ -545,6 +541,7 @@ impl FinderApp {
             accent_custom: self.accent_custom,
             show_hidden: self.show_hidden,
             blue_folders: self.blue_folders,
+            sheet_name: Some(self.sheet.clone()),
             show_dock: false,
             show_terminal: false,
             terminal_opacity: self.terminal_opacity,
@@ -576,12 +573,14 @@ impl FinderApp {
             .unwrap_or(home);
         let folder_for_terminal = folder.clone();
         pyegui_core::icons::set_blue(saved.blue_folders);
+        let sheet = saved.sheet_name.clone().unwrap_or_else(|| "finder".to_owned());
+        crate::sheets::set_current(&sheet);
         let core = default_core();
         let mut views = Views::new(&core, &folder, saved.show_hidden);
         views.set_column_widths(&saved.column_widths);
         views.set_hidden_columns(&saved.hidden_columns);
         views.open_in_tree(&saved.open_folders);
-        let app = FinderApp {
+        let mut app = FinderApp {
             core,
             history: History::new(folder),
             view: saved.view,
@@ -603,6 +602,8 @@ impl FinderApp {
             looks: saved.looks,
             appearance_set: Default::default(),
             accent_custom: saved.accent_custom,
+            sheet,
+            applied_dark: None,
             bg_texture: None,
             applied_filter: [0, 100, 100],
             settled_blur: None,
@@ -651,7 +652,7 @@ impl FinderApp {
             recent_limit: crate::tagsui::RECENT_PAGE,
             tag_filter: None,
             tags_query: String::new(),
-            tag_folded: HashSet::new(),
+            tag_state: Default::default(),
             meta: Default::default(),
             meta_cache: Default::default(),
             meta_edits: Default::default(),
@@ -671,8 +672,6 @@ impl FinderApp {
             fav_rect: None,
             fav_insert: None,
             fav_drag: None,
-            tag_drag: None,
-            tag_armed: None,
             viewer: None,
             parked_tabs: Default::default(),
             current_tab: 0,
@@ -832,26 +831,15 @@ impl FinderApp {
         }
     }
 
-    /// The tint and the opacity of the three glasses are read at each frame by the drawing
-    pub fn apply_layers(&self) {
-        for (d, look) in self.looks.iter().enumerate() {
-            for (i, (layer, _)) in LAYERS.iter().enumerate() {
-                let s = look.layers[i];
-                style::set_layer(d == 1, *layer, s.tint.map(|[r, g, b]| egui::Color32::from_rgb(r, g, b)), s.opacity);
-            }
+    /// The outline of the tabs and panes: the "edge" of the style sheet (the one outline of every box), the stroke of
+    /// the framework without a sheet
+    pub fn outline(&self, visuals: &egui::Visuals, _active: bool) -> (f32, egui::Color32) {
+        if crate::sheets::current().is_some() {
+            crate::sheets::stroke("edge", visuals.dark_mode)
+        } else {
+            let s = visuals.widgets.noninteractive.bg_stroke;
+            (s.width, s.color)
         }
-    }
-
-    /// The accent: the one of the color picker, or one of the four first
-    /// The outline of the tabs and panes for a theme: its thickness and its color
-    pub fn outline(&self, visuals: &egui::Visuals, active: bool) -> (f32, egui::Color32) {
-        let k = usize::from(!active);
-        let look = &self.looks[usize::from(visuals.dark_mode)];
-        let base = visuals.widgets.noninteractive.bg_stroke.color;
-        let color = look.outline[k]
-            .map(|[r, g, b, a]| egui::Color32::from_rgba_unmultiplied(r, g, b, a))
-            .unwrap_or(if active { base } else { base.gamma_multiply(0.5) });
-        (look.outline_width[k], color)
     }
 
     /// The blur, the contrast and the saturation of both looks, kept as they were while the pointer is
@@ -868,41 +856,70 @@ impl FinderApp {
         }
     }
 
+    /// The blur, contrast and saturation of the native glass: the blur of the look, else the "blur" of the style sheet
+    /// (32 points), like `set_backdrop_blur(look.blur or app("blur"))` of finder.py
+    #[allow(dead_code)]
+    fn glass_filter(&mut self, ctx: &egui::Context, dark: bool) -> [u32; 3] {
+        let mut filter = self.settled_blur(ctx)[usize::from(dark)];
+        if filter[0] == 0 {
+            filter[0] = crate::sheets::number("blur", dark).round().max(0.0) as u32;
+        }
+        filter
+    }
+
     pub fn accent_color(&self) -> egui::Color32 {
+        // the primary color of the style sheet (`app.accent`) comes first
+        if let Some(color) = crate::sheets::color("accent", self.applied_dark.unwrap_or(true)) {
+            return egui::Color32::from_rgb(color.r(), color.g(), color.b());
+        }
         self.accent_custom.map(|[r, g, b]| egui::Color32::from_rgb(r, g, b)).unwrap_or(ACCENTS[self.accent].1)
     }
 
-    pub fn apply_theme(&self, ctx: &egui::Context) {
+    /// The theme shown: the one chosen, or the one of the system
+    pub fn shown_dark(&self, ctx: &egui::Context) -> bool {
+        match self.theme {
+            ThemeChoice::Light => false,
+            ThemeChoice::Dark => true,
+            ThemeChoice::System => ctx.system_theme().map_or_else(|| ctx.global_style().visuals.dark_mode, |t| t == egui::Theme::Dark),
+        }
+    }
+
+    pub fn apply_theme(&mut self, ctx: &egui::Context) {
         ctx.set_theme(match self.theme {
             ThemeChoice::System => egui::ThemePreference::System,
             ThemeChoice::Light => egui::ThemePreference::Light,
             ThemeChoice::Dark => egui::ThemePreference::Dark,
         });
-        self.apply_layers();
         let accent = self.accent_color();
+        let shown = self.shown_dark(ctx);
+        self.applied_dark = Some(shown);
         // the opacity of each glass is its own setting, whatever is behind
         let mode = Some(style::GlassMode::Full);
-        // the clear glass of the content and of the docks, like examples/finder.py
-        let levels = style::GlassLevels { scale: 1.2, central: Some(0.3), dock: Some(0.3), ..style::GlassLevels::DEFAULT };
+        // the glass levels of the style sheet (for the theme shown), else those of the framework
+        let levels = style::GlassLevels {
+            scale: crate::sheets::try_number("glass_opacity", shown).unwrap_or(style::GlassLevels::DEFAULT.scale),
+            central: crate::sheets::try_number("glass_central", shown).or(style::GlassLevels::DEFAULT.central),
+            dock: crate::sheets::try_number("glass_dock", shown).or(style::GlassLevels::DEFAULT.dock),
+            sidebar: crate::sheets::try_number("glass_sidebar", shown).or(style::GlassLevels::DEFAULT.sidebar),
+            bars: crate::sheets::try_number("glass_bars", shown).or(style::GlassLevels::DEFAULT.bars),
+            ..style::GlassLevels::DEFAULT
+        };
         if let Ok(mut state) = style::THEME.lock() {
             *state = style::ThemeState { accent: Some(accent), glass: mode, levels, tint: None };
         }
+        // the base style: the accent and the glass
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
             let mut s = style::default_style(theme);
-            let look = &self.looks[usize::from(theme == egui::Theme::Dark)];
             match mode {
                 Some(mode) => style::modern_glass_style(&mut s, None, accent, mode, levels),
                 None => style::accent_style(&mut s, accent),
             }
-            // the text of the widgets, not an override of every text: what is selected keeps its own color
-            if let Some([r, g, b]) = look.text {
-                let c = egui::Color32::from_rgb(r, g, b);
-                s.visuals.widgets.noninteractive.fg_stroke.color = c;
-                s.visuals.widgets.inactive.fg_stroke.color = c;
-            }
-            if let Some([r, g, b, a]) = look.stripe {
-                s.visuals.faint_bg_color = egui::Color32::from_rgba_unmultiplied(r, g, b, a);
-            }
+            ctx.set_style_of(theme, s);
+        }
+        // the tokens of the style sheet, over the accent and the glass (it resets what a previous one gave)
+        crate::sheets::apply(ctx);
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let mut s = (*ctx.style_of(theme)).clone();
             // the size of the texts of the interface: every size of the style follows the body one (14)
             let scale = self.font_size / 14.0;
             if (scale - 1.0).abs() > 0.001 {
@@ -912,6 +929,7 @@ impl FinderApp {
             }
             ctx.set_style_of(theme, s);
         }
+        self.terminals.apply_sheet();
     }
 
     /// The items the views show: made from their paths, kept while they and the listings stay the
@@ -1070,6 +1088,26 @@ impl FinderApp {
 
     pub fn toggle_sidebar(&mut self) {
         self.show_sidebar = !self.show_sidebar;
+    }
+
+    /// Terminal actions: the shell follows the folder shown (toggle)
+    pub fn toggle_follow_terminal(&mut self) {
+        self.terminals.follow = !self.terminals.follow;
+    }
+
+    /// Terminal actions: `cd` to the folder shown
+    pub fn terminal_cd_here(&mut self) {
+        let folder = self.folder().to_path_buf();
+        self.terminals.cd_here(&folder);
+    }
+
+    pub fn restart_shell(&mut self) {
+        let folder = self.folder().to_path_buf();
+        self.terminals.restart_shell(&folder);
+    }
+
+    pub fn restart_python(&mut self) {
+        self.terminals.python.restart(None);
     }
 
     pub fn toggle_terminal(&mut self) {
@@ -1393,7 +1431,7 @@ impl FinderApp {
                     if ui.button("Annuler").clicked() {
                         keep = false;
                     }
-                    let delete = ui.button(RichText::new("Supprimer").color(Color32::from_rgb(220, 60, 60)));
+                    let delete = ui.button(RichText::new("Supprimer").color(crate::sheets::color("danger", ui.visuals().dark_mode).unwrap_or(Color32::RED)));
                     // the button that confirms has the focus when the window opens: Enter validates, Tab goes to Annuler
                     let id = egui::Id::unique("delete-focus");
                     if !ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false)) {
@@ -1427,7 +1465,7 @@ impl FinderApp {
                     if ui.button("Annuler").clicked() {
                         keep = false;
                     }
-                    let delete = ui.button(RichText::new("Supprimer").color(Color32::from_rgb(220, 60, 60)));
+                    let delete = ui.button(RichText::new("Supprimer").color(crate::sheets::color("danger", ui.visuals().dark_mode).unwrap_or(Color32::RED)));
                     // the button that confirms has the focus when the window opens: Enter validates, Tab goes to Annuler
                     let id = egui::Id::unique("delete-focus");
                     if !ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false)) {
@@ -1455,7 +1493,8 @@ impl FinderApp {
         self.poll_indexing(ctx);
         if let Some(text) = self.notice.clone() {
             let mut close = false;
-            egui::Modal::new(egui::Id::unique("notice")).show(ctx, |ui| {
+            glyphs::modal(ctx, "notice").show(ctx, |ui| {
+                glyphs::modal_visuals(ui);
                 ui.set_width(340.0);
                 ui.label(text);
                 if ui.button("OK").clicked() {
@@ -1598,7 +1637,17 @@ impl FinderApp {
         let mut cursor = self.palette_cursor;
         let mut tag_query = self.palette_tag_query.clone();
         let mut go_back = false;
-        let response = egui::Modal::new(egui::Id::unique("palette")).show(ctx, |ui| {
+        // the palette has the rounding of the dialogs and the fill of the popups (as finder.py)
+        let dark = ctx.global_style().visuals.dark_mode;
+        let (hover_fill, item_round) = (crate::sheets::color("hover_fill", dark).unwrap_or_default(), crate::sheets::number("item_rounding", dark));
+        let select_fill = crate::sheets::select_fill(accent, dark);
+        let palette_frame = {
+            let mut style = (*ctx.global_style()).clone();
+            pyegui_core::popup_style::apply(&mut style, pyegui_core::popup_style::Kind::Window);
+            let frame = egui::Frame::popup(&style);
+            crate::sheets::try_number("dialog_rounding", dark).map_or(frame, |r| frame.corner_radius(r))
+        };
+        let response = egui::Modal::new(egui::Id::unique("palette")).frame(palette_frame).show(ctx, |ui| {
             ui.set_width(page_size.x);
             let (area, _) = ui.allocate_exact_size(page_size, egui::Sense::hover());
             // the main page leaves to the left while the tags come in from the right, and back
@@ -1620,12 +1669,12 @@ impl FinderApp {
                     for (row, entry) in rows.iter().enumerate() {
                         let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
                         if row == index && !on_tags {
-                            ui.painter().rect_filled(rect, 6.0, ui.visuals().selection.bg_fill.gamma_multiply(0.45));
+                            ui.painter().rect_filled(rect, item_round, select_fill);
                             if down || up {
                                 ui.scroll_to_rect(rect, None);
                             }
                         } else if r.hovered() {
-                            ui.painter().rect_filled(rect, 6.0, Color32::from_rgba_unmultiplied(127, 127, 127, 30));
+                            ui.painter().rect_filled(rect, item_round, hover_fill);
                         }
                         let color = ui.visuals().text_color();
                         let (icon, label) = match entry {
@@ -1676,12 +1725,12 @@ impl FinderApp {
                     let row = |ui: &mut egui::Ui, n: usize, depth: usize, glyph: glyphs::Glyph, tint: Color32, label: &str, state: Option<u8>| {
                         let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click());
                         if n == highlighted {
-                            ui.painter().rect_filled(rect, 6.0, ui.visuals().selection.bg_fill.gamma_multiply(0.45));
+                            ui.painter().rect_filled(rect, item_round, select_fill);
                             if down || up {
                                 ui.scroll_to_rect(rect, None);
                             }
                         } else if r.hovered() {
-                            ui.painter().rect_filled(rect, 6.0, Color32::from_rgba_unmultiplied(127, 127, 127, 30));
+                            ui.painter().rect_filled(rect, item_round, hover_fill);
                         }
                         let x = rect.left() + 10.0 + depth as f32 * 18.0;
                         let text_x;
@@ -1859,12 +1908,11 @@ impl FinderApp {
 
     /// A terminal pane of the dock
     pub fn terminal_pane(&mut self, ui: &mut egui::Ui, shell: bool) {
-        let folder = self.folder().to_path_buf();
         let opacity = self.terminal_opacity;
         self.terminals.shell.font_size = self.terminal_font_size;
         self.terminals.python.font_size = self.terminal_font_size;
         if shell {
-            self.terminals.shell_ui(ui, &folder, opacity);
+            self.terminals.shell_ui(ui, opacity);
         } else {
             self.terminals.python_ui(ui, opacity);
         }
@@ -2095,7 +2143,8 @@ impl FinderApp {
                 .pivot(egui::Align2::RIGHT_BOTTOM)
                 .fixed_pos(pos)
                 .show(ui.ctx(), |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    glyphs::popup_frame(ui.ctx()).show(ui, |ui| {
+                        glyphs::modal_visuals(ui);
                         ui.horizontal(|ui| {
                             if glyphs::button(ui, glyphs::CLOSE, 12.0, false, "Fermer").clicked() {
                                 open = false;
@@ -2111,13 +2160,13 @@ impl FinderApp {
     }
 
     /// The popup of the appearance: a property set with a group for each subject (the accent, the fonts, then for
-    /// the theme shown the background, the glasses, the outlines and the text; light and dark are kept apart). A
+    /// the theme shown the background; light and dark are kept apart; the rest is the style sheet). A
     /// property is added to the panel by adding a row to `appearance_rows` and its change to `apply_appearance`
     pub fn appearance_menu(&mut self, ui: &mut egui::Ui) {
         use pyegui_core::property_set::{property_set, PropertySetOptions};
         ui.set_width(340.0);
         let dark = ui.visuals().dark_mode;
-        let rows = self.appearance_rows(ui, dark);
+        let rows = self.appearance_rows(dark);
         let mut options = PropertySetOptions::new(egui::Id::unique("appearance-set"));
         options.key = if dark { "dark" } else { "light" }.to_owned();
         options.description = false;
@@ -2138,7 +2187,7 @@ impl FinderApp {
         }
     }
 
-    fn appearance_rows(&self, ui: &egui::Ui, dark: bool) -> Vec<pyegui_core::property_set::Property> {
+    fn appearance_rows(&self, dark: bool) -> Vec<pyegui_core::property_set::Property> {
         use pyegui_core::property_set::{to_hex, Kind, PropOption, Property};
         let look = &self.looks[dark as usize];
         let theme = if dark { "thème sombre" } else { "thème clair" };
@@ -2156,6 +2205,17 @@ impl FinderApp {
             add("blue", "Dossiers bleus", "Général", Kind::Bool, if self.blue_folders { "1" } else { "0" }.to_owned(), "Les dossiers de Windows dans le bleu du Finder, pas dans le jaune de l'Explorateur");
         }
         add("terminal.show", "Afficher le terminal", "Général", Kind::Bool, if self.show_terminal { "1" } else { "0" }.to_owned(), "");
+        // the style sheets (tokens of both themes and the look of the app, see examples/style_sheets)
+        let sheets = crate::sheets::names();
+        if !sheets.is_empty() {
+            let mut options = vec![PropOption { id: "-".into(), label: "Aucune".into(), color: None }];
+            options.extend(sheets.iter().map(|n| PropOption { id: n.clone(), label: n.clone(), color: None }));
+            let mut p = Property::new("sheet", "Feuille de style", Kind::Choice { options, multiple: false, open: false });
+            p.group = "Général".to_owned();
+            p.selected = vec![if self.sheet.is_empty() { "-".to_owned() } else { self.sheet.clone() }];
+            p.description = "Les jetons de style d'un fichier de examples/style_sheets: couleurs, coins, popups, marges des boutons".to_owned();
+            rows.push(p);
+        }
         // the fonts: one for the interface, one for the terminal
         let installed = installed_fonts();
         let mut options = vec![PropOption { id: "0".into(), label: "Par défaut".into(), color: None }];
@@ -2232,36 +2292,6 @@ impl FinderApp {
             }
             Background::Glass => {}
         }
-        // the glasses: tint and opacity in one picker
-        let glasses = format!("Vitres ({theme})");
-        for (i, (layer, name)) in LAYERS.iter().enumerate() {
-            let (tint, opacity) = style::layer_values(*layer, dark);
-            // the bytes of the tint as they are: through a color with alpha a low transparency would change them
-            let hex = format!("#{:02x}{:02x}{:02x}{:02x}", tint.r(), tint.g(), tint.b(), (opacity.clamp(0.0, 1.0) * 255.0).round() as u8);
-            add(&mut rows, &format!("layer.{i}"), name, &glasses, Kind::Color { alpha: true }, hex, false, "");
-        }
-        // the outlines: color with its alpha, and thickness
-        let outlines = format!("Contours ({theme})");
-        for (k, name) in ["Contour actif", "Contour inactif"].into_iter().enumerate() {
-            let (_, current) = self.outline(ui.visuals(), k == 0);
-            let [r, g, b, a] = look.outline[k].unwrap_or_else(|| current.to_srgba_unmultiplied());
-            add(&mut rows, &format!("outline.{k}"), name, &outlines, Kind::Color { alpha: true }, format!("#{r:02x}{g:02x}{b:02x}{a:02x}"), false, "");
-            add(&mut rows, &format!("outline_width.{k}"), if k == 0 { "Épaisseur active" } else { "Épaisseur inactive" }, &outlines, Kind::Range { min: 0.0, max: 6.0, integer: false }, format!("{}", look.outline_width[k]), false, " pt");
-        }
-        let text_group = format!("Texte ({theme})");
-        let text = look.text.map(|[r, g, b]| egui::Color32::from_rgb(r, g, b)).unwrap_or(ui.visuals().text_color());
-        add(&mut rows, "text", "Texte", &text_group, Kind::Color { alpha: false }, to_hex(text, false), false, "");
-        let [r, g, b, a] = look.stripe.unwrap_or_else(|| ui.visuals().faint_bg_color.to_srgba_unmultiplied());
-        let stripe = format!("#{r:02x}{g:02x}{b:02x}{a:02x}");
-        let mut p = Property::new("stripe", "Lignes alternées", Kind::Color { alpha: true });
-        p.group = text_group.clone();
-        p.value = stripe;
-        p.description = "La couleur et l'opacité d'une ligne sur deux des listes et des tables".to_owned();
-        rows.push(p);
-        let mut reset = Property::new("reset", "Par défaut", Kind::Action { label: "Rétablir ce thème".into() });
-        reset.group = text_group;
-        reset.description = "Remet le fond, les vitres, les contours et le texte de ce thème".to_owned();
-        rows.push(reset);
         add(&mut rows, "terminal.opacity", "Opacité du terminal", "Terminal", range(0.0, 100.0), format!("{}", (self.terminal_opacity * 100.0).round() as i64), false, " %");
         rows
     }
@@ -2278,11 +2308,15 @@ impl FinderApp {
         let mut look = self.looks[d].clone();
         let color = |v: &str| parse_hex_loose(v).unwrap_or([128, 128, 128, 255]);
         let number = || value.trim().parse::<f64>().unwrap_or(0.0);
-        let index = |text: &str| text.rsplit('.').next().and_then(|i| i.parse::<usize>().ok()).unwrap_or(0);
         match id {
             "accent" => {
                 let c = color(&value);
                 self.accent_custom = Some([c[0], c[1], c[2]]);
+                self.apply_theme(&ctx);
+            }
+            "sheet" => {
+                self.sheet = if value == "-" { String::new() } else { value.clone() };
+                crate::sheets::set_current(&self.sheet);
                 self.apply_theme(&ctx);
             }
             "blue" => {
@@ -2318,28 +2352,10 @@ impl FinderApp {
                 let c = color(&value);
                 look.color = Some([c[0], c[1], c[2]]);
             }
-            "text" => {
-                let c = color(&value);
-                look.text = Some([c[0], c[1], c[2]]);
-            }
-            "stripe" => look.stripe = Some(color(&value)),
-            "reset" => look = Look::default(),
-            _ if id.starts_with("layer.") => {
-                let c = color(&value);
-                let i = index(id);
-                // the tint is kept even when the glass is fully transparent: the picker keeps its hue
-                look.layers[i].tint = Some([c[0], c[1], c[2]]);
-                look.layers[i].opacity = Some(c[3] as f32 / 255.0);
-            }
-            _ if id.starts_with("outline_width.") => look.outline_width[index(id)] = number() as f32,
-            _ if id.starts_with("outline.") => {
-                look.outline[index(id)] = Some(color(&value));
-            }
             _ => {}
         }
         if look != self.looks[d] {
             self.looks[d] = look;
-            self.apply_layers();
             self.apply_theme(&ctx);
         }
     }
@@ -2502,13 +2518,13 @@ impl FinderApp {
         let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), sense);
         let accent = self.accent_color();
         if on {
-            ui.painter().rect_filled(rect, 7.0, ui.visuals().selection.bg_fill);
+            // the fill of the picked item of finder.py: `select_fill` (the sheet, else the accent at 25 %), the text keeps its color
+            ui.painter().rect_filled(rect, crate::sheets::number("item_rounding", ui.visuals().dark_mode), crate::sheets::select_fill(accent, ui.visuals().dark_mode));
         } else if response.hovered() {
-            ui.painter().rect_filled(rect, 7.0, ui.visuals().widgets.hovered.weak_bg_fill);
+            ui.painter().rect_filled(rect, crate::sheets::number("item_rounding", ui.visuals().dark_mode), crate::sheets::color("hover_fill", ui.visuals().dark_mode).unwrap_or_default());
         }
-        let tint = if on { Color32::WHITE } else { accent };
-        glyphs::image(glyph, 16.0, tint).paint_at(ui, egui::Rect::from_center_size(egui::pos2(rect.left() + 16.0, rect.center().y), egui::vec2(16.0, 16.0)));
-        let color = if on { Color32::WHITE } else { ui.visuals().text_color() };
+        glyphs::image(glyph, 16.0, accent).paint_at(ui, egui::Rect::from_center_size(egui::pos2(rect.left() + 16.0, rect.center().y), egui::vec2(16.0, 16.0)));
+        let color = ui.visuals().text_color();
         ui.painter().text(egui::pos2(rect.left() + 32.0, rect.center().y), egui::Align2::LEFT_CENTER, name, egui::TextStyle::Body.resolve(ui.style()), color);
         response
     }
@@ -2548,36 +2564,57 @@ impl FinderApp {
         });
         ui.style_mut().spacing.scroll.fade.strength = 0.0; // no light band at the edge of the list
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            let (open, header) = self.section_header(ui, "Favoris");
+            let (open, header) = self.section(ui, "Favoris");
             if open {
                 self.favorites_section(ui, header.top(), &folder);
             } else {
                 self.fav_rect = None;
                 self.fav_rows.clear();
             }
-            ui.add_space(12.0);
-            let (open, _) = self.section_header(ui, "Emplacements");
+            ui.add_space(pyegui_core::section::look(ui.style()).gap);
             let drives: Vec<(String, PathBuf)> = if cfg!(windows) {
                 ('A'..='Z').map(|c| (format!("{c}:"), PathBuf::from(format!("{c}:\\")))).filter(|(_, p)| is_dir_fast(p)).collect()
             } else {
                 vec![(root_name(), PathBuf::from("/"))]
             };
-            for (name, path) in drives.into_iter().filter(|_| open) {
-                if self.place_row(ui, glyphs::DRIVE, &name, folder == path).clicked() {
-                    self.go(path);
+            let mut open = !self.closed_sections.contains("Emplacements");
+            pyegui_core::section::show(ui, &mut open, "Emplacements", |ui| {
+                for (name, path) in drives {
+                    if self.place_row(ui, glyphs::DRIVE, &name, folder == path).clicked() {
+                        self.go(path);
+                    }
                 }
-            }
-            ui.add_space(12.0);
-            let (open, _) = self.section_header(ui, "Étiquettes");
-            // folded: no tag is drawn
-            let tags = if open { self.tag_list() } else { Vec::new() };
-            if open && tags.is_empty() {
-                ui.weak("Aucune étiquette");
-            }
-            if open {
+            });
+            self.keep_section("Emplacements", open);
+            let mut open = !self.closed_sections.contains("Étiquettes");
+            pyegui_core::section::show(ui, &mut open, "Étiquettes", |ui| {
+                let tags = self.tag_list();
+                if tags.is_empty() {
+                    ui.weak("Aucune étiquette");
+                }
                 self.tag_tree(ui, TagTreeMode::Filter, &tags);
-            }
+            });
+            self.keep_section("Étiquettes", open);
         });
+    }
+
+    /// A section of the sidebar whose content the caller draws after the title (the open state is `closed_sections`)
+    fn section(&mut self, ui: &mut egui::Ui, title: &str) -> (bool, egui::Rect) {
+        let mut open = !self.closed_sections.contains(title);
+        let header = pyegui_core::section::header(ui, title, open);
+        if header.clicked() {
+            open = !open;
+        }
+        self.keep_section(title, open);
+        (open, header.rect)
+    }
+
+    fn keep_section(&mut self, title: &str, open: bool) {
+        if open {
+            self.closed_sections.remove(title);
+        } else {
+            self.closed_sections.insert(title.to_owned());
+        }
     }
 
     /// The tree of the tags, the same in the sidebar and in the pane of the tags: a tag per row with its icon in its color,
@@ -2585,242 +2622,69 @@ impl FinderApp {
     /// (under another one, or before or after it). In the sidebar (`Filter`) a click shows the items of the tag; in
     /// the pane (`Pick`) a check box puts the tag on the selected items, or takes it off.
     pub fn tag_tree(&mut self, ui: &mut egui::Ui, mode: TagTreeMode, tags: &[crate::tagstore::Tag]) {
+        use pyegui_core::tag_tree::{CheckState, TagRow, TagTreeEvent, TagTreeOptions};
         let pick = matches!(mode, TagTreeMode::Pick);
         let selection = if pick { self.selected_paths() } else { Vec::new() };
         let own: Vec<std::collections::HashSet<i64>> = self.tags.as_ref().map(|s| selection.iter().map(|p| s.own(p)).collect()).unwrap_or_default();
-        let mut toggle: Option<i64> = None;
-        let mut filter = None;
-        let mut fold = None;
-        // the rows drawn (index in `tags`, rectangle): where a tag being moved can be dropped
-        let mut visible: Vec<(usize, egui::Rect)> = Vec::new();
-        let mut delete_tag: Option<i64> = None;
-        // the tree: a tag folded hides what is under it
-        let mut hidden_below: Option<usize> = None;
-        for (index, tag) in tags.iter().enumerate() {
-            if let Some(depth) = hidden_below {
-                if tag.depth > depth {
-                    continue;
-                }
-                hidden_below = None;
-            }
-            let has_children = tags.get(index + 1).is_some_and(|next| next.depth > tag.depth);
-            let folded = self.tag_folded.contains(&tag.id);
-            if folded && has_children {
-                hidden_below = Some(tag.depth);
-            }
-            let on = !pick && self.tag_filter == Some(tag.id);
-            // in a pick, the tag is on, off or mixed for the selected items
-            let have = own.iter().filter(|set| set.contains(&tag.id)).count();
-            let state = if selection.is_empty() || have == 0 { "off" } else if have == own.len() { "on" } else { "mixed" };
-            let pre = if pick { 20.0 } else { 0.0 };
-            let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click_and_drag());
-            visible.push((index, rect));
-            if response.drag_started() {
-                self.tag_drag = Some(tag.id);
-            }
-            if self.tag_drag == Some(tag.id) {
-                ui.painter().rect_filled(rect, 7.0, ui.visuals().panel_fill.gamma_multiply(0.6));
-            }
-            if on {
-                ui.painter().rect_filled(rect, 7.0, ui.visuals().selection.bg_fill);
-            } else if response.hovered() {
-                ui.painter().rect_filled(rect, 7.0, ui.visuals().widgets.hovered.weak_bg_fill);
-            }
-            let x = rect.left() + 6.0 + tag.depth as f32 * 14.0;
-            let color = if on { Color32::WHITE } else { ui.visuals().text_color() };
-            if has_children {
-                // the arrow: its own click folds, the rest of the row shows the tag
-                let arrow = egui::Rect::from_center_size(egui::pos2(x + 7.0, rect.center().y), egui::vec2(20.0, 24.0));
-                let arrow_response = ui.interact(arrow, ui.scope_id().with(("tag-fold", tag.id)), egui::Sense::click());
-                // a large chevron: to the right when folded, down when open
-                let chevron = if folded { glyphs::CHEVRON_RIGHT } else { glyphs::CHEVRON_DOWN };
-                glyphs::image(chevron, 16.0, color).paint_at(ui, egui::Rect::from_center_size(arrow.center(), egui::vec2(16.0, 16.0)));
-                arrow_response.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
-                if arrow_response.clicked() {
-                    fold = Some(tag.id);
-                }
-            }
-            if pick {
-                let tint = if state == "off" { color } else { self.accent_color() };
-                glyphs::image(glyphs::by_name(&format!("checkbox-{state}")), 16.0, tint).paint_at(ui, egui::Rect::from_center_size(egui::pos2(x + 24.0, rect.center().y), egui::vec2(16.0, 16.0)));
-            }
-            pyegui_core::tags::paint_tag_icon(ui, egui::pos2(x + 20.0 + pre, rect.center().y), 14.0, tagsui::parse_color(&tag.color));
-            ui.painter().text(egui::pos2(x + 34.0 + pre, rect.center().y), egui::Align2::LEFT_CENTER, &tag.name, egui::TextStyle::Body.resolve(ui.style()), color);
-            // the trash, at the right: seen when the row is hovered; a first click turns it red, a second one
-            // deletes the tag, and it is gray again as soon as the pointer leaves it
-            let armed = self.tag_armed == Some(tag.id);
-            let mut over_trash = false;
-            let shown_trash = (ui.rect_contains_pointer(rect) && self.tag_drag.is_none()) || armed;
-            if !shown_trash {
-                let count = self.tag_count(tag.id);
-                let tint = if on { Color32::from_white_alpha(200) } else { ui.visuals().weak_text_color() };
-                ui.painter().text(egui::pos2(rect.right() - 10.0, rect.center().y), egui::Align2::RIGHT_CENTER, count.to_string(), egui::TextStyle::Small.resolve(ui.style()), tint);
-            }
-            if shown_trash {
-                let trash = egui::Rect::from_center_size(egui::pos2(rect.right() - 16.0, rect.center().y), egui::vec2(24.0, 22.0));
-                let trash_response = ui.interact(trash, ui.scope_id().with(("tag-trash", tag.id)), egui::Sense::click());
-                over_trash = trash_response.hovered();
-                let tint = if armed {
-                    Color32::from_rgb(230, 60, 60)
-                } else if on {
-                    Color32::from_white_alpha(200)
-                } else {
-                    ui.visuals().weak_text_color()
-                };
-                if armed || over_trash {
-                    ui.painter().rect_filled(trash, 6.0, if armed { Color32::from_rgba_unmultiplied(230, 60, 60, 36) } else { Color32::from_rgba_unmultiplied(127, 127, 127, 40) });
-                }
-                glyphs::image(glyphs::by_name("trash"), 14.0, tint).paint_at(ui, egui::Rect::from_center_size(trash.center(), egui::vec2(14.0, 14.0)));
-                trash_response.clone().on_hover_text(if armed { "Cliquer encore pour supprimer" } else { "Supprimer l'étiquette" }).on_hover_cursor(egui::CursorIcon::PointingHand);
-                if trash_response.clicked() {
-                    if armed {
-                        delete_tag = Some(tag.id);
-                    } else {
-                        self.tag_armed = Some(tag.id);
-                    }
-                }
-            }
-            if armed && !over_trash {
-                self.tag_armed = None;
-            }
-            if response.clicked() && fold != Some(tag.id) && !over_trash {
-                if pick { toggle = Some(tag.id) } else { filter = Some(tag.id) }
-            }
-        }
-        self.tag_dragging(ui, &tags, &visible);
-        if let Some(id) = delete_tag {
-            if let Some(store) = self.tags.as_mut() {
-                store.delete(id);
-            }
-            self.tag_armed = None;
-            if self.tag_filter == Some(id) {
-                self.set_tag_filter(None);
-            }
-        }
-        if let Some(id) = fold {
-            if !self.tag_folded.remove(&id) {
-                self.tag_folded.insert(id);
-            }
-        }
-        if let Some(id) = toggle {
-            let all_have = !selection.is_empty() && own.iter().all(|set| set.contains(&id));
-            if let Some(store) = self.tags.as_mut() {
-                for path in &selection {
-                    if all_have { store.untag(path, id) } else { store.tag(path, id) }
-                }
-            }
-        }
-        if let Some(id) = filter {
-            let next = if self.tag_filter == Some(id) { None } else { Some(id) };
-            self.set_tag_filter(next);
-        }
-    }
-
-    /// Moving a tag of the sidebar with the mouse: dropped on the middle of another one it goes under it, on the
-    /// upper or lower edge it goes before or after it (same level), below the last row it goes to the root
-    fn tag_dragging(&mut self, ui: &mut egui::Ui, tags: &[crate::tagstore::Tag], visible: &[(usize, egui::Rect)]) {
-        let Some(moving) = self.tag_drag else { return };
-        let ctx = ui.ctx().clone();
-        let pointer = ctx.pointer_latest_pos();
-        let Some(from) = tags.iter().position(|t| t.id == moving) else {
-            self.tag_drag = None;
-            return;
+        let rows: Vec<TagRow<i64>> = tags
+            .iter()
+            .enumerate()
+            .map(|(index, tag)| {
+                // in a pick, the tag is on, off or mixed for the selected items
+                let have = own.iter().filter(|set| set.contains(&tag.id)).count();
+                let check = if selection.is_empty() || have == 0 { CheckState::Off } else if have == own.len() { CheckState::On } else { CheckState::Mixed };
+                TagRow::new(tag.id, tag.name.clone(), tag.depth, tagsui::parse_color(&tag.color))
+                    .children(tags.get(index + 1).is_some_and(|next| next.depth > tag.depth))
+                    .count(Some(self.tag_count(tag.id) as i64))
+                    .check(check)
+            })
+            .collect();
+        let dark = ui.visuals().dark_mode;
+        let accent = self.accent_color();
+        let options = TagTreeOptions {
+            id: ui.scope_id().with(if pick { "tag-tree-pick" } else { "tag-tree-filter" }),
+            deletable: true,
+            movable: true,
+            checks: pick,
+            rounding: crate::sheets::try_number("item_rounding", dark),
+            selected_fill: Some(crate::sheets::select_fill(accent, dark)),
+            hover_fill: crate::sheets::color("hover_fill", dark),
+            accent: Some(accent),
+            danger: crate::sheets::color("danger", dark),
+            ..Default::default()
         };
-        // the tag and what is under it cannot receive it
-        let end = tags[from + 1..].iter().position(|t| t.depth <= tags[from].depth).map_or(tags.len(), |n| from + 1 + n);
-        let inside = |i: usize| i >= from && i < end;
-        enum Drop {
-            Into(usize),
-            Before(usize),
-            After(usize),
-            RootEnd,
-        }
-        let mut drop = None;
-        if let Some(p) = pointer.filter(|p| ui.max_rect().x_range().contains(p.x)) {
-            if let Some((i, rect)) = visible.iter().find(|(_, r)| r.y_range().contains(p.y)) {
-                if !inside(*i) {
-                    let f = (p.y - rect.top()) / rect.height();
-                    drop = Some(if f < 0.25 { Drop::Before(*i) } else if f > 0.75 { Drop::After(*i) } else { Drop::Into(*i) });
-                }
-            } else if visible.last().is_some_and(|(_, r)| p.y > r.bottom() && p.y < r.bottom() + 60.0) {
-                drop = Some(Drop::RootEnd);
-            }
-        }
-        if ctx.input(|i| i.pointer.primary_down()) {
-            ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-            let accent = self.accent_color();
-            let stroke = egui::Stroke::new(2.0, accent);
-            let row = |i: usize| visible.iter().find(|(k, _)| *k == i).map(|(_, r)| *r);
-            let indent = |i: usize| 6.0 + tags[i].depth as f32 * 14.0;
-            match &drop {
-                Some(Drop::Into(i)) => {
-                    if let Some(r) = row(*i) {
-                        ui.painter().rect_stroke(r, 7.0, stroke, egui::StrokeKind::Inside);
+        let selected = if pick { None } else { self.tag_filter };
+        let output = pyegui_core::tag_tree::show(ui, &rows, selected.as_ref(), &mut self.tag_state, &options);
+        for event in output.events {
+            match event {
+                TagTreeEvent::Select(id) if pick => {
+                    let all_have = !selection.is_empty() && own.iter().all(|set| set.contains(&id));
+                    if let Some(store) = self.tags.as_mut() {
+                        for path in &selection {
+                            if all_have { store.untag(path, id) } else { store.tag(path, id) }
+                        }
                     }
                 }
-                Some(Drop::Before(i)) => {
-                    if let Some(r) = row(*i) {
-                        ui.painter().line_segment([egui::pos2(r.left() + indent(*i), r.top()), egui::pos2(r.right() - 6.0, r.top())], stroke);
+                TagTreeEvent::Select(id) => {
+                    let next = if self.tag_filter == Some(id) { None } else { Some(id) };
+                    self.set_tag_filter(next);
+                }
+                TagTreeEvent::Toggle(_) => {}
+                TagTreeEvent::Delete(id) => {
+                    if let Some(store) = self.tags.as_mut() {
+                        store.delete(id);
+                    }
+                    if self.tag_filter == Some(id) {
+                        self.set_tag_filter(None);
                     }
                 }
-                Some(Drop::After(i)) => {
-                    if let Some(r) = row(*i) {
-                        ui.painter().line_segment([egui::pos2(r.left() + indent(*i), r.bottom()), egui::pos2(r.right() - 6.0, r.bottom())], stroke);
+                TagTreeEvent::Move { key, parent, before } => {
+                    if let Some(store) = self.tags.as_mut() {
+                        store.move_tag_at(key, parent, before);
                     }
                 }
-                Some(Drop::RootEnd) => {
-                    if let Some((_, r)) = visible.last() {
-                        ui.painter().line_segment([egui::pos2(r.left() + 6.0, r.bottom() + 2.0), egui::pos2(r.right() - 6.0, r.bottom() + 2.0)], stroke);
-                    }
-                }
-                None => {}
-            }
-            if let Some(p) = pointer {
-                // the name follows the pointer
-                let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("tag-ghost"));
-                ctx.layer_painter(layer).text(p + egui::vec2(14.0, 0.0), egui::Align2::LEFT_CENTER, &tags[from].name, egui::TextStyle::Body.resolve(ui.style()), ui.visuals().text_color());
-            }
-            return;
-        }
-        // released: the tag goes where the line was
-        self.tag_drag = None;
-        let Some(drop) = drop else { return };
-        // the next tag of the same level, after a tag and what is under it
-        let after = |i: usize| {
-            let stop = tags[i + 1..].iter().position(|t| t.depth <= tags[i].depth).map_or(tags.len(), |n| i + 1 + n);
-            tags.get(stop).filter(|t| t.depth == tags[i].depth).map(|t| t.id)
-        };
-        let (parent, before) = match drop {
-            Drop::Into(i) => (Some(tags[i].id), None),
-            Drop::Before(i) => (tags[i].parent, Some(tags[i].id)),
-            Drop::After(i) => (tags[i].parent, after(i)),
-            Drop::RootEnd => (None, None),
-        };
-        if let Some(store) = self.tags.as_mut() {
-            store.move_tag_at(moving, parent, before);
-        }
-    }
-
-    /// The title of a section of the sidebar: a click folds or unfolds it, a chevron at the right shows when
-    /// the title is hovered (to the right: folded, down: open). Returns whether the section is open
-    fn section_header(&mut self, ui: &mut egui::Ui, title: &str) -> (bool, egui::Rect) {
-        let open = !self.closed_sections.contains(title);
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), egui::Sense::click());
-        let weak = ui.visuals().weak_text_color();
-        ui.painter().text(egui::pos2(rect.left() + 2.0, rect.center().y), egui::Align2::LEFT_CENTER, title, egui::TextStyle::Small.resolve(ui.style()), weak);
-        if response.hovered() {
-            let chevron = if open { glyphs::CHEVRON_DOWN } else { glyphs::CHEVRON_RIGHT };
-            glyphs::image(chevron, 16.0, weak).paint_at(ui, egui::Rect::from_center_size(egui::pos2(rect.right() - 14.0, rect.center().y), egui::vec2(16.0, 16.0)));
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        if response.clicked() {
-            if open {
-                self.closed_sections.insert(title.to_owned());
-            } else {
-                self.closed_sections.remove(title);
             }
         }
-        (open, rect)
     }
 
     /// The favorites (folders and files), kept in the database: a click opens it, a right click opens the menu (new window,
@@ -2849,7 +2713,7 @@ impl FinderApp {
             rows.push(response.rect.center().y);
             if self.fav_drag == Some(favorite.id) {
                 // the row being moved is faded
-                ui.painter().rect_filled(response.rect, 7.0, ui.visuals().panel_fill.gamma_multiply(0.6));
+                ui.painter().rect_filled(response.rect, crate::sheets::number("item_rounding", ui.visuals().dark_mode), ui.visuals().panel_fill.gamma_multiply(0.6));
             }
             if response.clicked() {
                 act = Some(Act::Open(path.clone()));
@@ -3095,6 +2959,7 @@ impl eframe::App for FinderApp {
             open_folders: self.open_folders.iter().cloned().collect(),
             closed_sections: self.closed_sections.iter().cloned().collect(),
             index_ignore: self.index_ignore.clone(),
+            sheet_name: Some(self.sheet.clone()),
         };
         if let Ok(json) = serde_json::to_string(&saved) {
             storage.set_string(STATE_KEY, json);
@@ -3111,6 +2976,11 @@ impl eframe::App for FinderApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         screenshot_for_checks(ui.ctx());
+        // the sheet gives values for each theme: the style follows a change of the theme of the system
+        if self.applied_dark != Some(self.shown_dark(ui.ctx())) {
+            let ctx = ui.ctx().clone();
+            self.apply_theme(&ctx);
+        }
         if std::env::var_os("FINDER_TAB2").is_some() && ui.ctx().cumulative_frame_nr() == 20 {
             self.open_in_new_tab(self.folder().to_path_buf()); // for the checks with two tabs of folder
         }
@@ -3139,7 +3009,7 @@ impl eframe::App for FinderApp {
             let _ = pyegui_core::window::set_rounded_corners(&*frame);
         }
         let dark = ui.visuals().dark_mode as usize;
-        let background = self.looks[dark].background;
+        let background = self.look_shown(dark == 1).background;
         if background == Background::Glass && !self.backdrop_applied {
             self.backdrop_applied = true;
             if let Some(name) = backdrop_name() {
@@ -3151,7 +3021,7 @@ impl eframe::App for FinderApp {
         // the blur of the glass: the one of the window server
         #[cfg(target_os = "macos")]
         {
-            let filter = if background == Background::Glass { self.settled_blur(ui.ctx())[dark] } else { [0, 100, 100] };
+            let filter = if background == Background::Glass { self.glass_filter(ui.ctx(), dark == 1) } else { [0, 100, 100] };
             if filter != self.applied_filter {
                 self.applied_filter = filter;
                 let _ = pyegui_core::window::set_window_filter(&*frame, filter[0], filter[1] as f32 / 100.0, filter[2] as f32 / 100.0);
@@ -3163,9 +3033,28 @@ impl eframe::App for FinderApp {
 }
 
 impl FinderApp {
+    /// The look of the window for a theme: the choices of the user, with the background that the style sheet gives
+    /// (`app.background`: "backdrop", "image" or "color", with `background_color` and `background_image`)
+    fn look_shown(&self, dark: bool) -> Look {
+        let mut look = self.looks[dark as usize].clone();
+        match crate::sheets::text("background", dark).as_deref() {
+            Some("backdrop") | Some("glass") => look.background = Background::Glass,
+            Some("image") => look.background = Background::Image,
+            Some("color") => look.background = Background::Color,
+            _ => {}
+        }
+        if let Some(color) = crate::sheets::color("background_color", dark) {
+            look.color = Some([color.r(), color.g(), color.b()]);
+        }
+        if let Some(path) = crate::sheets::text("background_image", dark) {
+            look.image = Some(PathBuf::from(path));
+        }
+        look
+    }
+
     /// Under everything: a plain color or the blurred picture (nothing for the glass of the system)
     fn paint_background(&mut self, ctx: &egui::Context, dark: bool) {
-        let look = self.looks[dark as usize].clone();
+        let look = self.look_shown(dark);
         let screen = ctx.content_rect();
         let painter = ctx.layer_painter(egui::LayerId::background());
         match look.background {
@@ -3215,7 +3104,7 @@ impl FinderApp {
             }
         }
         if self.native.is_some() {
-            let filter = if glass { self.settled_blur(ctx)[usize::from(dark)] } else { [0, 100, 100] };
+            let filter = if glass { self.glass_filter(ctx, dark) } else { [0, 100, 100] };
             if filter != self.applied_filter {
                 self.applied_filter = filter;
                 if let Some(native) = &self.native {
@@ -3251,7 +3140,7 @@ impl FinderApp {
                     // no native backdrop here (no handle of the window): the layers keep their own opacity over a
                     // light base, not over an opaque fill that hides them. A color or a picture is painted by `draw`
                     let dark = ui.visuals().dark_mode;
-                    let glass = window.looks[usize::from(dark)].background == Background::Glass;
+                    let glass = window.look_shown(dark).background == Background::Glass;
                     #[cfg(target_os = "macos")]
                     window.native_backdrop(ui.ctx(), glass, dark);
                     // the native backdrop exists on macOS only
@@ -3305,11 +3194,31 @@ impl FinderApp {
         }
         if self.show_sidebar {
             // no top margin: the top band of the sidebar is as high as the toolbar
-            let frame = egui::Frame::side_top_panel(ui.style()).fill(style::layer_fill(style::Layer::Sidebar, ui.visuals())).stroke(egui::Stroke::NONE).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 0 });
-            egui::Panel::left("sidebar").show_separator_line(false).default_size(170.0).min_size(130.0).frame(frame).show(ui, |ui| self.sidebar(ui));
+            let dark = ui.visuals().dark_mode;
+            let fill = glass_alpha(region_fill(style::Layer::Sidebar, "sidebar", ui.visuals()), "glass_sidebar", "sidebar", dark);
+            let frame = egui::Frame::side_top_panel(ui.style()).fill(fill).stroke(egui::Stroke::NONE).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 0 });
+            let has_resize = pyegui_core::sheet::resize_strokes("sidebar", dark).is_some();
+            let panel = egui::Panel::left("sidebar").show_separator_line(false).default_size(170.0).min_size(130.0).frame(frame);
+            let shown = pyegui_core::sheet::show_panel(ui, panel, "sidebar", |ui| self.sidebar(ui));
+            // the line between the sidebar and the body: `layout.sidebar.outline`, else `app.line` (the resize strokes draw it when the sheet has them)
+            if !has_resize {
+                let stroke = pyegui_core::sheet::layout_outline("sidebar", dark).unwrap_or_else(|| {
+                    let (w, c) = crate::sheets::stroke("line", dark);
+                    egui::Stroke::new(w, c)
+                });
+                if stroke.width > 0.0 && stroke.color != Color32::TRANSPARENT {
+                    let r = shown.response.rect;
+                    ui.painter().vline(r.right(), r.y_range(), stroke);
+                }
+            }
         }
         // the top and bottom bands: no vertical margin, so what they hold is centered in their height
-        let band = |ui: &egui::Ui| egui::Frame::side_top_panel(ui.style()).fill(bar_tint(ui.visuals())).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 0 });
+        // a bar is a box only if the sheet gives `layout.<region>.sheet`; else the glass, no box, no outline (finder.py)
+        let band = |ui: &egui::Ui, region: &str| {
+            let dark = ui.visuals().dark_mode;
+            let glass = glass_alpha(style::layer_fill(style::Layer::Inactive, ui.visuals()), "glass_bars", region, dark);
+            pyegui_core::sheet::bar_frame(region, dark, glass, 8)
+        };
         if let Some(folder) = self.new_tab.take() {
             self.make_new_tab(folder);
         }
@@ -3321,8 +3230,10 @@ impl FinderApp {
         if let Some(n) = shown {
             self.swap_tab(n);
         }
-        egui::Panel::top("toolbar").show_separator_line(false).exact_size(TOP_H).frame(band(ui).stroke(egui::Stroke::NONE)).show(ui, |ui| self.toolbar(ui));
-        egui::Panel::bottom("status").show_separator_line(false).exact_size(BOTTOM_H).frame(band(ui).stroke(egui::Stroke::NONE)).show(ui, |ui| self.bottom_bar(ui));
+        let top = egui::Panel::top("toolbar").show_separator_line(false).exact_size(TOP_H).frame(band(ui, "topbar"));
+        pyegui_core::sheet::show_panel(ui, top, "topbar", |ui| self.toolbar(ui));
+        let bottom = egui::Panel::bottom("status").show_separator_line(false).exact_size(BOTTOM_H).frame(band(ui, "bottombar"));
+        pyegui_core::sheet::show_panel(ui, bottom, "bottombar", |ui| self.bottom_bar(ui));
         if self.show_terminal {
             let folder = self.folder().to_path_buf();
             self.terminals.follow(&folder);
@@ -3440,11 +3351,31 @@ fn exists_fast(path: &Path) -> bool {
 }
 
 /// The heights of the top and bottom bands, in the sidebar and in the body
+/// The color of the error texts (finder.py: (220, 90, 90))
+pub const ERROR_COLOR: egui::Color32 = egui::Color32::from_rgb(220, 90, 90);
+
 pub const TOP_H: f32 = 40.0;
 /// the key of the rectangle of the header of a tag, which the dock leaves clear of the sheet of its pane
 pub const TAG_BAND: &str = "finder-tag-band";
 
-pub use pyegui_core::style::bar_tint;
+/// The fill of a region of the window (`sidebar`, `topbar`, `bottombar`, `central`, `dock`), in the order of finder.py:
+/// the `layout.<region>.sheet` token of the style sheet, then the glass of the layer (its levels come from the sheet)
+pub fn region_fill(layer: style::Layer, region: &str, visuals: &egui::Visuals) -> Color32 {
+    crate::sheets::layout_sheet(region, visuals.dark_mode).unwrap_or_else(|| style::layer_fill(layer, visuals))
+}
+
+/// The glass of the sidebar or of the bars when the sheet gives its opacity (`app.<name>`, 0 for no fill): the alpha of
+/// `fill` is replaced, unless the region has its own `layout.<region>.sheet`. Without a value, `fill` is unchanged.
+fn glass_alpha(fill: Color32, name: &str, region: &str, dark: bool) -> Color32 {
+    match crate::sheets::try_number(name, dark) {
+        Some(opacity) if crate::sheets::layout_sheet(region, dark).is_none() => {
+            let [r, g, b, _] = fill.to_srgba_unmultiplied();
+            Color32::from_rgba_unmultiplied(r, g, b, (opacity.clamp(0.0, 1.0) * 255.0).round() as u8)
+        }
+        _ => fill,
+    }
+}
+
 /// the bottom bands are as high as the top ones
 const BOTTOM_H: f32 = TOP_H;
 /// What the "…" button that ends the path takes, with its spacing

@@ -17,6 +17,7 @@ mod openapps;
 mod tagsui;
 mod tagstore;
 mod search;
+mod sheets;
 mod sqlpane;
 mod terminals;
 mod viewer;

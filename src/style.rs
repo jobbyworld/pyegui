@@ -7,6 +7,33 @@ use crate::{current_ui, kwarg, run_nested_update_func, UI};
 
 // conversions
 
+/// A Python value as JSON, for the style tokens of `pyegui_core::sheet`: str, bool, int, float, None, and
+/// tuples and lists of them (a color, a stroke, a shadow, a pair)
+pub(crate) fn py_to_json(value: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    use serde_json::Value;
+    if value.is_none() {
+        return Ok(Value::Null);
+    }
+    if value.is_instance_of::<PyBool>() {
+        return Ok(Value::Bool(value.extract()?));
+    }
+    if let Ok(s) = value.extract::<String>() {
+        return Ok(Value::String(s));
+    }
+    if value.is_instance_of::<pyo3::types::PyInt>() {
+        if let Ok(i) = value.extract::<i64>() {
+            return Ok(Value::from(i));
+        }
+    }
+    if let Ok(f) = value.extract::<f64>() {
+        return Ok(serde_json::Number::from_f64(f).map_or(Value::Null, Value::Number));
+    }
+    if value.is_instance_of::<pyo3::types::PyTuple>() || value.is_instance_of::<pyo3::types::PyList>() {
+        return value.try_iter()?.map(|item| py_to_json(&item?)).collect::<PyResult<Vec<_>>>().map(Value::Array);
+    }
+    Err(PyTypeError::new_err(format!("a style token is a str, a number or a tuple, not {}", value.get_type().name()?)))
+}
+
 /// Accepts (r, g, b), (r, g, b, a) or "#rrggbb[aa]"
 pub(crate) fn extract_color(color: &Bound<'_, PyAny>) -> PyResult<Color32> {
     if let Ok(hex) = color.extract::<String>() {

@@ -3981,6 +3981,7 @@ dependencies = [
  "pyo3-log",
  "raw-window-handle",
  "resvg",
+ "serde_json",
  "ttf-parser",
  "usvg",
  "window-vibrancy",

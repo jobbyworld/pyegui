@@ -1,0 +1,87 @@
+{
+  "name": "debug",
+  "description": "Une couleur par élément, des nuances foncées en mode sombre et pastel en mode clair : fond de la fenêtre (violet), sidebar (rouge), topbar (orange), bottombar (jaune), zone centrale (vert), panneaux du dock (cyan), barre d'onglets (magenta), onglet actif (celui de son panneau), onglets inactifs (rose), couleur primaire (rose vif)",
+  "opacity": 1.0,
+  "light": {
+    "colors.window": "#d9b2ffb0",
+    "layout.sidebar.sheet": "#ffb2b2e0",
+    "layout.topbar.sheet": "#ffd9b2e0",
+    "layout.bottombar.sheet": "#fff9b2e0",
+    "layout.central.sheet": "#b2ffb2e0",
+    "layout.dock.sheet": "#b2f9ffe0",
+    "tabs.inactive_fill": "#ffb2d9e0",
+    "tabs.outline": "joined"
+  },
+  "dark": {
+    "colors.window": "#380f61b0",
+    "layout.sidebar.sheet": "#610f0fe0",
+    "layout.topbar.sheet": "#61380fe0",
+    "layout.bottombar.sheet": "#615a0fe0",
+    "layout.central.sheet": "#0f610fe0",
+    "layout.dock.sheet": "#0f5a61e0",
+    "tabs.inactive_fill": "#610f38e0",
+    "tabs.outline": "joined"
+  },
+  "app": {
+    "light": {
+      "edge": [
+        1,
+        "#7f7f7f3c"
+      ],
+      "line": [
+        1,
+        "#7f7f7f46"
+      ],
+      "hover_fill": "#7f7f7f1e",
+      "card_fill": "#7f7f7f1c",
+      "card_selected_fill": "#7f7f7f3c",
+      "card_hover_fill": "#7f7f7f23",
+      "item_rounding": 6,
+      "card_rounding": 8,
+      "dialog_rounding": 12,
+      "dock_rounding": 9,
+      "pane_rounding": 6,
+      "pane_margin": 8,
+      "unified_gap": 8,
+      "danger": "#dc3c3c",
+      "glass_opacity": 1.2,
+      "glass_central": 0.3,
+      "glass_dock": 0.3,
+      "blur": 32,
+      "dialog_fill": "#ffffffff",
+      "background": "color",
+      "background_color": "#d9b2ff",
+      "accent": "#e91e63"
+    },
+    "dark": {
+      "edge": [
+        1,
+        "#7f7f7f3c"
+      ],
+      "line": [
+        1,
+        "#7f7f7f46"
+      ],
+      "hover_fill": "#7f7f7f1e",
+      "card_fill": "#7f7f7f1c",
+      "card_selected_fill": "#7f7f7f3c",
+      "card_hover_fill": "#7f7f7f23",
+      "item_rounding": 6,
+      "card_rounding": 8,
+      "dialog_rounding": 12,
+      "dock_rounding": 9,
+      "pane_rounding": 6,
+      "pane_margin": 8,
+      "unified_gap": 8,
+      "danger": "#dc3c3c",
+      "glass_opacity": 1.2,
+      "glass_central": 0.3,
+      "glass_dock": 0.3,
+      "blur": 32,
+      "dialog_fill": "#232326ff",
+      "background": "color",
+      "background_color": "#380f61",
+      "accent": "#ff4081"
+    }
+  }
+}
