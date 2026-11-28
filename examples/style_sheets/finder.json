@@ -79,7 +79,17 @@
       1,
       "#7f7f7f46"
     ],
-    "tabs.outline": "joined"
+    "tabs.outline": "joined",
+    "tabs.bar_height": 26,
+    "tabs.active_stroke": [
+      1,
+      "#7f7f7f3c"
+    ],
+    "tabs.inactive_stroke": [
+      1,
+      "#7f7f7f3c"
+    ],
+    "pill_tabs.bar_height": 26
   },
   "dark": {
     "colors.panel": "#06070a54",
@@ -173,7 +183,17 @@
       1,
       "#7f7f7f46"
     ],
-    "tabs.outline": "joined"
+    "tabs.outline": "joined",
+    "tabs.bar_height": 26,
+    "tabs.active_stroke": [
+      1,
+      "#7f7f7f3c"
+    ],
+    "tabs.inactive_stroke": [
+      1,
+      "#7f7f7f3c"
+    ],
+    "pill_tabs.bar_height": 26
   },
   "app": {
     "light": {

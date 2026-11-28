@@ -2862,14 +2862,15 @@ def apply_dock_style():
     dock.reset_style()
     dock.set_style(
         tab_style="pill" if pill_tabs.value else "classic",
-        tab_bar_height=26,
         pane_margin=app("pane_margin"),
         gap_width=GAP,
         resize_stroke=(1, (0, 0, 0, 0)),
     )
+    # the outlines chosen in the look panel; without a choice the tokens of the style sheet (tabs.active_stroke,
+    # tabs.inactive_stroke, tabs.bar_height) and the defaults of the framework apply
     for key, k in (("active_tab_stroke", 0), ("pane_stroke", 0), ("inactive_tab_stroke", 1)):
-        color = look.outline[k].to_tuple() if look.outline_set[k] else app("edge")[1]
-        dock.set_style(**{key: (look.outline_width[k].value, color)})
+        if look.outline_set[k]:
+            dock.set_style(**{key: (look.outline_width[k].value, look.outline[k].to_tuple())})
     # the fills chosen in the look panel, unless the style sheet gives that tab token itself (the sheet is the style)
     tokens = (style_sheet(sheet_name.value) or {}).get("dark" if look.dark else "light") or {}
     inactive, active = layer_fill(1), layer_fill(2)

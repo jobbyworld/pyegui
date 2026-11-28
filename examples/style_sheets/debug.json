@@ -10,7 +10,17 @@
     "layout.central.sheet": "#b2ffb2e0",
     "layout.dock.sheet": "#b2f9ffe0",
     "tabs.inactive_fill": "#ffb2d9e0",
-    "tabs.outline": "joined"
+    "tabs.outline": "joined",
+    "tabs.bar_height": 26,
+    "tabs.active_stroke": [
+      1,
+      "#7f7f7f3c"
+    ],
+    "tabs.inactive_stroke": [
+      1,
+      "#7f7f7f3c"
+    ],
+    "pill_tabs.bar_height": 26
   },
   "dark": {
     "colors.window": "#380f61b0",
@@ -20,7 +30,17 @@
     "layout.central.sheet": "#0f610fe0",
     "layout.dock.sheet": "#0f5a61e0",
     "tabs.inactive_fill": "#610f38e0",
-    "tabs.outline": "joined"
+    "tabs.outline": "joined",
+    "tabs.bar_height": 26,
+    "tabs.active_stroke": [
+      1,
+      "#7f7f7f3c"
+    ],
+    "tabs.inactive_stroke": [
+      1,
+      "#7f7f7f3c"
+    ],
+    "pill_tabs.bar_height": 26
   },
   "app": {
     "light": {

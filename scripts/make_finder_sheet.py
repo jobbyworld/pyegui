@@ -62,6 +62,8 @@ def update(ctx):
         sheet[t] = {p: (list(v) if isinstance(v, tuple) else v) for p, v in now.items() if v != plain[t].get(p)}
     for t in ("light", "dark"):
         sheet[t]["layout.sidebar.outline"] = APP["line"]  # the line between the sidebar and the body
+        sheet[t]["pill_tabs.bar_height"] = sheet[t]["tabs.bar_height"] = 26  # the height of the bars of tabs of finder.py
+        sheet[t]["tabs.active_stroke"] = sheet[t]["tabs.inactive_stroke"] = APP["edge"]  # the outlines of the tabs and of the panes
         sheet[t]["tabs.outline"] = "joined"  # the tabs and their pane in one piece, like finder-rs
     sheet["app"] = {"light": dict(APP, dialog_fill="#ffffffff"), "dark": dict(APP, dialog_fill="#232326ff")}
     for t, tokens in CONTRAST.items():
